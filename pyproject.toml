@@ -6,6 +6,8 @@ readme = "README.md"
 authors = [
     { name = "Bram Vanroy", email = "2779410+BramVanroy@users.noreply.github.com" }
 ]
+license = "Apache-2.0"
+license-files = ["LICEN[CS]E*"]
 requires-python = ">=3.12"
 dependencies = [
     "datasets>=4.1.1,<5",
