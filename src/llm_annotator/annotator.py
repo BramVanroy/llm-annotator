@@ -6,7 +6,7 @@ import string
 from dataclasses import dataclass, field
 from math import ceil
 from pathlib import Path
-from typing import Literal, TextIO, Union
+from typing import Any, Literal, TextIO
 
 import torch
 from datasets import Dataset, IterableDataset, load_dataset
@@ -17,11 +17,73 @@ from vllm import LLM, RequestOutput, SamplingParams
 from vllm.distributed import destroy_distributed_environment, destroy_model_parallel
 from vllm.sampling_params import GuidedDecodingParams
 
-from dataq.utils import USABLE_CPU_COUNT, retry
+from llm_annotator.utils import USABLE_CPU_COUNT, retry
 
 
 @dataclass
 class Annotator(abc.ABC):
+    """Abstract base class for LLM-based dataset annotation.
+
+    This class provides a framework for annotating datasets using large language models
+    through the vLLM library. It handles dataset loading, processing, and output generation
+    with support for streaming, batching, and uploading to Hugging Face Hub.
+
+    Args:
+        model_id: The Hugging Face model identifier or local path.
+        prompt_template_file: Path to the prompt template file.
+        prompt_field_swapper: Optional mapping to replace template fields.
+        output_schema: JSON schema for guided decoding (optional).
+        whitespace_pattern: Regex pattern for whitespace handling in guided decoding.
+        idx_column: Column name to use as unique identifier.
+        num_proc: Number of processes for dataset operations.
+        tensor_parallel_size: Number of GPUs for tensor parallelism.
+        max_num_seqs: Maximum number of sequences to process in parallel.
+        enforce_eager: Whether to enforce eager execution mode.
+        quantization: Quantization method to use (optional).
+        verbose: Whether to enable verbose logging.
+        keep_columns: Columns to keep in output. True for all, None/empty for none.
+        upload_every_n_samples: Upload to hub every N samples (0 to disable).
+        max_samples_per_output_file: Maximum samples per output file (0 for unlimited).
+        new_hub_id: Hugging Face dataset ID for uploads.
+        max_model_len: Maximum model sequence length.
+        enable_thinking: Whether to enable thinking mode for chat templates.
+        no_dataset_cache: Whether to disable dataset caching.
+        prefix: Prefix for internal column names and file operations.
+
+    Example:
+        Create a prompt template file (sentiment_prompt.txt):
+
+        ```
+        Analyze the sentiment of the following text and classify it as positive, negative, or neutral.
+
+        Text: {text}
+
+        Please respond with only one word: positive, negative, or neutral.
+        ```
+
+        The dataset should have a 'text' column matching the {text} field in the template:
+
+        ```
+        Dataset({
+            features: ['text', 'label'],  # 'text' is required, 'label' is optional
+            num_rows: 1000
+        })
+        # Example row: {'text': 'I love this movie!', 'label': 'positive'}
+        ```
+
+        Then implement the annotator:
+
+        >>> class SentimentAnnotator(Annotator):
+        ...     def _process_output(self, output: RequestOutput) -> dict[str, Any]:
+        ...         return {"predicted_sentiment": output.outputs[0].text.strip()}
+        >>>
+        >>> annotator = SentimentAnnotator(
+        ...     model_id="meta-llama/Llama-2-7b-chat-hf",
+        ...     prompt_template_file="sentiment_prompt.txt"
+        ... )
+        >>> annotator.annotate_dataset("imdb", "output_dir")
+    """
+
     model_id: str
     prompt_template_file: str | Path
     prompt_field_swapper: dict[str, str] | None = None
@@ -34,13 +96,14 @@ class Annotator(abc.ABC):
     enforce_eager: bool = True
     quantization: str | None = None
     verbose: bool = False
-    keep_columns: Union[str, list[str], None, set[str], Literal[True]] = None
+    keep_columns: str | list[str] | None | set[str] | Literal[True] = None
     upload_every_n_samples: int = 0
     max_samples_per_output_file: int = 0
     new_hub_id: str | None = None
     max_model_len: int | None = None
     enable_thinking: bool = False
     no_dataset_cache: bool = False
+    prefix: str = "bv_llm_annotator"
 
     prompt_template: str = field(init=False)
     pipe: LLM | None = field(init=False)
@@ -51,7 +114,15 @@ class Annotator(abc.ABC):
     prompt_fields: tuple[str, ...] = field(init=False)
     processed_n_samples: int = 0
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
+        """Initialize the annotator after dataclass creation.
+
+        Validates configuration, loads prompt template, and prepares internal state.
+
+        Raises:
+            ValueError: If upload_every_n_samples is negative or new_hub_id is missing
+                when upload_every_n_samples > 0.
+        """
         if self.upload_every_n_samples < 0:
             raise ValueError("upload_every_n_samples must be a positive integer or 0")
         elif self.upload_every_n_samples > 0 and not self.new_hub_id:
@@ -82,6 +153,17 @@ class Annotator(abc.ABC):
             self.keep_columns.add(self.idx_column)
 
     def _get_skip_idxs(self, pdout: Path) -> set[int]:
+        """Get indices of samples that have already been processed.
+
+        Scans existing output files to determine which samples can be skipped
+        in resumed processing.
+
+        Args:
+            pdout: Output directory path to scan for existing files.
+
+        Returns:
+            Set of indices that have already been processed.
+        """
         ids_done = set()
         if pdout.exists() and pdout.stat().st_size > 0:
             for pfin in pdout.glob("*.jsonl"):
@@ -89,10 +171,10 @@ class Annotator(abc.ABC):
                     continue
                 ds = Dataset.from_json(str(pfin))
 
-                if "dataset_split" in ds.column_names:
+                if self.dataset_split and "dataset_split" in ds.column_names:
                     ds = ds.filter(lambda s: s["dataset_split"] == self.dataset_split)
 
-                if "dataset_config" in ds.column_names:
+                if self.dataset_config and "dataset_config" in ds.column_names:
                     ds = ds.filter(lambda s: s["dataset_config"] == self.dataset_config)
 
                 ids_done.update(ds.unique(self.idx_column))
@@ -109,12 +191,30 @@ class Annotator(abc.ABC):
         streaming: bool = False,
         max_num_samples: int | None = None,
         shuffle_seed: int | None = None,
-    ):
+    ) -> None:
+        """Load and preprocess the dataset for annotation.
+
+        Handles dataset loading from various sources, applies prompt templates,
+        and manages caching for efficient resumption of interrupted jobs.
+
+        Args:
+            dataset_name: Name or path of the dataset to load.
+            pdout: Output directory for caching and results.
+            dataset_config: Dataset configuration name (optional).
+            data_dir: Data directory for local datasets (optional).
+            dataset_split: Specific split to load (optional).
+            streaming: Whether to use streaming mode for large datasets.
+            max_num_samples: Maximum number of samples to process.
+            shuffle_seed: Seed for dataset shuffling (optional).
+
+        Raises:
+            ValueError: If streaming mode is used without max_num_samples.
+        """
         self.dataset_config = dataset_config
         self.dataset_split = dataset_split
         self.streaming = streaming
 
-        cached_input_ds = pdout / "cached_input_dataset"
+        cached_input_ds = pdout / f"{self.prefix}_cached_input_dataset"
 
         # If exists and not empty, load from cache
         if cached_input_ds.exists() and cached_input_ds.stat().st_size > 0 and not self.no_dataset_cache:
@@ -122,7 +222,9 @@ class Annotator(abc.ABC):
         else:
             if streaming and not max_num_samples:
                 raise ValueError(
-                    "Streaming mode requires max_num_samples to be set. The dataset itself will be streamed and stored up to the requested number of samples."
+                    "Streaming mode requires max_num_samples to be set."
+                    " The dataset itself will be streamed and stored up to"
+                    " the requested number of samples."
                 )
 
             if streaming:
@@ -155,7 +257,7 @@ class Annotator(abc.ABC):
 
             dataset = dataset.map(
                 lambda sample, idx: {
-                    "dataq_prompted": self.tokenizer.apply_chat_template(
+                    f"{self.prefix}_prompted": self.tokenizer.apply_chat_template(
                         [
                             {
                                 "role": "user",
@@ -190,12 +292,39 @@ class Annotator(abc.ABC):
         self.dataset = dataset
 
     def _preprocess_dataset(self, dataset: Dataset) -> Dataset:
+        """Preprocess the dataset before applying prompt templates.
+
+        Override this method to add custom preprocessing logic such as
+        filtering, transforming columns, or adding metadata.
+
+        Args:
+            dataset: The loaded dataset to preprocess.
+
+        Returns:
+            The preprocessed dataset.
+        """
         return dataset
 
     def _postprocess_dataset(self, dataset: Dataset) -> Dataset:
+        """Postprocess the dataset after applying prompt templates.
+
+        Override this method to add final processing steps before annotation
+        such as additional filtering or column transformations.
+
+        Args:
+            dataset: The dataset with applied prompt templates.
+
+        Returns:
+            The postprocessed dataset ready for annotation.
+        """
         return dataset
 
-    def _load_tokenizer(self):
+    def _load_tokenizer(self) -> None:
+        """Load and configure the tokenizer for the model.
+
+        Sets up the tokenizer with appropriate padding settings and ensures
+        a pad token is available.
+        """
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
 
         self.tokenizer.padding_side = "left"
@@ -204,7 +333,12 @@ class Annotator(abc.ABC):
             self.tokenizer.pad_token = self.tokenizer.eos_token
             self.tokenizer.pad_token_id = self.tokenizer.convert_tokens_to_ids(self.tokenizer.pad_token)
 
-    def _load_pipeline(self):
+    def _load_pipeline(self) -> None:
+        """Load and initialize the vLLM pipeline for inference.
+
+        Configures the LLM with the specified parameters including tensor
+        parallelism, quantization, and memory settings.
+        """
         self.pipe = LLM(
             model=self.model_id,
             tensor_parallel_size=self.tensor_parallel_size,
@@ -216,10 +350,33 @@ class Annotator(abc.ABC):
         )
 
     @abc.abstractmethod
-    def _process_output(self, output: RequestOutput) -> dict:
+    def _process_output(self, output: RequestOutput) -> dict[str, Any]:
+        """Process a single model output into the desired format.
+
+        This abstract method must be implemented by subclasses to define
+        how raw model outputs are transformed into the final annotation format.
+
+        Args:
+            output: The raw output from the vLLM model.
+
+        Returns:
+            A dictionary containing the processed annotation data.
+
+        Example:
+            >>> def _process_output(self, output: RequestOutput) -> dict[str, Any]:
+            ...     return {
+            ...         "response": output.outputs[0].text.strip(),
+            ...         "finish_reason": output.outputs[0].finish_reason
+            ...     }
+        """
         raise NotImplementedError
 
-    def _reset_model_and_dataset(self):
+    def _reset_model_and_dataset(self) -> None:
+        """Clean up model and dataset resources to free memory.
+
+        Destroys the distributed environment, clears GPU cache, and resets
+        internal state. Useful for processing multiple datasets sequentially.
+        """
         destroy_model_parallel()
         destroy_distributed_environment()
         del self.pipe.llm_engine.model_executor
@@ -230,8 +387,23 @@ class Annotator(abc.ABC):
         self.pipe = None
         self.dataset = None
 
-    def _process_batch(self, batch: dict[str, list], sampling_params: SamplingParams, fhout: TextIO):
-        outputs = self.pipe.generate(batch["dataq_prompted"], sampling_params, use_tqdm=False)
+    def _process_batch(
+        self, batch: dict[str, list[Any]], sampling_params: SamplingParams, fhout: TextIO
+    ) -> list[dict[str, Any]]:
+        """Process a batch of samples through the model.
+
+        Takes a batch of prompted samples, runs inference, and processes
+        the outputs using the _process_output method.
+
+        Args:
+            batch: Dictionary containing batch data with prompted samples.
+            sampling_params: Sampling parameters for model generation.
+            fhout: File handle for output writing (currently unused).
+
+        Returns:
+            List of processed output dictionaries for each sample in the batch.
+        """
+        outputs = self.pipe.generate(batch[f"{self.prefix}_prompted"], sampling_params, use_tqdm=False)
         results = [self._process_output(outp) for outp in outputs]
 
         return results
@@ -242,14 +414,40 @@ class Annotator(abc.ABC):
         output_dir: str | Path,
         *,
         overwrite: bool = False,
-        dataset_config: str = None,
-        data_dir: str = None,
-        dataset_split: str = None,
+        dataset_config: str | None = None,
+        data_dir: str | None = None,
+        dataset_split: str | None = None,
         shuffle_seed: int | None = None,
         streaming: bool = False,
-        sampling_params: dict = None,
+        sampling_params: dict[str, Any] | None = None,
         max_num_samples: int | None = None,
-    ):
+    ) -> None:
+        """Annotate an entire dataset using the configured model and prompt.
+
+        Main entry point for dataset annotation. Handles the complete pipeline
+        from dataset loading through model inference to output generation.
+
+        Args:
+            dataset_name: Name or path of the dataset to annotate.
+            output_dir: Directory to save annotation results.
+            overwrite: Whether to overwrite existing output directory.
+            dataset_config: Dataset configuration name (optional).
+            data_dir: Data directory for local datasets (optional).
+            dataset_split: Specific split to annotate (optional).
+            shuffle_seed: Seed for dataset shuffling (optional).
+            streaming: Whether to use streaming mode for large datasets.
+            sampling_params: Parameters for model generation (optional).
+            max_num_samples: Maximum number of samples to annotate.
+
+        Example:
+            >>> annotator.annotate_dataset(
+            ...     "imdb",
+            ...     "output/imdb_annotations",
+            ...     dataset_split="test",
+            ...     max_num_samples=1000,
+            ...     sampling_params={"temperature": 0.7, "max_tokens": 512}
+            ... )
+        """
         pdout = Path(output_dir)
         if pdout.is_dir() and overwrite:
             shutil.rmtree(pdout)
@@ -294,11 +492,13 @@ class Annotator(abc.ABC):
 
                 # Merge input batch and output results and then write them to the open JSONL file handle fhout
                 if self.keep_columns is True:  # Keep all columns
-                    inputs = [{k: v[i] for k, v in batch.items()} for i in range(len(batch["dataq_prompted"]))]
+                    inputs = [
+                        {k: v[i] for k, v in batch.items()} for i in range(len(batch[f"{self.prefix}_prompted"]))
+                    ]
                 else:  # Keep only specified columns or none (always includes idx_column)
                     inputs = [
                         {k: v[i] for k, v in batch.items() if k in self.keep_columns}
-                        for i in range(len(batch["dataq_prompted"]))
+                        for i in range(len(batch[f"{self.prefix}_prompted"]))
                     ]
 
                 merged = [{**inp, **res} for inp, res in zip(inputs, results)]
@@ -328,12 +528,30 @@ class Annotator(abc.ABC):
 
         self._post_annotate(pdout)
 
-    def _post_annotate(self, pdout: Path):
+    def _post_annotate(self, pdout: Path) -> None:
+        """Clean up after annotation is complete.
+
+        Removes empty output files and performs any final cleanup operations.
+
+        Args:
+            pdout: Output directory path to clean up.
+        """
         for pfin in pdout.glob("*.jsonl"):
             if pfin.stat().st_size == 0:
                 pfin.unlink()
 
     def get_fhout_name(self, output_dir: Path | str) -> Path:
+        """Generate the output file name based on configuration.
+
+        Creates appropriate file names for output files, handling both
+        single-file and multi-file output modes.
+
+        Args:
+            output_dir: The output directory path.
+
+        Returns:
+            Path object for the output file name.
+        """
         stem = Path(output_dir).stem
         if self.max_samples_per_output_file == 0:
             return output_dir.joinpath(f"{stem}.jsonl")
@@ -342,16 +560,27 @@ class Annotator(abc.ABC):
             return output_dir.joinpath(f"{stem}_{count_idx}.jsonl")
 
     @retry()
-    def push_dir_to_hub(self, dir_path: Path | str):
+    def push_dir_to_hub(self, dir_path: Path | str) -> None:
+        """Upload the output directory to Hugging Face Hub.
+
+        Creates a dataset repository and uploads all annotation files,
+        excluding cached input data. Uses a separate branch for uploads.
+
+        Args:
+            dir_path: Path to the directory containing annotation files.
+
+        Raises:
+            Exception: If upload fails after retries (handled by @retry decorator).
+        """
         create_repo(self.new_hub_id, repo_type="dataset", exist_ok=True, private=True)
-        create_branch(self.new_hub_id, repo_type="dataset", branch="dataq_jsonl_upload", exist_ok=True)
+        create_branch(self.new_hub_id, repo_type="dataset", branch=f"{self.prefix}_jsonl_upload", exist_ok=True)
 
         upload_large_folder(
             repo_id=self.new_hub_id,
             repo_type="dataset",
             folder_path=str(dir_path),
             allow_patterns=["*.jsonl", "*.json"],  # Include data files (jsonl) and config files (json)
-            ignore_patterns=["cached_input_dataset/*", ".cache/*"],  # Ignore cached input dataset
+            ignore_patterns=[f"{self.prefix}_cached_input_dataset/*", ".cache/*"],  # Ignore cached input dataset
             private=True,
-            revision="dataq_jsonl_upload",  # Stored in a separate branch as "backup"
+            revision=f"{self.prefix}_jsonl_upload",  # Stored in a separate branch as "backup"
         )
