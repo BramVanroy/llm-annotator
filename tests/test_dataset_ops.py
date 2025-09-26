@@ -55,7 +55,9 @@ class TestDatasetOperations:
         assert test_annotator.dataset is not None
         assert len(test_annotator.dataset) == len(first_dataset)
 
-    def test_no_use_cached_input_dataset_option(self, test_model_id, prompt_template_file, test_dataset_name, temp_dir):
+    def test_no_use_cached_input_dataset_option(
+        self, test_model_id, prompt_template_file, test_dataset_name, temp_dir
+    ):
         """Test that use_cached_input_dataset=False option prevents caching."""
         annotator = MockAnnotator(
             model_id=test_model_id,

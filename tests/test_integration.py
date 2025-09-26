@@ -230,8 +230,20 @@ class TestIntegration:
         output_dir.mkdir()
         partial_file = output_dir / f"{output_dir.stem}.jsonl"
         partial_results = [
-            {"llm_annotator_idx": 0, "text": "Great movie!", "generated_text": "positive", "finish_reason": "stop", "num_tokens": 1},
-            {"llm_annotator_idx": 1, "text": "Bad film.", "generated_text": "negative", "finish_reason": "stop", "num_tokens": 1},
+            {
+                "llm_annotator_idx": 0,
+                "text": "Great movie!",
+                "generated_text": "positive",
+                "finish_reason": "stop",
+                "num_tokens": 1,
+            },
+            {
+                "llm_annotator_idx": 1,
+                "text": "Bad film.",
+                "generated_text": "negative",
+                "finish_reason": "stop",
+                "num_tokens": 1,
+            },
         ]
 
         with partial_file.open("w", encoding="utf-8") as f:

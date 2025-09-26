@@ -3,9 +3,9 @@ fail_fast: true
 repos:
   - repo: local
     hooks:
-      - id: make-style
-        name: Run make style
-        entry: make style
+      - id: make-quality
+        name: Run make quality
+        entry: make quality
         language: system
         pass_filenames: false
         stages: [pre-commit, pre-push]

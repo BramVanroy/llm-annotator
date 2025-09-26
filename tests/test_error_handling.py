@@ -83,7 +83,8 @@ class TestErrorHandling:
         corrupted_file = temp_dir / "corrupted.jsonl"
         # Use proper JSON format but with intentional corruption
         corrupted_file.write_text(
-            '{"llm_annotator_idx": 0, "result": "good"}\n{"llm_annotator_idx": 1, invalid_json}\n{"llm_annotator_idx": 2, "result": "ok"}', encoding="utf-8"
+            '{"llm_annotator_idx": 0, "result": "good"}\n{"llm_annotator_idx": 1, invalid_json}\n{"llm_annotator_idx": 2, "result": "ok"}',
+            encoding="utf-8",
         )
 
         # Should handle corruption gracefully and continue processing

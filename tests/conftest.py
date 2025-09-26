@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from datasets import Dataset, streaming
+from datasets import Dataset
 from huggingface_hub import HfApi, delete_repo
 from vllm import RequestOutput
 

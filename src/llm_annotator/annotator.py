@@ -302,7 +302,7 @@ class Annotator(abc.ABC):
                         [
                             {
                                 "role": "user",
-                                    "content": self.prompt_template.format(
+                                "content": self.prompt_template.format(
                                     **{fld: sample[fld] for fld in self.prompt_fields}
                                 ),
                             }
