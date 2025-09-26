@@ -1,9 +1,7 @@
-import abc
 import gc
 import json
 import shutil
 import string
-import warnings
 from dataclasses import dataclass, field
 from math import ceil
 from pathlib import Path
@@ -22,8 +20,8 @@ from llm_annotator.utils import retry
 
 
 @dataclass
-class Annotator(abc.ABC):
-    """Abstract base class for LLM-based dataset annotation.
+class Annotator:
+    """Sensible base class for LLM-based dataset annotation.
 
     This class provides a framework for annotating datasets using large language models
     through the vLLM library. It handles dataset loading, processing, and output generation
@@ -393,27 +391,45 @@ class Annotator(abc.ABC):
             gpu_memory_utilization=self.gpu_memory_utilization,
         )
 
-    @abc.abstractmethod
     def _process_output(self, output: RequestOutput) -> dict[str, Any]:
-        """Process a single model output into the desired format.
-
-        This abstract method must be implemented by subclasses to define
-        how raw model outputs are transformed into the final annotation format.
+        """Process a single model output into the desired annotation format.
+        
+        Override this method to implement custom output parsing and validation.
 
         Args:
-            output: The raw output from the vLLM model.
-
+            output: The raw output from the model for a single input.
         Returns:
-            A dictionary containing the processed annotation data.
-
-        Example:
-            >>> def _process_output(self, output: RequestOutput) -> dict[str, Any]:
-            ...     return {
-            ...         "response": output.outputs[0].text.strip(),
-            ...         "finish_reason": output.outputs[0].finish_reason
-            ...     }
+            If output_schema is provided, returns a dictionary with:
+                - Keys from the output_schema with their parsed values (or None if parsing failed).
+                - A key '{prefix}_valid_fields' indicating if all required fields were valid.
+                - A key '{prefix}_response' containing the raw model output text.
+            If output_schema is not provided, returns a dictionary with:
+                - A key '{prefix}_valid_fields' set to None.
+                - A key '{prefix}_response' containing the raw model output text.
         """
-        raise NotImplementedError
+        raw_response = output.outputs[0].text
+
+        if not self.output_schema:
+            return {f"{self.prefix}_valid_fields": None, f"{self.prefix}_response": raw_response}
+        
+        required_keys = self.output_schema["properties"].keys()
+        result = dict.fromkeys(required_keys)
+
+        valid_fields = True
+        try:
+            parsed_response = json.loads(raw_response)
+        except json.JSONDecodeError:
+            valid_fields = False
+        else:
+            result.update(parsed_response)
+
+        valid_fields = valid_fields and all(result[key] is not None for key in required_keys)
+
+        return {
+           f"{self.prefix}_valid_fields": valid_fields,
+            **result,
+            f"{self.prefix}_response": raw_response,
+        }
 
     def _reset_model_and_dataset(self) -> None:
         """Clean up model and dataset resources to free memory.
@@ -532,7 +548,6 @@ class Annotator(abc.ABC):
             max_num_samples=max_num_samples,
             shuffle_seed=shuffle_seed,
         )
-
         if len(self.dataset) > 0:
             pfout = self.get_fhout_name(pdout)
             # Use built-in open so tests that patch pathlib.Path.open do not
@@ -565,55 +580,38 @@ class Annotator(abc.ABC):
                 else:
                     inputs = [{k: v[i] for k, v in batch.items() if k in self.keep_columns} for i in range(batch_size)]
 
-                # Support _process_batch returning partial results: continue
-                # calling it on the remaining inputs until all are processed.
-                idx = 0
-                while idx < batch_size:
-                    sub_batch = {k: [v[idx + j] for j in range(batch_size - idx)] for k, v in batch.items()}
-                    results = self._process_batch(sub_batch, sampling_params, fhout)
-                    if not results:
-                        raise RuntimeError("_process_batch returned no results for a non-empty input batch")
-                    # Iterate over results and write them out in order
-                    for j, res in enumerate(results):
-                        i = idx + j
-                        if i >= batch_size:
-                            # More results than inputs: warn and stop consuming extras
-                            warnings.warn("_process_batch returned more results than inputs; truncating extras")
-                            break
+                results = self._process_batch(inputs, sampling_params, fhout)
+            
+                # Iterate over results and write them out in order
+                for result_idx, res in enumerate(results):
+                    inp = inputs[result_idx]
+                    data_sample = {**inp, **res}
+                    fhout.write(json.dumps(data_sample) + "\n")
+                    fhout.flush()
+                    self.processed_n_samples += 1
 
-                        if i >= len(inputs):
-                            # Defensive: inputs may be smaller (shouldn't happen)
-                            warnings.warn("Input list shorter than expected; skipping remaining results")
-                            break
+                    # Handle hub upload checkpointing
+                    if (
+                        self.new_hub_id
+                        and self.upload_every_n_samples > 0
+                        and self.processed_n_samples % self.upload_every_n_samples == 0
+                    ):
+                        fhout.close()
+                        self.push_dir_to_hub(pdout)
+                        pfout = self.get_fhout_name(pdout)
+                        fhout = open(str(pfout), "a", encoding="utf-8")
 
-                        inp = inputs[i]
-                        data_sample = {**inp, **res}
-                        fhout.write(json.dumps(data_sample) + "\n")
-                        fhout.flush()
-                        self.processed_n_samples += 1
+                    # Rotate output files when threshold reached
+                    if (
+                        self.max_samples_per_output_file > 0
+                        and self.processed_n_samples % self.max_samples_per_output_file == 0
+                    ):
+                        fhout.close()
+                        pfout = self.get_fhout_name(pdout)
+                        fhout = open(str(pfout), "a", encoding="utf-8")
 
-                        # Handle hub upload checkpointing
-                        if (
-                            self.new_hub_id
-                            and self.upload_every_n_samples > 0
-                            and self.processed_n_samples % self.upload_every_n_samples == 0
-                        ):
-                            fhout.close()
-                            self.push_dir_to_hub(pdout)
-                            pfout = self.get_fhout_name(pdout)
-                            fhout = open(str(pfout), "a", encoding="utf-8")
-
-                        # Rotate output files when threshold reached
-                        if (
-                            self.max_samples_per_output_file > 0
-                            and self.processed_n_samples % self.max_samples_per_output_file == 0
-                        ):
-                            fhout.close()
-                            pfout = self.get_fhout_name(pdout)
-                            fhout = open(str(pfout), "a", encoding="utf-8")
-
-                    idx += len(results)
-
+            fhout.close()
+            
         self._post_annotate(pdout)
 
     def _post_annotate(self, pdout: Path) -> None:
@@ -673,5 +671,5 @@ class Annotator(abc.ABC):
             allow_patterns=["*.jsonl", "*.json"],  # Include data files (jsonl) and config files (json)
             ignore_patterns=[f"{self.prefix}_cached_input_dataset/*", ".cache/*"],  # Ignore cached input dataset
             private=True,
-            revision=f"{self.prefix}_jsonl_upload",  # Stored in a separate branch as "backup"
+            revision=f"{self.prefix}_jsonl_upload",
         )
