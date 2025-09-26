@@ -37,10 +37,11 @@ class Annotator(abc.ABC):
         whitespace_pattern: Regex pattern for whitespace handling in guided decoding.
         idx_column: Column name to use as unique identifier.
         num_proc: Number of processes for dataset operations.
-        tensor_parallel_size: Number of GPUs for tensor parallelism.
-        max_num_seqs: Maximum number of sequences to process in parallel.
+        tensor_parallel_size: Number of GPUs for tensor parallelism. Especially useful if running on
+          multiple GPUs; set to the number of GPUs available.
+        max_num_seqs: Maximum number of sequences to process in parallel (~batch size).
         gpu_memory_utilization: Max. GPU memory utilization goal.
-        enforce_eager: Whether to enforce eager execution mode.
+        enforce_eager: Whether to enforce eager execution mode. Eager mode is safer but may be slower.
         quantization: Quantization method to use (optional).
         verbose: Whether to enable verbose logging.
         keep_columns: Columns to keep in output. True for all, None/empty for none.
@@ -49,8 +50,9 @@ class Annotator(abc.ABC):
         new_hub_id: Hugging Face dataset ID for uploads.
         max_model_len: Maximum model sequence length.
         enable_thinking: Whether to enable thinking mode for chat templates.
-        no_dataset_cache: Whether to disable dataset caching.
-        prefix: Prefix for internal column names and file operations.
+        cache_input_dataset: Whether to cache the input dataset. Especially useful if using streaming + max_num_samples.
+        use_cached_input_dataset: Whether to use a cached input dataset if available.
+        prefix: String prefix to use for internal column names and file operations.
 
     Example:
         Create a prompt template file (sentiment_prompt.txt):
@@ -91,12 +93,12 @@ class Annotator(abc.ABC):
     prompt_field_swapper: dict[str, str] | None = None
     output_schema: str | None = None
     whitespace_pattern: str | None = None
-    idx_column: str = "idx"
+    idx_column: str = "llm_annotator_idx"
     num_proc: int | None = None
     tensor_parallel_size: int = 1
     max_num_seqs: int = 256
     gpu_memory_utilization: float = 0.95
-    enforce_eager: bool = True
+    enforce_eager: bool = False
     quantization: str | None = None
     verbose: bool = False
     keep_columns: str | list[str] | None | set[str] | Literal[True] = None
@@ -105,7 +107,8 @@ class Annotator(abc.ABC):
     new_hub_id: str | None = None
     max_model_len: int | None = None
     enable_thinking: bool = False
-    dataset_cache: bool = True
+    cache_input_dataset: bool = True
+    use_cached_input_dataset: bool = True
     prefix: str = "llm_annotator"
 
     prompt_template: str = field(init=False)
@@ -229,7 +232,7 @@ class Annotator(abc.ABC):
         # If exists and not empty, try to load from cache. If loading the
         # cached dataset fails (corrupted cache), fall back to loading from
         # the original source.
-        if cached_input_ds.exists() and cached_input_ds.stat().st_size > 0 and not self.dataset_cache:
+        if self.use_cached_input_dataset and cached_input_ds.exists() and cached_input_ds.stat().st_size > 0:
             try:
                 dataset = Dataset.load_from_disk(cached_input_ds)
             except Exception:
@@ -314,7 +317,8 @@ class Annotator(abc.ABC):
                 num_proc=self.num_proc,
                 desc="Applying prompt template",
             )
-            dataset.save_to_disk(cached_input_ds)
+            if self.cache_input_dataset:
+                dataset.save_to_disk(cached_input_ds)
 
         skip_idxs = self._get_skip_idxs(pdout)
 
