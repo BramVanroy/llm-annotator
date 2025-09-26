@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from datasets import Dataset
+from datasets import Dataset, streaming
 from huggingface_hub import HfApi, delete_repo
 from vllm import RequestOutput
 
@@ -118,7 +118,7 @@ def test_annotator(test_model_id, prompt_template_file):
     return MockAnnotator(
         model_id=test_model_id,
         prompt_template_file=prompt_template_file,
-        num_proc=None,  # Disable multiprocessing to avoid pickle issues
+        num_proc=None,
     )
 
 
