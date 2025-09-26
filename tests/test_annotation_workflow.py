@@ -171,8 +171,8 @@ class TestAnnotationWorkflow:
         # Simulate partial completion by creating output file
         output_file = output_dir / f"{output_dir.stem}.jsonl"
         partial_results = [
-            {"idx": 0, "text": "sample 1", "generated_text": "positive", "finish_reason": "stop", "num_tokens": 5},
-            {"idx": 1, "text": "sample 2", "generated_text": "negative", "finish_reason": "stop", "num_tokens": 4},
+            {"llm_annotator_idx": 0, "text": "sample 1", "generated_text": "positive", "finish_reason": "stop", "num_tokens": 5},
+            {"llm_annotator_idx": 1, "text": "sample 2", "generated_text": "negative", "finish_reason": "stop", "num_tokens": 4},
         ]
 
         with output_file.open("w", encoding="utf-8") as fh:

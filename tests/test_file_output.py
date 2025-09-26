@@ -143,7 +143,7 @@ class TestFileOutput:
 
         # Create existing output file
         output_file = output_dir / f"{output_dir.stem}.jsonl"
-        existing_data = {"idx": 0, "text": "existing", "result": "old"}
+        existing_data = {"llm_annotator_idx": 0, "text": "existing", "result": "old"}
         with output_file.open("w", encoding="utf-8") as f:
             f.write(json.dumps(existing_data) + "\n")
 
@@ -306,7 +306,7 @@ class TestFileOutput:
 
         # Create test data with unicode characters
         test_data = {
-            "idx": 0,
+            "llm_annotator_idx": 0,
             "text": "Test with unicode: 🚀 café naïve résumé",
             "generated_text": "Response with unicode: 你好 世界",
         }

@@ -154,8 +154,8 @@ class TestDatasetOperations:
         # Create fake output file with some processed samples
         output_file = temp_dir / "test.jsonl"
         fake_outputs = [
-            {"idx": 0, "text": "sample 1", "result": "positive"},
-            {"idx": 1, "text": "sample 2", "result": "negative"},
+            {"llm_annotator_idx": 0, "text": "sample 1", "result": "positive"},
+            {"llm_annotator_idx": 1, "text": "sample 2", "result": "negative"},
         ]
 
         with output_file.open("w", encoding="utf-8") as f:
@@ -180,13 +180,13 @@ class TestDatasetOperations:
         file2 = temp_dir / "output2.jsonl"
 
         outputs1 = [
-            {"idx": 0, "result": "positive"},
-            {"idx": 1, "result": "negative"},
+            {"llm_annotator_idx": 0, "result": "positive"},
+            {"llm_annotator_idx": 1, "result": "negative"},
         ]
 
         outputs2 = [
-            {"idx": 2, "result": "neutral"},
-            {"idx": 3, "result": "positive"},
+            {"llm_annotator_idx": 2, "result": "neutral"},
+            {"llm_annotator_idx": 3, "result": "positive"},
         ]
 
         with file1.open("w", encoding="utf-8") as f:
@@ -207,10 +207,10 @@ class TestDatasetOperations:
 
         output_file = temp_dir / "mixed.jsonl"
         outputs = [
-            {"idx": 0, "dataset_split": "test", "dataset_config": "binary", "result": "positive"},
-            {"idx": 1, "dataset_split": "train", "dataset_config": "binary", "result": "negative"},
-            {"idx": 2, "dataset_split": "test", "dataset_config": "multiclass", "result": "neutral"},
-            {"idx": 3, "dataset_split": "test", "dataset_config": "binary", "result": "positive"},
+            {"llm_annotator_idx": 0, "dataset_split": "test", "dataset_config": "binary", "result": "positive"},
+            {"llm_annotator_idx": 1, "dataset_split": "train", "dataset_config": "binary", "result": "negative"},
+            {"llm_annotator_idx": 2, "dataset_split": "test", "dataset_config": "multiclass", "result": "neutral"},
+            {"llm_annotator_idx": 3, "dataset_split": "test", "dataset_config": "binary", "result": "positive"},
         ]
 
         with output_file.open("w", encoding="utf-8") as f:
@@ -268,7 +268,7 @@ class TestDatasetOperations:
         # Create non-empty file
         normal_file = temp_dir / "normal.jsonl"
         with normal_file.open("w", encoding="utf-8") as f:
-            f.write(json.dumps({"idx": 0, "result": "test"}) + "\n")
+            f.write(json.dumps({"llm_annotator_idx": 0, "result": "test"}) + "\n")
 
         skip_idxs = test_annotator._get_skip_idxs(temp_dir)
         assert skip_idxs == {0}  # Only from the non-empty file

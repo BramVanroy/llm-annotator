@@ -20,7 +20,7 @@ class TestAnnotatorInitialization:
         assert annotator.prompt_template_file == prompt_template_file
         assert annotator.tensor_parallel_size == 1
         assert annotator.max_num_seqs == 256
-        assert annotator.idx_column == "idx"
+        assert annotator.idx_column == "llm_annotator_idx"
         assert annotator.processed_n_samples == 0
 
     def test_initialization_with_all_parameters(self, test_model_id, prompt_template_file, json_schema):
@@ -105,7 +105,7 @@ class TestAnnotatorInitialization:
             prompt_template_file=prompt_template_file,
             keep_columns="text",
         )
-        assert annotator2.keep_columns == {"text", "idx"}
+        assert annotator2.keep_columns == {"text", "llm_annotator_idx"}
 
         # Test with list
         annotator3 = MockAnnotator(
@@ -113,7 +113,7 @@ class TestAnnotatorInitialization:
             prompt_template_file=prompt_template_file,
             keep_columns=["text", "label"],
         )
-        assert annotator3.keep_columns == {"text", "label", "idx"}
+        assert annotator3.keep_columns == {"text", "label", "llm_annotator_idx"}
 
         # Test with None/empty (keep only idx)
         annotator4 = MockAnnotator(
@@ -121,7 +121,7 @@ class TestAnnotatorInitialization:
             prompt_template_file=prompt_template_file,
             keep_columns=None,
         )
-        assert annotator4.keep_columns == {"idx"}
+        assert annotator4.keep_columns == {"llm_annotator_idx"}
 
     def test_validation_errors(self, test_model_id, prompt_template_file):
         """Test validation errors during initialization."""

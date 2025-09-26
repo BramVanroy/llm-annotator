@@ -15,7 +15,7 @@ class TestHubUpload:
         """Test push_dir_to_hub with mocked HuggingFace Hub calls."""
         # Create test files in directory
         test_file = temp_dir / "test_output.jsonl"
-        test_file.write_text('{"idx": 0, "result": "test"}\n')
+        test_file.write_text('{"llm_annotator_idx": 0, "result": "test"}\n')
 
         config_file = temp_dir / "config.json"
         config_file.write_text('{"test": "config"}')
@@ -151,8 +151,8 @@ class TestHubUpload:
         # Create test output files
         output_file = temp_dir / "test_data.jsonl"
         test_data = [
-            {"idx": 0, "text": "Test sample 1", "result": "positive"},
-            {"idx": 1, "text": "Test sample 2", "result": "negative"},
+            {"llm_annotator_idx": 0, "text": "Test sample 1", "result": "positive"},
+            {"llm_annotator_idx": 1, "text": "Test sample 2", "result": "negative"},
         ]
 
         with output_file.open("w", encoding="utf-8") as f:

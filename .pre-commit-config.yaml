@@ -1,3 +1,5 @@
+fail_fast: true
+
 repos:
   - repo: local
     hooks:
@@ -6,11 +8,11 @@ repos:
         entry: make style
         language: system
         pass_filenames: false
-        stages: [pre-commit]
+        stages: [pre-commit, pre-push]
 
       - id: pytest
         name: Run pytest (fast tests only)
         entry: pytest -m "not slow and not integration" -q
         language: system
         pass_filenames: false
-        stages: [pre-commit, pre-push]
+        stages: [pre-push]
