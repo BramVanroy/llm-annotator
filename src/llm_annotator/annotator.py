@@ -393,7 +393,7 @@ class Annotator:
 
     def _process_output(self, output: RequestOutput) -> dict[str, Any]:
         """Process a single model output into the desired annotation format.
-        
+
         Override this method to implement custom output parsing and validation.
 
         Args:
@@ -411,7 +411,7 @@ class Annotator:
 
         if not self.output_schema:
             return {f"{self.prefix}_valid_fields": None, f"{self.prefix}_response": raw_response}
-        
+
         required_keys = self.output_schema["properties"].keys()
         result = dict.fromkeys(required_keys)
 
@@ -426,7 +426,7 @@ class Annotator:
         valid_fields = valid_fields and all(result[key] is not None for key in required_keys)
 
         return {
-           f"{self.prefix}_valid_fields": valid_fields,
+            f"{self.prefix}_valid_fields": valid_fields,
             **result,
             f"{self.prefix}_response": raw_response,
         }
@@ -581,7 +581,7 @@ class Annotator:
                     inputs = [{k: v[i] for k, v in batch.items() if k in self.keep_columns} for i in range(batch_size)]
 
                 results = self._process_batch(inputs, sampling_params, fhout)
-            
+
                 # Iterate over results and write them out in order
                 for result_idx, res in enumerate(results):
                     inp = inputs[result_idx]
@@ -611,7 +611,7 @@ class Annotator:
                         fhout = open(str(pfout), "a", encoding="utf-8")
 
             fhout.close()
-            
+
         self._post_annotate(pdout)
 
     def _post_annotate(self, pdout: Path) -> None:
