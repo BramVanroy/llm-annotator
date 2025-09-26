@@ -1,19 +1,17 @@
 import functools
 import hashlib
+import json
 import sys
 import time
-from os import cpu_count
+from os import PathLike
+from pathlib import Path
+
+from tqdm import tqdm
 
 
-USABLE_CPU_COUNT = cpu_count() - 1
-
-
-def generate_hash(input_string: str) -> str:
-    byte_string = input_string.encode("utf-8")
-    hash_object = hashlib.sha256(byte_string)
-    hex_hash = hash_object.hexdigest()
-
-    return hex_hash
+def get_hash(text: str) -> str:
+    """Compute a SHA256 hash for a given text string."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def convert_int_to_str(num: int) -> str:
@@ -67,3 +65,67 @@ def retry(num_retries: int = 3, sleep_time_s: int = 10) -> callable:
         return wrapper
 
     return decorator
+
+
+def yield_jsonl_robust(
+    pfiles: list[Path | str],
+    keep_columns: list[str] | None = None,
+    disable_tqdm: bool = False,
+    deduplicate_on: str | None = None,
+):
+    """
+    Given a set of .jsonl.gz files, this function reads them in a robust way, skipping incomplete lines,
+    and yielding one sample at a time (parse-able JSON line).
+
+    :param pfiles: A list of .jsonl.gz files
+    :param keep_columns: A list of columns to keep in the output. If not given, all columns are kept.
+    :param disable_tqdm: Whether to disable the progress bar
+    :param deduplicate_on: Column name to use for deduplication (will be hashed)
+    :return: A generator yielding the contents of the files
+    """
+    pfiles = [Path(pfile) for pfile in pfiles]
+    seen = set()
+    num_duplicates_removed = 0
+    with tqdm(total=len(pfiles), desc="Reading", unit="file", disable=disable_tqdm) as pbar:
+        for pfin in pfiles:
+            if pfin.stat().st_size == 0:
+                continue
+
+            with pfin.open(encoding="utf-8") as fhin:
+                num_failures = 0
+                while True:
+                    try:
+                        line = fhin.readline()
+                        if not line:
+                            break
+                        data = json.loads(line)
+                        if deduplicate_on:
+                            hashed_col = get_hash(data[deduplicate_on])
+                            if hashed_col in seen:
+                                num_duplicates_removed += 1
+                                continue
+                            seen.add(hashed_col)
+
+                        if keep_columns:
+                            data = {k: v for k, v in data.items() if k in keep_columns}
+
+                        yield data
+                    except json.JSONDecodeError:
+                        # Handle partial or malformed JSON (incomplete writes)
+                        num_failures += 1
+                    except EOFError:
+                        # Handle unexpected EOF in gzip
+                        num_failures += 1
+                        break
+                if num_failures:
+                    print(f"Skipped {num_failures:,} corrupt line(s) in {pfin}")
+            pbar.update(1)
+
+    if deduplicate_on:
+        print(f"Removed {num_duplicates_removed:,} duplicates")
+
+
+def count_lines(fname: str | PathLike) -> int:
+    """Count the number of lines in a file."""
+    with open(fname, "r", encoding="utf-8") as fhin:
+        return sum([1 for _ in fhin])

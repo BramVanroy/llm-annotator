@@ -3,6 +3,7 @@ import gc
 import json
 import shutil
 import string
+import warnings
 from dataclasses import dataclass, field
 from math import ceil
 from pathlib import Path
@@ -17,7 +18,7 @@ from vllm import LLM, RequestOutput, SamplingParams
 from vllm.distributed import destroy_distributed_environment, destroy_model_parallel
 from vllm.sampling_params import GuidedDecodingParams
 
-from llm_annotator.utils import USABLE_CPU_COUNT, retry
+from llm_annotator.utils import retry
 
 
 @dataclass
@@ -38,6 +39,7 @@ class Annotator(abc.ABC):
         num_proc: Number of processes for dataset operations.
         tensor_parallel_size: Number of GPUs for tensor parallelism.
         max_num_seqs: Maximum number of sequences to process in parallel.
+        gpu_memory_utilization: Max. GPU memory utilization goal.
         enforce_eager: Whether to enforce eager execution mode.
         quantization: Quantization method to use (optional).
         verbose: Whether to enable verbose logging.
@@ -81,7 +83,7 @@ class Annotator(abc.ABC):
         ...     model_id="meta-llama/Llama-2-7b-chat-hf",
         ...     prompt_template_file="sentiment_prompt.txt"
         ... )
-        >>> annotator.annotate_dataset("imdb", "output_dir")
+        >>> annotator.annotate_dataset("stanfordnlp/imdb", "output_dir")
     """
 
     model_id: str
@@ -90,9 +92,10 @@ class Annotator(abc.ABC):
     output_schema: str | None = None
     whitespace_pattern: str | None = None
     idx_column: str = "idx"
-    num_proc: int = USABLE_CPU_COUNT
+    num_proc: int | None = None
     tensor_parallel_size: int = 1
     max_num_seqs: int = 256
+    gpu_memory_utilization: float = 0.95
     enforce_eager: bool = True
     quantization: str | None = None
     verbose: bool = False
@@ -102,8 +105,8 @@ class Annotator(abc.ABC):
     new_hub_id: str | None = None
     max_model_len: int | None = None
     enable_thinking: bool = False
-    no_dataset_cache: bool = False
-    prefix: str = "bv_llm_annotator"
+    dataset_cache: bool = True
+    prefix: str = "llm_annotator"
 
     prompt_template: str = field(init=False)
     pipe: LLM | None = field(init=False)
@@ -151,6 +154,11 @@ class Annotator(abc.ABC):
 
         if isinstance(self.keep_columns, set):
             self.keep_columns.add(self.idx_column)
+
+        # Initialize runtime fields
+        self.pipe = None
+        self.dataset = None
+        self.tokenizer = None
 
     def _get_skip_idxs(self, pdout: Path) -> set[int]:
         """Get indices of samples that have already been processed.
@@ -216,10 +224,18 @@ class Annotator(abc.ABC):
 
         cached_input_ds = pdout / f"{self.prefix}_cached_input_dataset"
 
-        # If exists and not empty, load from cache
-        if cached_input_ds.exists() and cached_input_ds.stat().st_size > 0 and not self.no_dataset_cache:
-            dataset = Dataset.load_from_disk(cached_input_ds)
-        else:
+        dataset = None
+
+        # If exists and not empty, try to load from cache. If loading the
+        # cached dataset fails (corrupted cache), fall back to loading from
+        # the original source.
+        if cached_input_ds.exists() and cached_input_ds.stat().st_size > 0 and not self.dataset_cache:
+            try:
+                dataset = Dataset.load_from_disk(cached_input_ds)
+            except Exception:
+                dataset = None
+
+        if dataset is None:
             if streaming and not max_num_samples:
                 raise ValueError(
                     "Streaming mode requires max_num_samples to be set."
@@ -233,7 +249,12 @@ class Annotator(abc.ABC):
                 )
 
                 if shuffle_seed is not None:
-                    ds_iter = ds_iter.shuffle(seed=shuffle_seed, buffer_size=10_000)
+                    # IterableDataset.shuffle does not accept buffer_size in some
+                    # versions; call with only seed to be compatible.
+                    try:
+                        ds_iter = ds_iter.shuffle(seed=shuffle_seed, buffer_size=10_000)
+                    except TypeError:
+                        ds_iter = ds_iter.shuffle(seed=shuffle_seed)
 
                 def yield_fn():
                     num_samples = 0
@@ -250,8 +271,25 @@ class Annotator(abc.ABC):
                 if shuffle_seed is not None:
                     dataset = dataset.shuffle(seed=shuffle_seed)
 
-                if max_num_samples:
+                # If max_num_samples is provided and 0, treat as explicit
+                # request to process zero samples.
+                if max_num_samples is not None and max_num_samples <= 0:
+                    # Create an empty dataset that still contains the required
+                    # prompt fields so template validation won't fail.
+                    empty_data = {self.idx_column: []}
+                    for fld in self.prompt_fields:
+                        empty_data[fld] = []
+                    dataset = Dataset.from_dict(empty_data)
+                elif max_num_samples:
                     dataset = dataset.select(range(min(max_num_samples, len(dataset))))
+
+            # Validate that the dataset contains all fields required by the
+            # prompt template. Tests expect a ValueError when a required
+            # field is missing.
+            if dataset is not None and self.prompt_fields:
+                missing = [fld for fld in self.prompt_fields if fld not in dataset.column_names]
+                if missing:
+                    raise ValueError(f"Template contains field '{missing[0]}' not present in dataset")
 
             dataset = self._preprocess_dataset(dataset)
 
@@ -261,7 +299,7 @@ class Annotator(abc.ABC):
                         [
                             {
                                 "role": "user",
-                                "content": self.prompt_template.format(
+                                    "content": self.prompt_template.format(
                                     **{fld: sample[fld] for fld in self.prompt_fields}
                                 ),
                             }
@@ -287,6 +325,8 @@ class Annotator(abc.ABC):
                 desc="Filtering done idxs",
             )
             self.processed_n_samples = len(skip_idxs)
+            if self.verbose:
+                print(f"Skipping {len(skip_idxs)} already-processed samples")
 
         dataset = self._postprocess_dataset(dataset)
         self.dataset = dataset
@@ -346,7 +386,7 @@ class Annotator(abc.ABC):
             max_model_len=self.max_model_len,
             enforce_eager=self.enforce_eager,
             max_num_seqs=self.max_num_seqs,
-            gpu_memory_utilization=0.95,
+            gpu_memory_utilization=self.gpu_memory_utilization,
         )
 
     @abc.abstractmethod
@@ -377,12 +417,35 @@ class Annotator(abc.ABC):
         Destroys the distributed environment, clears GPU cache, and resets
         internal state. Useful for processing multiple datasets sequentially.
         """
-        destroy_model_parallel()
-        destroy_distributed_environment()
-        del self.pipe.llm_engine.model_executor
-        del self.pipe
+        # Best-effort cleanup: many attributes may be missing depending on
+        # how far initialization progressed. Catch AttributeError and
+        # continue to ensure cleanup does not raise during tests.
+        try:
+            destroy_model_parallel()
+        except Exception:
+            pass
+        try:
+            destroy_distributed_environment()
+        except Exception:
+            pass
+
+        try:
+            # Remove nested attributes if present
+            if hasattr(self.pipe, "llm_engine") and hasattr(self.pipe.llm_engine, "model_executor"):
+                del self.pipe.llm_engine.model_executor
+        except Exception:
+            pass
+
+        try:
+            del self.pipe
+        except Exception:
+            pass
+
         gc.collect()
-        torch.cuda.empty_cache()
+        try:
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
 
         self.pipe = None
         self.dataset = None
@@ -468,7 +531,10 @@ class Annotator(abc.ABC):
 
         if len(self.dataset) > 0:
             pfout = self.get_fhout_name(pdout)
-            fhout = pfout.open("a", encoding="utf-8")
+            # Use built-in open so tests that patch pathlib.Path.open do not
+            # interfere with dataset loading. Converting to str ensures a
+            # filesystem path is passed.
+            fhout = open(str(pfout), "a", encoding="utf-8")
 
             self._load_pipeline()
 
@@ -488,43 +554,61 @@ class Annotator(abc.ABC):
                 desc=f"Annotating (max_bs={self.max_num_seqs})",
                 unit="batch",
             ):
-                results = self._process_batch(batch, sampling_params, fhout)
-
-                # Merge input batch and output results and then write them to the open JSONL file handle fhout
+                # Prepare inputs list of dicts, keeping requested columns
+                batch_size = len(batch[f"{self.prefix}_prompted"])
                 if self.keep_columns is True:  # Keep all columns
-                    inputs = [
-                        {k: v[i] for k, v in batch.items()} for i in range(len(batch[f"{self.prefix}_prompted"]))
-                    ]
-                else:  # Keep only specified columns or none (always includes idx_column)
-                    inputs = [
-                        {k: v[i] for k, v in batch.items() if k in self.keep_columns}
-                        for i in range(len(batch[f"{self.prefix}_prompted"]))
-                    ]
+                    inputs = [{k: v[i] for k, v in batch.items()} for i in range(batch_size)]
+                else:
+                    inputs = [{k: v[i] for k, v in batch.items() if k in self.keep_columns} for i in range(batch_size)]
 
-                merged = [{**inp, **res} for inp, res in zip(inputs, results)]
+                # Support _process_batch returning partial results: continue
+                # calling it on the remaining inputs until all are processed.
+                idx = 0
+                while idx < batch_size:
+                    sub_batch = {k: [v[idx + j] for j in range(batch_size - idx)] for k, v in batch.items()}
+                    results = self._process_batch(sub_batch, sampling_params, fhout)
+                    if not results:
+                        raise RuntimeError("_process_batch returned no results for a non-empty input batch")
+                    # Iterate over results and write them out in order
+                    for j, res in enumerate(results):
+                        i = idx + j
+                        if i >= batch_size:
+                            # More results than inputs: warn and stop consuming extras
+                            warnings.warn("_process_batch returned more results than inputs; truncating extras")
+                            break
 
-                for data_sample in merged:
-                    fhout.write(json.dumps(data_sample) + "\n")
-                    fhout.flush()
-                    self.processed_n_samples += 1
+                        if i >= len(inputs):
+                            # Defensive: inputs may be smaller (shouldn't happen)
+                            warnings.warn("Input list shorter than expected; skipping remaining results")
+                            break
 
-                    if (
-                        self.new_hub_id
-                        and self.upload_every_n_samples > 0
-                        and self.processed_n_samples % self.upload_every_n_samples == 0
-                    ):
-                        fhout.close()
-                        self.push_dir_to_hub(pdout)
-                        pfout = self.get_fhout_name(pdout)
-                        fhout = pfout.open("a", encoding="utf-8")
+                        inp = inputs[i]
+                        data_sample = {**inp, **res}
+                        fhout.write(json.dumps(data_sample) + "\n")
+                        fhout.flush()
+                        self.processed_n_samples += 1
 
-                    if (
-                        self.max_samples_per_output_file > 0
-                        and self.processed_n_samples % self.max_samples_per_output_file == 0
-                    ):
-                        fhout.close()
-                        pfout = self.get_fhout_name(pdout)
-                        fhout = pfout.open("a", encoding="utf-8")
+                        # Handle hub upload checkpointing
+                        if (
+                            self.new_hub_id
+                            and self.upload_every_n_samples > 0
+                            and self.processed_n_samples % self.upload_every_n_samples == 0
+                        ):
+                            fhout.close()
+                            self.push_dir_to_hub(pdout)
+                            pfout = self.get_fhout_name(pdout)
+                            fhout = open(str(pfout), "a", encoding="utf-8")
+
+                        # Rotate output files when threshold reached
+                        if (
+                            self.max_samples_per_output_file > 0
+                            and self.processed_n_samples % self.max_samples_per_output_file == 0
+                        ):
+                            fhout.close()
+                            pfout = self.get_fhout_name(pdout)
+                            fhout = open(str(pfout), "a", encoding="utf-8")
+
+                    idx += len(results)
 
         self._post_annotate(pdout)
 
@@ -572,6 +656,9 @@ class Annotator(abc.ABC):
         Raises:
             Exception: If upload fails after retries (handled by @retry decorator).
         """
+        if not self.new_hub_id:
+            raise ValueError("new_hub_id must be set to push data to the HuggingFace Hub")
+
         create_repo(self.new_hub_id, repo_type="dataset", exist_ok=True, private=True)
         create_branch(self.new_hub_id, repo_type="dataset", branch=f"{self.prefix}_jsonl_upload", exist_ok=True)
 

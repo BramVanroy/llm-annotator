@@ -1,2 +1,1 @@
-def main() -> None:
-    print("Hello from llm-annotator!")
+from .annotator import Annotator
