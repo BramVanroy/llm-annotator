@@ -11,6 +11,8 @@ license-files = ["LICEN[CS]E*"]
 requires-python = ">=3.12"
 dependencies = [
     "datasets>=4.1.1,<5",
+    "hf-transfer>=0.1.9",
+    "hf-xet>=1.1.10",
     "outlines>=1.2.5,<2",
     "vllm>=0.10.2,<0.11",
 ]
@@ -24,7 +26,9 @@ source = "uv-dynamic-versioning"
 
 [dependency-groups]
 dev = [
-    "ruff>=0.13.1",
+    "pytest>=8.4.2,<9",
+    "pytest-cov>=7.0.0,<8",
+    "ruff>=0.13.1,<0.14",
 ]
 
 [tool.ruff]
@@ -54,3 +58,27 @@ skip-magic-trailing-comma = false
 
 # Like Black, automatically detect the appropriate line ending.
 line-ending = "auto"
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--cov=llm_annotator",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+    "-v"
+]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "slow: marks tests as slow (may require model loading or longer runtime)",
+    "integration: marks tests that interact with external systems (Hugging Face Hub, network, or real-model runtimes). These tests require an authenticated Hugging Face account (for example via `hf auth login` or a `HUGGINGFACE_HUB_TOKEN`/`HF_TOKEN` in CI) and may perform uploads/deletions; tests attempt to clean up after themselves.",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]

@@ -1,5 +1,6 @@
 copilot-instructions.md
-
+.vscode/
+.github/
 output/
 config/
 wandb/
