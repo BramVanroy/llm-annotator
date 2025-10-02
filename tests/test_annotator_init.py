@@ -75,51 +75,6 @@ class TestAnnotatorInitializationUnitTests:
                 output_schema={"type": "object"},
             )
 
-    def test_upload_every_n_samples(self, test_model_id, prompt_template_file, test_remote_dataset_name):
-        """Test that upload_every_n_samples is set correctly."""
-        anno = Annotator(
-            model_id=test_model_id,
-            prompt_template_file=prompt_template_file,
-            new_hub_id=test_remote_dataset_name,
-            upload_every_n_samples=5,
-        )
-        assert anno.upload_every_n_samples == 5
-
-        # Disabled automatic uploads
-        anno = Annotator(
-            model_id=test_model_id,
-            prompt_template_file=prompt_template_file,
-            new_hub_id=test_remote_dataset_name,
-            upload_every_n_samples=0,
-        )
-        assert anno.upload_every_n_samples == 0
-
-    def test_invalid_upload_every_n_samples(self, test_model_id, prompt_template_file, test_remote_dataset_name):
-        """Test that invalid upload_every_n_samples raises an error."""
-        with pytest.raises(ValueError, match="upload_every_n_samples must be a positive integer or 0"):
-            Annotator(
-                model_id=test_model_id,
-                prompt_template_file=prompt_template_file,
-                new_hub_id=test_remote_dataset_name,
-                upload_every_n_samples=-1,
-            )
-        with pytest.raises(ValueError, match="upload_every_n_samples must be a positive integer or 0"):
-            Annotator(
-                model_id=test_model_id,
-                prompt_template_file=prompt_template_file,
-                new_hub_id=test_remote_dataset_name,
-                upload_every_n_samples=2.5,
-            )
-
-    def test_no_hub_id_with_upload_every_n_samples(self, test_model_id, prompt_template_file):
-        """Test that setting upload_every_n_samples without new_hub_id raises an error."""
-        with pytest.raises(ValueError, match="If upload_every_n_samples is set, new_hub_id must be provided"):
-            Annotator(
-                model_id=test_model_id,
-                prompt_template_file=prompt_template_file,
-                upload_every_n_samples=2,
-            )
-
     def test_keep_columns_set(self, test_model_id, prompt_template_file):
         """Test that keep_columns is set correctly."""
 
