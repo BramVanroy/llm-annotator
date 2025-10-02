@@ -11,8 +11,8 @@ repos:
         stages: [pre-commit, pre-push]
 
       - id: pytest
-        name: Run pytest (fast tests only)
-        entry: pytest -m "not slow and not integration" -q
+        name: Run pytest
+        entry: pytest -q
         language: system
         pass_filenames: false
         stages: [pre-push]
