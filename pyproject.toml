@@ -1,7 +1,7 @@
 [project]
 name = "llm-annotator"
 dynamic = ["version"]
-description = "Add your description here"
+description = "An easy-to-extend LLM annotator for robust, resumable data annotation."
 readme = "README.md"
 authors = [
     { name = "Bram Vanroy", email = "2779410+BramVanroy@users.noreply.github.com" }
@@ -11,18 +11,11 @@ license-files = ["LICEN[CS]E*"]
 requires-python = ">=3.12"
 dependencies = [
     "datasets>=4.1.1,<5",
-    "hf-transfer>=0.1.9",
-    "hf-xet>=1.1.10",
+    "hf-transfer>=0.1.9,<2",
+    "hf-xet>=1.1.10,<2",
     "outlines>=1.2.5,<2",
     "vllm>=0.10.2,<0.11",
 ]
-
-[build-system]
-requires = ["hatchling", "uv-dynamic-versioning"]
-build-backend = "hatchling.build"
-
-[tool.hatch.version]
-source = "uv-dynamic-versioning"
 
 [dependency-groups]
 dev = [
@@ -31,6 +24,13 @@ dev = [
     "pytest-cov>=7.0.0,<8",
     "ruff>=0.13.1,<0.14",
 ]
+
+[build-system]
+requires = ["hatchling", "uv-dynamic-versioning"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "uv-dynamic-versioning"
 
 [tool.ruff]
 line-length = 119
