@@ -1,11 +1,12 @@
 import gc
 import json
+from os import PathLike
 import shutil
 import string
 from dataclasses import dataclass, field
 from math import ceil
 from pathlib import Path
-from typing import Any, Literal, TextIO
+from typing import Any, Iterable
 
 import torch
 from datasets import Dataset, IterableDataset, load_dataset
@@ -30,19 +31,23 @@ class Annotator:
     Args:
         model_id: The Hugging Face model identifier or local path.
         prompt_template_file: Path to the prompt template file.
-        prompt_field_swapper: Optional mapping to replace template fields.
-        output_schema: JSON schema for guided decoding (optional).
+        prompt_field_swapper: Optional mapping to replace template fields. Useful if you want to use
+            the same template with different datasets that use different field names.
+        output_schema_file: Path to a JSON schema file for guided decoding (optional).
         whitespace_pattern: Regex pattern for whitespace handling in guided decoding.
         idx_column: Column name to use as unique identifier.
         num_proc: Number of processes for dataset operations.
         tensor_parallel_size: Number of GPUs for tensor parallelism. Especially useful if running on
-          multiple GPUs; set to the number of GPUs available.
+            multiple GPUs; set to the number of GPUs available.
         max_num_seqs: Maximum number of sequences to process in parallel (~batch size).
         gpu_memory_utilization: Max. GPU memory utilization goal.
         enforce_eager: Whether to enforce eager execution mode. Eager mode is safer but may be slower.
         quantization: Quantization method to use (optional).
         verbose: Whether to enable verbose logging.
-        keep_columns: Columns to keep in output. True for all, None/empty for none.
+        keep_columns: Columns to keep in output. True for all, None/false-y for none. Available default columns are
+            {self.idx_column}, {self.prefix}prompted (filled-in prompt), {self.prefix}response (raw model output).
+            If a JSON schema is given, also {self.prefix}valid_fields (boolean if all required fields were valid
+            according to output_schema) and output columns according to the JSON schema if given.
         upload_every_n_samples: Upload to hub every N samples (0 to disable).
         max_samples_per_output_file: Maximum samples per output file (0 for unlimited).
         new_hub_id: Hugging Face dataset ID for uploads.
@@ -63,6 +68,20 @@ class Annotator:
         Please respond with only one word: positive, negative, or neutral.
         ```
 
+        Add a JSON schema for guided decoding (optional):
+        ```json
+        {
+            "type": "object",
+            "properties": {
+                "sentiment": {
+                    "type": "string",
+                    "enum": ["positive", "negative", "neutral"]
+                }
+            },
+            "required": ["sentiment"]
+        }
+        ```
+
         The dataset should have a 'text' column matching the {text} field in the template:
 
         ```
@@ -73,25 +92,17 @@ class Annotator:
         # Example row: {'text': 'I love this movie!', 'label': 'positive'}
         ```
 
-        Then implement the annotator:
-
-        >>> class SentimentAnnotator(Annotator):
-        ...     def _process_output(self, output: RequestOutput) -> dict[str, Any]:
-        ...         return {"predicted_sentiment": output.outputs[0].text.strip()}
-        >>>
-        >>> annotator = SentimentAnnotator(
-        ...     model_id="meta-llama/Llama-2-7b-chat-hf",
-        ...     prompt_template_file="sentiment_prompt.txt"
-        ... )
-        >>> annotator.annotate_dataset("stanfordnlp/imdb", "output_dir")
+        Initialize the annotator and run annotation.
     """
 
     model_id: str
-    prompt_template_file: str | Path
+    prompt_template_file: str | PathLike| None = None
+    prompt_template: str | None = None
     prompt_field_swapper: dict[str, str] | None = None
-    output_schema: str | None = None
+    output_schema_file: str | PathLike | None = None
+    output_schema: str | dict[str, Any] | None = None
     whitespace_pattern: str | None = None
-    idx_column: str = "llm_annotator_idx"
+    idx_column: str = "idx"
     num_proc: int | None = None
     tensor_parallel_size: int = 1
     max_num_seqs: int = 256
@@ -99,7 +110,7 @@ class Annotator:
     enforce_eager: bool = False
     quantization: str | None = None
     verbose: bool = False
-    keep_columns: str | list[str] | None | set[str] | Literal[True] = None
+    keep_columns: str | Iterable[str] | bool |  None  = None
     upload_every_n_samples: int = 0
     max_samples_per_output_file: int = 0
     new_hub_id: str | None = None
@@ -107,16 +118,14 @@ class Annotator:
     enable_thinking: bool = False
     cache_input_dataset: bool = True
     use_cached_input_dataset: bool = True
-    prefix: str = "llm_annotator"
+    prefix: str = ""
 
-    prompt_template: str = field(init=False)
-    pipe: LLM | None = field(init=False)
-    dataset: Dataset | None = field(init=False)
-    dataset_config: str = field(init=False)
-    dataset_split: str = field(init=False)
-    tokenizer: PreTrainedTokenizer | None = field(init=False)
-    prompt_fields: tuple[str, ...] = field(init=False)
-    processed_n_samples: int = 0
+    pipe: LLM | None = field(default=None, init=False)
+    dataset: Dataset | None = field(default=None, init=False)
+    dataset_config: str = field(default=None, init=False)
+    dataset_split: str = field(default=None, init=False)
+    tokenizer: PreTrainedTokenizer | None = field(default=None, init=False)
+    prompt_fields: tuple[str, ...] = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         """Initialize the annotator after dataclass creation.
@@ -127,7 +136,7 @@ class Annotator:
             ValueError: If upload_every_n_samples is negative or new_hub_id is missing
                 when upload_every_n_samples > 0.
         """
-        if self.upload_every_n_samples < 0:
+        if self.upload_every_n_samples < 0 or not isinstance(self.upload_every_n_samples, int):
             raise ValueError("upload_every_n_samples must be a positive integer or 0")
         elif self.upload_every_n_samples > 0 and not self.new_hub_id:
             raise ValueError("If upload_every_n_samples is set, new_hub_id must be provided")
@@ -135,8 +144,15 @@ class Annotator:
         self.max_samples_per_output_file = (
             0 if self.max_samples_per_output_file is None else max(0, self.max_samples_per_output_file)
         )
+        if not self.prompt_template_file and not self.prompt_template:
+            raise ValueError("Either prompt_template_file or prompt_template must be provided")
+        
+        if self.prompt_template_file and self.prompt_template:
+            raise ValueError("Only one of prompt_template_file or prompt_template should be provided")
+        
+        if self.prompt_template_file:
+            self.prompt_template = Path(self.prompt_template_file).read_text(encoding="utf-8")
 
-        self.prompt_template = Path(self.prompt_template_file).read_text(encoding="utf-8")
         self.prompt_field_swapper = self.prompt_field_swapper or {}
 
         for fld, value in self.prompt_field_swapper.items():
@@ -150,16 +166,24 @@ class Annotator:
             self.keep_columns = set()
         elif isinstance(self.keep_columns, str):
             self.keep_columns = {self.keep_columns}
-        elif isinstance(self.keep_columns, list):
-            self.keep_columns = set(self.keep_columns)
+        elif self.keep_columns is True:
+            # Redundant but makes it clearer that the value can be True
+            self.keep_columns = True
+        else:
+            try:
+                self.keep_columns = set(self.keep_columns)
+            except TypeError as exc:
+                raise TypeError("keep_columns must be None, True, a string, or a collection of strings") from exc
 
+        # Always keep idx_column
         if isinstance(self.keep_columns, set):
             self.keep_columns.add(self.idx_column)
 
-        # Initialize runtime fields
-        self.pipe = None
-        self.dataset = None
-        self.tokenizer = None
+        if self.output_schema_file and self.output_schema:
+            raise ValueError("Only one of output_schema_file or output_schema should be provided")
+
+        if self.output_schema_file:
+            self.output_schema = json.loads(Path(self.output_schema_file).read_text(encoding="utf-8"))
 
     def _get_skip_idxs(self, pdout: Path) -> set[int]:
         """Get indices of samples that have already been processed.
@@ -200,7 +224,7 @@ class Annotator:
         streaming: bool = False,
         max_num_samples: int | None = None,
         shuffle_seed: int | None = None,
-    ) -> None:
+    ) -> int:
         """Load and preprocess the dataset for annotation.
 
         Handles dataset loading from various sources, applies prompt templates,
@@ -219,11 +243,14 @@ class Annotator:
         Raises:
             ValueError: If streaming mode is used without max_num_samples.
         """
+        if max_num_samples is not None and max_num_samples <= 0:
+            raise ValueError("'max_num_samples' must be a positive integer or None")
+        
         self.dataset_config = dataset_config
         self.dataset_split = dataset_split
         self.streaming = streaming
 
-        cached_input_ds = pdout / f"{self.prefix}_cached_input_dataset"
+        cached_input_ds = pdout / f"{self.prefix}cached_input_dataset"
 
         dataset = None
 
@@ -272,16 +299,7 @@ class Annotator:
                 if shuffle_seed is not None:
                     dataset = dataset.shuffle(seed=shuffle_seed)
 
-                # If max_num_samples is provided and 0, treat as explicit
-                # request to process zero samples.
-                if max_num_samples is not None and max_num_samples <= 0:
-                    # Create an empty dataset that still contains the required
-                    # prompt fields so template validation won't fail.
-                    empty_data = {self.idx_column: []}
-                    for fld in self.prompt_fields:
-                        empty_data[fld] = []
-                    dataset = Dataset.from_dict(empty_data)
-                elif max_num_samples:
+                if max_num_samples:
                     dataset = dataset.select(range(min(max_num_samples, len(dataset))))
 
             # Validate that the dataset contains all fields required by the
@@ -296,7 +314,7 @@ class Annotator:
 
             dataset = dataset.map(
                 lambda sample, idx: {
-                    f"{self.prefix}_prompted": self.tokenizer.apply_chat_template(
+                    f"{self.prefix}prompted": self.tokenizer.apply_chat_template(
                         [
                             {
                                 "role": "user",
@@ -319,19 +337,20 @@ class Annotator:
                 dataset.save_to_disk(cached_input_ds)
 
         skip_idxs = self._get_skip_idxs(pdout)
-
+        processed_n_samples = 0
         if skip_idxs:
             dataset = dataset.filter(
                 lambda s: s[self.idx_column] not in skip_idxs,
                 num_proc=self.num_proc,
                 desc="Filtering done idxs",
             )
-            self.processed_n_samples = len(skip_idxs)
+            processed_n_samples = len(skip_idxs)
             if self.verbose:
                 print(f"Skipping {len(skip_idxs)} already-processed samples")
 
         dataset = self._postprocess_dataset(dataset)
         self.dataset = dataset
+        return processed_n_samples
 
     def _preprocess_dataset(self, dataset: Dataset) -> Dataset:
         """Preprocess the dataset before applying prompt templates.
@@ -399,18 +418,23 @@ class Annotator:
         Args:
             output: The raw output from the model for a single input.
         Returns:
-            If output_schema is provided, returns a dictionary with:
+            - A key '{prefix}_response' containing the raw model output text.
+            - A key '{prefix}_finish_reason' indicating why generation stopped.
+            - A key '{prefix}_num_tokens' indicating the number of tokens in the output.
+
+            And if an output_schema is provided, also:
                 - Keys from the output_schema with their parsed values (or None if parsing failed).
                 - A key '{prefix}_valid_fields' indicating if all required fields were valid.
-                - A key '{prefix}_response' containing the raw model output text.
-            If output_schema is not provided, returns a dictionary with:
-                - A key '{prefix}_valid_fields' set to None.
-                - A key '{prefix}_response' containing the raw model output text.
         """
         raw_response = output.outputs[0].text
 
+        data = {
+            f"{self.prefix}response": raw_response,
+            f"{self.prefix}finish_reason": output.outputs[0].finish_reason if output.outputs else "unknown",
+            f"{self.prefix}num_tokens": len(output.outputs[0].token_ids) if output.outputs else 0,
+        }
         if not self.output_schema:
-            return {f"{self.prefix}_valid_fields": None, f"{self.prefix}_response": raw_response}
+            return data
 
         required_keys = self.output_schema["properties"].keys()
         result = dict.fromkeys(required_keys)
@@ -426,20 +450,17 @@ class Annotator:
         valid_fields = valid_fields and all(result[key] is not None for key in required_keys)
 
         return {
-            f"{self.prefix}_valid_fields": valid_fields,
+            **data,
+            f"{self.prefix}valid_fields": valid_fields,
             **result,
-            f"{self.prefix}_response": raw_response,
         }
 
-    def _reset_model_and_dataset(self) -> None:
+    def reset_model_and_dataset(self) -> None:
         """Clean up model and dataset resources to free memory.
 
         Destroys the distributed environment, clears GPU cache, and resets
         internal state. Useful for processing multiple datasets sequentially.
         """
-        # Best-effort cleanup: many attributes may be missing depending on
-        # how far initialization progressed. Catch AttributeError and
-        # continue to ensure cleanup does not raise during tests.
         try:
             destroy_model_parallel()
         except Exception:
@@ -471,22 +492,21 @@ class Annotator:
         self.dataset = None
 
     def _process_batch(
-        self, batch: dict[str, list[Any]], sampling_params: SamplingParams, fhout: TextIO
+        self, batch: dict[str, list[Any]], sampling_params: SamplingParams,
     ) -> list[dict[str, Any]]:
         """Process a batch of samples through the model.
 
         Takes a batch of prompted samples, runs inference, and processes
-        the outputs using the _process_output method.
+        the outputs using the `_process_output` method.
 
         Args:
             batch: Dictionary containing batch data with prompted samples.
             sampling_params: Sampling parameters for model generation.
-            fhout: File handle for output writing (currently unused).
 
         Returns:
             List of processed output dictionaries for each sample in the batch.
         """
-        outputs = self.pipe.generate(batch[f"{self.prefix}_prompted"], sampling_params, use_tqdm=False)
+        outputs = self.pipe.generate(batch[f"{self.prefix}prompted"], sampling_params, use_tqdm=False)
         results = [self._process_output(outp) for outp in outputs]
 
         return results
@@ -524,11 +544,11 @@ class Annotator:
 
         Example:
             >>> annotator.annotate_dataset(
-            ...     "imdb",
+            ...     "stanfordnlp/imdb",
             ...     "output/imdb_annotations",
             ...     dataset_split="test",
             ...     max_num_samples=1000,
-            ...     sampling_params={"temperature": 0.7, "max_tokens": 512}
+            ...     sampling_params={"temperature": 0.7, "max_tokens": 1}
             ... )
         """
         pdout = Path(output_dir)
@@ -538,7 +558,7 @@ class Annotator:
         pdout.mkdir(exist_ok=True, parents=True)
 
         self._load_tokenizer()
-        self._load_dataset(
+        processed_n_samples = self._load_dataset(
             dataset_name,
             pdout,
             dataset_config=dataset_config,
@@ -549,11 +569,8 @@ class Annotator:
             shuffle_seed=shuffle_seed,
         )
         if len(self.dataset) > 0:
-            pfout = self.get_fhout_name(pdout)
-            # Use built-in open so tests that patch pathlib.Path.open do not
-            # interfere with dataset loading. Converting to str ensures a
-            # filesystem path is passed.
-            fhout = open(str(pfout), "a", encoding="utf-8")
+            pfout = self.get_fhout_name(pdout, processed_n_samples=processed_n_samples)
+            fhout = pfout.open("a", encoding="utf-8")
 
             self._load_pipeline()
 
@@ -573,14 +590,14 @@ class Annotator:
                 desc=f"Annotating (max_bs={self.max_num_seqs})",
                 unit="batch",
             ):
-                # Prepare inputs list of dicts, keeping requested columns
-                batch_size = len(batch[f"{self.prefix}_prompted"])
-                if self.keep_columns is True:  # Keep all columns
+                results = self._process_batch(batch, sampling_params)
+
+                batch_size = len(batch[self.idx_column])
+                if self.keep_columns is True:
+                    # Keep all columns
                     inputs = [{k: v[i] for k, v in batch.items()} for i in range(batch_size)]
                 else:
                     inputs = [{k: v[i] for k, v in batch.items() if k in self.keep_columns} for i in range(batch_size)]
-
-                results = self._process_batch(inputs, sampling_params, fhout)
 
                 # Iterate over results and write them out in order
                 for result_idx, res in enumerate(results):
@@ -588,27 +605,27 @@ class Annotator:
                     data_sample = {**inp, **res}
                     fhout.write(json.dumps(data_sample) + "\n")
                     fhout.flush()
-                    self.processed_n_samples += 1
+                    processed_n_samples += 1
 
                     # Handle hub upload checkpointing
                     if (
                         self.new_hub_id
                         and self.upload_every_n_samples > 0
-                        and self.processed_n_samples % self.upload_every_n_samples == 0
+                        and processed_n_samples % self.upload_every_n_samples == 0
                     ):
                         fhout.close()
                         self.push_dir_to_hub(pdout)
                         pfout = self.get_fhout_name(pdout)
-                        fhout = open(str(pfout), "a", encoding="utf-8")
+                        fhout = pfout.open("a", encoding="utf-8")
 
                     # Rotate output files when threshold reached
                     if (
                         self.max_samples_per_output_file > 0
-                        and self.processed_n_samples % self.max_samples_per_output_file == 0
+                        and processed_n_samples % self.max_samples_per_output_file == 0
                     ):
                         fhout.close()
                         pfout = self.get_fhout_name(pdout)
-                        fhout = open(str(pfout), "a", encoding="utf-8")
+                        fhout = pfout.open("a", encoding="utf-8")
 
             fhout.close()
 
@@ -626,7 +643,7 @@ class Annotator:
             if pfin.stat().st_size == 0:
                 pfin.unlink()
 
-    def get_fhout_name(self, output_dir: Path | str) -> Path:
+    def get_fhout_name(self, output_dir: Path | str, *, processed_n_samples: int | None = None) -> Path:
         """Generate the output file name based on configuration.
 
         Creates appropriate file names for output files, handling both
@@ -634,16 +651,17 @@ class Annotator:
 
         Args:
             output_dir: The output directory path.
+            processed_n_samples: The number of samples processed so far.
 
         Returns:
             Path object for the output file name.
         """
         stem = Path(output_dir).stem
-        if self.max_samples_per_output_file == 0:
-            return output_dir.joinpath(f"{stem}.jsonl")
+        if not self.max_samples_per_output_file:
+            return Path(output_dir).joinpath(f"{stem}.jsonl")
         else:
-            count_idx = self.processed_n_samples // self.max_samples_per_output_file
-            return output_dir.joinpath(f"{stem}_{count_idx}.jsonl")
+            count_idx = processed_n_samples // self.max_samples_per_output_file
+            return Path(output_dir).joinpath(f"{stem}_{count_idx}.jsonl")
 
     @retry()
     def push_dir_to_hub(self, dir_path: Path | str) -> None:
@@ -662,14 +680,14 @@ class Annotator:
             raise ValueError("new_hub_id must be set to push data to the HuggingFace Hub")
 
         create_repo(self.new_hub_id, repo_type="dataset", exist_ok=True, private=True)
-        create_branch(self.new_hub_id, repo_type="dataset", branch=f"{self.prefix}_jsonl_upload", exist_ok=True)
+        create_branch(self.new_hub_id, repo_type="dataset", branch=f"{self.prefix}jsonl_upload", exist_ok=True)
 
         upload_large_folder(
             repo_id=self.new_hub_id,
             repo_type="dataset",
             folder_path=str(dir_path),
             allow_patterns=["*.jsonl", "*.json"],  # Include data files (jsonl) and config files (json)
-            ignore_patterns=[f"{self.prefix}_cached_input_dataset/*", ".cache/*"],  # Ignore cached input dataset
+            ignore_patterns=[f"{self.prefix}cached_input_dataset/*", ".cache/*"],  # Ignore cached input dataset
             private=True,
-            revision=f"{self.prefix}_jsonl_upload",
+            revision=f"{self.prefix}jsonl_upload",
         )
