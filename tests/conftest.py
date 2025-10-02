@@ -3,7 +3,6 @@
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any
 
 import pytest
 from datasets import Dataset
@@ -74,6 +73,7 @@ Classification:"""
     template_path.write_text(template_content, encoding="utf-8")
     return template_path
 
+
 @pytest.fixture(scope="session")
 def json_schema_file(temp_dir):
     """JSON schema for guided decoding tests."""
@@ -101,6 +101,7 @@ def test_annotator(test_model_id, prompt_template_file):
         num_proc=None,
     )
 
+
 @pytest.fixture(scope="session")
 def test_annotator_with_upload(test_model_id, prompt_template_file, hf_username):
     """Create a test annotator instance for testing hub upload functionality.
@@ -117,6 +118,7 @@ def test_annotator_with_upload(test_model_id, prompt_template_file, hf_username)
         upload_every_n_samples=2,
         new_hub_id=f"{hf_username}/llm_annotator_test_ds",
     )
+
 
 @pytest.fixture(scope="session")
 def small_test_dataset():
@@ -157,6 +159,7 @@ def cleanup_remote_datasets(hf_username):
 def quiet_vllm_logging():
     import logging
     import os
+
     logger = logging.getLogger("vllm")
     logger.handlers.clear()
     logger.propagate = False

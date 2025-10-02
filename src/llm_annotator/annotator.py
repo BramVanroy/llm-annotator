@@ -1,10 +1,10 @@
 import gc
 import json
-from os import PathLike
 import shutil
 import string
 from dataclasses import dataclass, field
 from math import ceil
+from os import PathLike
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -96,7 +96,7 @@ class Annotator:
     """
 
     model_id: str
-    prompt_template_file: str | PathLike| None = None
+    prompt_template_file: str | PathLike | None = None
     prompt_template: str | None = None
     prompt_field_swapper: dict[str, str] | None = None
     output_schema_file: str | PathLike | None = None
@@ -110,7 +110,7 @@ class Annotator:
     enforce_eager: bool = False
     quantization: str | None = None
     verbose: bool = False
-    keep_columns: str | Iterable[str] | bool |  None  = None
+    keep_columns: str | Iterable[str] | bool | None = None
     upload_every_n_samples: int = 0
     max_samples_per_output_file: int = 0
     new_hub_id: str | None = None
@@ -146,10 +146,10 @@ class Annotator:
         )
         if not self.prompt_template_file and not self.prompt_template:
             raise ValueError("Either prompt_template_file or prompt_template must be provided")
-        
+
         if self.prompt_template_file and self.prompt_template:
             raise ValueError("Only one of prompt_template_file or prompt_template should be provided")
-        
+
         if self.prompt_template_file:
             self.prompt_template = Path(self.prompt_template_file).read_text(encoding="utf-8")
 
@@ -245,7 +245,7 @@ class Annotator:
         """
         if max_num_samples is not None and max_num_samples <= 0:
             raise ValueError("'max_num_samples' must be a positive integer or None")
-        
+
         self.dataset_config = dataset_config
         self.dataset_split = dataset_split
         self.streaming = streaming
@@ -492,7 +492,9 @@ class Annotator:
         self.dataset = None
 
     def _process_batch(
-        self, batch: dict[str, list[Any]], sampling_params: SamplingParams,
+        self,
+        batch: dict[str, list[Any]],
+        sampling_params: SamplingParams,
     ) -> list[dict[str, Any]]:
         """Process a batch of samples through the model.
 
