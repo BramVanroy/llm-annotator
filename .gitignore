@@ -2,6 +2,7 @@ copilot-instructions.md
 .vscode/
 .github/
 output/
+outputs/
 config/
 wandb/
 models/

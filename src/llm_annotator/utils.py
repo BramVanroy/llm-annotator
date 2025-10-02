@@ -129,3 +129,21 @@ def count_lines(fname: str | PathLike) -> int:
     """Count the number of lines in a file."""
     with open(fname, "r", encoding="utf-8") as fhin:
         return sum([1 for _ in fhin])
+
+
+def remove_empty_jsonl_files(pdout: Path) -> list[Path]:
+    """Remove any empty .jsonl files in the given directory.
+
+    Args:
+        pdout: Output directory path to clean up.
+
+    Returns:
+        A list of removed files.
+    """
+    files_removed = []
+    for pfin in pdout.glob("*.jsonl"):
+        if pfin.stat().st_size == 0:
+            files_removed.append(pfin)
+            pfin.unlink()
+
+    return files_removed

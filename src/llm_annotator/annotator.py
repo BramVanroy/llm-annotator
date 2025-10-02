@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import torch
-from datasets import Dataset, IterableDataset, load_dataset
+from datasets import Dataset, IterableDataset, concatenate_datasets, get_dataset_split_names, load_dataset
 from huggingface_hub import create_branch, create_repo, upload_large_folder
 from tqdm import tqdm
 from transformers import AutoTokenizer, PreTrainedTokenizer
@@ -17,7 +17,7 @@ from vllm import LLM, RequestOutput, SamplingParams
 from vllm.distributed import destroy_distributed_environment, destroy_model_parallel
 from vllm.sampling_params import GuidedDecodingParams
 
-from llm_annotator.utils import retry
+from llm_annotator.utils import remove_empty_jsonl_files, retry
 
 
 @dataclass
@@ -30,10 +30,15 @@ class Annotator:
 
     Args:
         model_id: The Hugging Face model identifier or local path.
-        prompt_template_file: Path to the prompt template file.
+        prompt_template_file: Path to the prompt template file. Can/should contain fields in `{}`
+            that match dataset column names, e.g. "Analyze the following text: {text}".
+        prompt_template: Prompt template string (alternative to prompt_template_file). Can/should
+            contain fields in `{}` that match dataset column names, e.g. "Analyze the
+            following text: {text}".
         prompt_field_swapper: Optional mapping to replace template fields. Useful if you want to use
             the same template with different datasets that use different field names.
         output_schema_file: Path to a JSON schema file for guided decoding (optional).
+        output_schema: JSON schema as a dictionary or string (alternative to output_schema_file).
         whitespace_pattern: Regex pattern for whitespace handling in guided decoding.
         idx_column: Column name to use as unique identifier.
         num_proc: Number of processes for dataset operations.
@@ -50,49 +55,9 @@ class Annotator:
             according to output_schema) and output columns according to the JSON schema if given.
         upload_every_n_samples: Upload to hub every N samples (0 to disable).
         max_samples_per_output_file: Maximum samples per output file (0 for unlimited).
-        new_hub_id: Hugging Face dataset ID for uploads.
         max_model_len: Maximum model sequence length.
         enable_thinking: Whether to enable thinking mode for chat templates.
-        cache_input_dataset: Whether to cache the input dataset. Especially useful if using streaming + max_num_samples.
-        use_cached_input_dataset: Whether to use a cached input dataset if available.
         prefix: String prefix to use for internal column names and file operations.
-
-    Example:
-        Create a prompt template file (sentiment_prompt.txt):
-
-        ```
-        Analyze the sentiment of the following text and classify it as positive, negative, or neutral.
-
-        Text: {text}
-
-        Please respond with only one word: positive, negative, or neutral.
-        ```
-
-        Add a JSON schema for guided decoding (optional):
-        ```json
-        {
-            "type": "object",
-            "properties": {
-                "sentiment": {
-                    "type": "string",
-                    "enum": ["positive", "negative", "neutral"]
-                }
-            },
-            "required": ["sentiment"]
-        }
-        ```
-
-        The dataset should have a 'text' column matching the {text} field in the template:
-
-        ```
-        Dataset({
-            features: ['text', 'label'],  # 'text' is required, 'label' is optional
-            num_rows: 1000
-        })
-        # Example row: {'text': 'I love this movie!', 'label': 'positive'}
-        ```
-
-        Initialize the annotator and run annotation.
     """
 
     model_id: str
@@ -113,11 +78,8 @@ class Annotator:
     keep_columns: str | Iterable[str] | bool | None = None
     upload_every_n_samples: int = 0
     max_samples_per_output_file: int = 0
-    new_hub_id: str | None = None
     max_model_len: int | None = None
     enable_thinking: bool = False
-    cache_input_dataset: bool = True
-    use_cached_input_dataset: bool = True
     prefix: str = ""
 
     pipe: LLM | None = field(default=None, init=False)
@@ -128,19 +90,6 @@ class Annotator:
     prompt_fields: tuple[str, ...] = field(default=None, init=False)
 
     def __post_init__(self) -> None:
-        """Initialize the annotator after dataclass creation.
-
-        Validates configuration, loads prompt template, and prepares internal state.
-
-        Raises:
-            ValueError: If upload_every_n_samples is negative or new_hub_id is missing
-                when upload_every_n_samples > 0.
-        """
-        if self.upload_every_n_samples < 0 or not isinstance(self.upload_every_n_samples, int):
-            raise ValueError("upload_every_n_samples must be a positive integer or 0")
-        elif self.upload_every_n_samples > 0 and not self.new_hub_id:
-            raise ValueError("If upload_every_n_samples is set, new_hub_id must be provided")
-
         self.max_samples_per_output_file = (
             0 if self.max_samples_per_output_file is None else max(0, self.max_samples_per_output_file)
         )
@@ -185,6 +134,18 @@ class Annotator:
         if self.output_schema_file:
             self.output_schema = json.loads(Path(self.output_schema_file).read_text(encoding="utf-8"))
 
+    def cached_input_dataset_path(self, pdout: PathLike) -> Path:
+        """Get the path to the cached input dataset.
+
+        Args:
+            pdout: Output directory path.
+
+        Returns:
+            Path to the cached input dataset directory.
+        """
+        pdout = Path(pdout)
+        return pdout / f"{self.prefix}cached_input_dataset"
+
     def _get_skip_idxs(self, pdout: Path) -> set[int]:
         """Get indices of samples that have already been processed.
 
@@ -218,12 +179,14 @@ class Annotator:
         self,
         dataset_name: str,
         pdout: Path,
-        dataset_config: str | None = None,
+        dataset_config: str = None,
         data_dir: str | None = None,
         dataset_split: str | None = None,
         streaming: bool = False,
         max_num_samples: int | None = None,
         shuffle_seed: int | None = None,
+        cache_input_dataset: bool = True,
+        use_cached_input_dataset: bool = True,
     ) -> int:
         """Load and preprocess the dataset for annotation.
 
@@ -239,6 +202,9 @@ class Annotator:
             streaming: Whether to use streaming mode for large datasets.
             max_num_samples: Maximum number of samples to process.
             shuffle_seed: Seed for dataset shuffling (optional).
+            cache_input_dataset: Whether to cache the input dataset.
+                Especially useful if using streaming + max_num_samples.
+            use_cached_input_dataset: Whether to use a cached input dataset if available.
 
         Raises:
             ValueError: If streaming mode is used without max_num_samples.
@@ -249,15 +215,29 @@ class Annotator:
         self.dataset_config = dataset_config
         self.dataset_split = dataset_split
         self.streaming = streaming
+        self.dataset = None
 
-        cached_input_ds = pdout / f"{self.prefix}cached_input_dataset"
+        # Split verification and defaulting
+        split_names = get_dataset_split_names(dataset_name)
+        if not dataset_split:
+            if len(split_names) == 1:
+                dataset_split = split_names[0]
+            else:
+                raise ValueError(
+                    f"Dataset '{dataset_name}' has multiple splits {split_names}. "
+                    "Please specify a split using the 'dataset_split' argument."
+                )
+        elif dataset_split not in split_names:
+            raise ValueError(f"Dataset '{dataset_name}' does not have a split named '{dataset_split}'")
+
+        cached_input_ds = self.cached_input_dataset_path(pdout)
 
         dataset = None
 
         # If exists and not empty, try to load from cache. If loading the
         # cached dataset fails (corrupted cache), fall back to loading from
         # the original source.
-        if self.use_cached_input_dataset and cached_input_ds.exists() and cached_input_ds.stat().st_size > 0:
+        if use_cached_input_dataset and cached_input_ds.exists() and cached_input_ds.stat().st_size > 0:
             try:
                 dataset = Dataset.load_from_disk(cached_input_ds)
             except Exception:
@@ -333,7 +313,7 @@ class Annotator:
                 num_proc=self.num_proc,
                 desc="Applying prompt template",
             )
-            if self.cache_input_dataset:
+            if cache_input_dataset:
                 dataset.save_to_disk(cached_input_ds)
 
         skip_idxs = self._get_skip_idxs(pdout)
@@ -518,6 +498,7 @@ class Annotator:
         dataset_name: str,
         output_dir: str | Path,
         *,
+        new_hub_id: str | None = None,
         overwrite: bool = False,
         dataset_config: str | None = None,
         data_dir: str | None = None,
@@ -526,6 +507,8 @@ class Annotator:
         streaming: bool = False,
         sampling_params: dict[str, Any] | None = None,
         max_num_samples: int | None = None,
+        cache_input_dataset: bool = True,
+        use_cached_input_dataset: bool = True,
     ) -> None:
         """Annotate an entire dataset using the configured model and prompt.
 
@@ -535,6 +518,7 @@ class Annotator:
         Args:
             dataset_name: Name or path of the dataset to annotate.
             output_dir: Directory to save annotation results.
+            new_hub_id: Optional Hugging Face dataset ID for uploads (overrides instance setting).
             overwrite: Whether to overwrite existing output directory.
             dataset_config: Dataset configuration name (optional).
             data_dir: Data directory for local datasets (optional).
@@ -543,16 +527,15 @@ class Annotator:
             streaming: Whether to use streaming mode for large datasets.
             sampling_params: Parameters for model generation (optional).
             max_num_samples: Maximum number of samples to annotate.
-
-        Example:
-            >>> annotator.annotate_dataset(
-            ...     "stanfordnlp/imdb",
-            ...     "output/imdb_annotations",
-            ...     dataset_split="test",
-            ...     max_num_samples=1000,
-            ...     sampling_params={"temperature": 0.7, "max_tokens": 1}
-            ... )
+            cache_input_dataset: Whether to cache the input dataset. Especially useful if
+                using streaming + max_num_samples.
+            use_cached_input_dataset: Whether to use a cached input dataset if available.
         """
+        if self.upload_every_n_samples < 0 or not isinstance(self.upload_every_n_samples, int):
+            raise ValueError("upload_every_n_samples must be a positive integer or 0")
+        elif self.upload_every_n_samples > 0 and not new_hub_id:
+            raise ValueError("If upload_every_n_samples is set, new_hub_id must be provided")
+
         pdout = Path(output_dir)
         if pdout.is_dir() and overwrite:
             shutil.rmtree(pdout)
@@ -569,6 +552,8 @@ class Annotator:
             streaming=streaming,
             max_num_samples=max_num_samples,
             shuffle_seed=shuffle_seed,
+            cache_input_dataset=cache_input_dataset,
+            use_cached_input_dataset=use_cached_input_dataset,
         )
         if len(self.dataset) > 0:
             pfout = self.get_fhout_name(pdout, processed_n_samples=processed_n_samples)
@@ -608,42 +593,53 @@ class Annotator:
                     fhout.write(json.dumps(data_sample) + "\n")
                     fhout.flush()
                     processed_n_samples += 1
+                    print(processed_n_samples)
 
-                    # Handle hub upload checkpointing
-                    if (
-                        self.new_hub_id
-                        and self.upload_every_n_samples > 0
-                        and processed_n_samples % self.upload_every_n_samples == 0
-                    ):
+                    # Handle hub upload checkpointing and output file rotation
+                    if self.upload_every_n_samples > 0 and processed_n_samples % self.upload_every_n_samples == 0:
                         fhout.close()
-                        self.push_dir_to_hub(pdout)
-                        pfout = self.get_fhout_name(pdout)
-                        fhout = pfout.open("a", encoding="utf-8")
-
-                    # Rotate output files when threshold reached
-                    if (
-                        self.max_samples_per_output_file > 0
-                        and processed_n_samples % self.max_samples_per_output_file == 0
-                    ):
-                        fhout.close()
+                        remove_empty_jsonl_files(pdout)
+                        if new_hub_id:
+                            self.push_dir_to_hub(pdout, new_hub_id=new_hub_id)
                         pfout = self.get_fhout_name(pdout)
                         fhout = pfout.open("a", encoding="utf-8")
 
             fhout.close()
+            remove_empty_jsonl_files(pdout)
+            if new_hub_id and self.upload_every_n_samples > 0:
+                self.push_dir_to_hub(pdout, new_hub_id=new_hub_id)
 
-        self._post_annotate(pdout)
+        return self._post_annotate(pdout, new_hub_id)
 
-    def _post_annotate(self, pdout: Path) -> None:
+    def _post_annotate(self, pdout: Path, new_hub_id: str | None = None) -> Dataset:
         """Clean up after annotation is complete.
 
         Removes empty output files and performs any final cleanup operations.
 
         Args:
             pdout: Output directory path to clean up.
+            new_hub_id: Optional Hugging Face dataset ID for uploads (overrides instance setting).
+
+        Returns:
+            The concatenated dataset of all annotation results (JSON-invalid samples are NOT removed)
         """
+        ds_parts = []
         for pfin in pdout.glob("*.jsonl"):
-            if pfin.stat().st_size == 0:
-                pfin.unlink()
+            if pfin.stat().st_size > 0:
+                ds_parts.append(Dataset.from_json(str(pfin)))
+
+        ds = concatenate_datasets(ds_parts).remove_columns(self.idx_column)
+
+        if new_hub_id:
+            ds.push_to_hub(new_hub_id, private=True)
+
+        ds.cleanup_cache_files()
+
+        cached_input_ds = pdout / "cached_input_dataset"
+        if cached_input_ds.exists():
+            shutil.rmtree(cached_input_ds)
+
+        return ds
 
     def get_fhout_name(self, output_dir: Path | str, *, processed_n_samples: int | None = None) -> Path:
         """Generate the output file name based on configuration.
@@ -666,7 +662,7 @@ class Annotator:
             return Path(output_dir).joinpath(f"{stem}_{count_idx}.jsonl")
 
     @retry()
-    def push_dir_to_hub(self, dir_path: Path | str) -> None:
+    def push_dir_to_hub(self, dir_path: Path | str, new_hub_id: str | None = None) -> None:
         """Upload the output directory to Hugging Face Hub.
 
         Creates a dataset repository and uploads all annotation files,
@@ -674,18 +670,19 @@ class Annotator:
 
         Args:
             dir_path: Path to the directory containing annotation files.
+            new_hub_id: Optional Hugging Face dataset ID to override the instance's new_hub_id.
 
         Raises:
             Exception: If upload fails after retries (handled by @retry decorator).
         """
-        if not self.new_hub_id:
-            raise ValueError("new_hub_id must be set to push data to the HuggingFace Hub")
+        if not new_hub_id:
+            raise ValueError("'new_hub_id' must be set to push data to the HuggingFace Hub")
 
-        create_repo(self.new_hub_id, repo_type="dataset", exist_ok=True, private=True)
-        create_branch(self.new_hub_id, repo_type="dataset", branch=f"{self.prefix}jsonl_upload", exist_ok=True)
+        create_repo(new_hub_id, repo_type="dataset", exist_ok=True, private=True)
+        create_branch(new_hub_id, repo_type="dataset", branch=f"{self.prefix}jsonl_upload", exist_ok=True)
 
         upload_large_folder(
-            repo_id=self.new_hub_id,
+            repo_id=new_hub_id,
             repo_type="dataset",
             folder_path=str(dir_path),
             allow_patterns=["*.jsonl", "*.json"],  # Include data files (jsonl) and config files (json)
