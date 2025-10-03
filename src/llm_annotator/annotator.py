@@ -98,10 +98,11 @@ class Annotator:
     def _load_dataset(
         self,
         *,
-        dataset_name: str,
         prompt_template: str,
         pdout: Path,
         idx_column: str,
+        dataset_name: str | None = None,
+        dataset: Dataset | None = None,
         dataset_config: str = None,
         data_dir: str | None = None,
         dataset_split: str | None = None,
@@ -120,6 +121,7 @@ class Annotator:
 
         Args:
             dataset_name: Name or path of the dataset to load.
+            dataset: Pre-loaded dataset to use instead of loading from name/path.
             pdout: Output directory for caching and results.
             dataset_config: Dataset configuration name (optional).
             data_dir: Data directory for local datasets (optional).
@@ -144,37 +146,37 @@ class Annotator:
         if max_num_samples is not None and max_num_samples <= 0:
             raise ValueError("'max_num_samples' must be a positive integer or None")
 
-        dataset_config = dataset_config
-        dataset_split = dataset_split
+        if not dataset_name and dataset is None:
+            raise ValueError("Either 'dataset_name' or 'dataset' must be provided")
 
         # Split verification and defaulting
-        split_names = get_dataset_split_names(dataset_name)
-        if not dataset_split:
-            if len(split_names) == 1:
-                dataset_split = split_names[0]
-            else:
-                raise ValueError(
-                    f"Dataset '{dataset_name}' has multiple splits {split_names}. "
-                    "Please specify a split using the 'dataset_split' argument."
-                )
-        elif dataset_split not in split_names:
-            raise ValueError(f"Dataset '{dataset_name}' does not have a split named '{dataset_split}'")
+        if dataset_name:
+            split_names = get_dataset_split_names(dataset_name)
+            if not dataset_split:
+                if len(split_names) == 1:
+                    dataset_split = split_names[0]
+                else:
+                    raise ValueError(
+                        f"Dataset '{dataset_name}' has multiple splits {split_names}. "
+                        "Please specify a split using the 'dataset_split' argument."
+                    )
+            elif dataset_split not in split_names:
+                raise ValueError(f"Dataset '{dataset_name}' does not have a split named '{dataset_split}'")
 
         pdout = Path(pdout)
         p_cached_input_ds = pdout / f"{prefix}cached_input_dataset"
 
-        dataset = None
-
         # If exists and not empty, try to load from cache. If loading the
         # cached dataset fails (corrupted cache), fall back to loading from
         # the original source.
+        loaded_ds = None
         if use_cached_input_dataset and p_cached_input_ds.exists() and p_cached_input_ds.stat().st_size > 0:
-            try:
-                dataset = Dataset.load_from_disk(p_cached_input_ds)
-            except Exception:
-                dataset = None
+            loaded_ds = Dataset.load_from_disk(p_cached_input_ds)
 
-        if dataset is None:
+        # Always prefer a locally cached dataset if available
+        if loaded_ds is not None:
+            dataset = loaded_ds
+        else:
             if streaming and not max_num_samples:
                 raise ValueError(
                     "Streaming mode requires max_num_samples to be set."
@@ -182,7 +184,8 @@ class Annotator:
                     " the requested number of samples."
                 )
 
-            if streaming:
+            # No dataset provided, so got to load it from dataset_name
+            if dataset is None and streaming:
                 ds_iter: IterableDataset = load_dataset(
                     dataset_name, name=dataset_config, data_dir=data_dir, split=dataset_split, streaming=True
                 )
@@ -206,7 +209,12 @@ class Annotator:
                 # Convert to Dataset
                 dataset = Dataset.from_generator(yield_fn, split=dataset_split)
             else:
-                dataset = load_dataset(dataset_name, name=dataset_config, data_dir=data_dir, split=dataset_split)
+                # Use the provided dataset if available
+                if dataset is not None:
+                    dataset = dataset
+                else:
+                    dataset = load_dataset(dataset_name, name=dataset_config, data_dir=data_dir, split=dataset_split)
+
                 if shuffle_seed is not None:
                     dataset = dataset.shuffle(seed=shuffle_seed)
 
@@ -433,9 +441,10 @@ class Annotator:
 
     def annotate_dataset(
         self,
-        dataset_name: str,
         output_dir: str | Path,
         *,
+        dataset_name: str | None = None,
+        dataset: Dataset | None = None,
         new_hub_id: str | None = None,
         overwrite: bool = False,
         dataset_config: str | None = None,
@@ -465,8 +474,9 @@ class Annotator:
         from dataset loading through model inference to output generation.
 
         Args:
-            dataset_name: Name or path of the dataset to annotate.
             output_dir: Directory to save annotation results.
+            dataset_name: Name or path of the dataset to annotate.
+            dataset: Pre-loaded dataset to use instead of loading from name/path.
             new_hub_id: Optional Hugging Face dataset ID for uploads.
             overwrite: Whether to overwrite existing output directory.
             dataset_config: Dataset configuration name (optional).
@@ -564,10 +574,11 @@ class Annotator:
 
         self._load_tokenizer()
         dataset, processed_n_samples = self._load_dataset(
-            dataset_name=dataset_name,
             prompt_template=prompt_template,
-            pdout=pdout,
             idx_column=idx_column,
+            pdout=pdout,
+            dataset_name=dataset_name,
+            dataset=dataset,
             dataset_config=dataset_config,
             data_dir=data_dir,
             dataset_split=dataset_split,
