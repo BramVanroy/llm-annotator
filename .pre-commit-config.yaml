@@ -16,3 +16,5 @@ repos:
         language: system
         pass_filenames: false
         stages: [pre-push]
+        types: [python]
+        additional_dependencies: [pytest]

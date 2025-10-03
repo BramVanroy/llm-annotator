@@ -31,7 +31,7 @@ def convert_int_to_str(num: int) -> str:
         return str(num)
 
 
-def retry(num_retries: int = 3, sleep_time_s: int = 10) -> callable:
+def retry(num_retries: int = 3, sleep_time_s: int = 1) -> callable:
     """
     A decorator to automatically retry a function if it fails. Useful when we are uploading data.
 

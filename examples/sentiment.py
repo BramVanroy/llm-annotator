@@ -31,23 +31,21 @@ def main():
         "required": ["sentiment"]
     }
 
-    anno = Annotator(
-        model_id="Qwen/Qwen2.5-0.5B-Instruct",
-        prompt_template=prompt_template,
-        output_schema=output_schema,
-        # Backup to HF every 10 samples.
-        # In practice, set to a higher value (e.g., 1000+)
-        upload_every_n_samples=10,
-    )
-    ds = anno.annotate_dataset(
-        "stanfordnlp/imdb",
-        output_dir="outputs/sentiment-imdb-qwen",
-        dataset_split="test",
-        new_hub_id=f"{hf_user}/sentiment-imdb",
-        streaming=True,
-        max_num_samples=100,
-        cache_input_dataset=False,  # `True` is generally useful, not for demo purposes
-    )
+    with Annotator(model_id="Qwen/Qwen2.5-0.5B-Instruct") as anno:
+        ds = anno.annotate_dataset(
+            "stanfordnlp/imdb",
+            output_dir="outputs/sentiment-imdb-qwen",
+            dataset_split="test",
+            new_hub_id=f"{hf_user}/sentiment-imdb",
+            streaming=True,
+            max_num_samples=250,
+            cache_input_dataset=False,  # `True` is generally useful, not for demo purposes        
+            prompt_template=prompt_template,
+            output_schema=output_schema,
+            # Backup to HF every 10 samples.
+            # In practice, set to a higher value (e.g., 1000+)
+            upload_every_n_samples=100,
+        )
     print(ds)
 
 if __name__ == "__main__":
