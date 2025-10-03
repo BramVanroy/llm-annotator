@@ -8,14 +8,15 @@ from os import PathLike
 from pathlib import Path
 from typing import Any, Iterable
 
-from torch import cuda
 from datasets import Dataset, IterableDataset, concatenate_datasets, get_dataset_split_names, load_dataset
 from huggingface_hub import create_branch, create_repo, upload_large_folder
+from torch import cuda
 from tqdm import tqdm
 from transformers import AutoTokenizer, PreTrainedTokenizer
-from vllm import RequestOutput, SamplingParams, LLM
+from vllm import LLM, RequestOutput, SamplingParams
 from vllm.distributed import destroy_distributed_environment, destroy_model_parallel
 from vllm.sampling_params import GuidedDecodingParams
+
 from llm_annotator.utils import remove_empty_jsonl_files, retry
 
 
@@ -592,8 +593,7 @@ class Annotator:
             if output_schema:
                 if "guided_decoding" in sampling_params:
                     raise ValueError(
-                        "If 'output_schema' is provided, do not set 'guided_decoding'"
-                        " in sampling_params yourself"
+                        "If 'output_schema' is provided, do not set 'guided_decoding' in sampling_params yourself"
                     )
                 sampling_params["guided_decoding"] = GuidedDecodingParams(
                     json=output_schema,
