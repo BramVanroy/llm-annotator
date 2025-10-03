@@ -97,26 +97,7 @@ def test_annotator(test_model_id, prompt_template_file):
     """Create a test annotator instance."""
     return Annotator(
         model_id=test_model_id,
-        prompt_template_file=prompt_template_file,
         num_proc=None,
-    )
-
-
-@pytest.fixture(scope="session")
-def test_annotator_with_upload(test_model_id, prompt_template_file, hf_username):
-    """Create a test annotator instance for testing hub upload functionality.
-
-    Function-scoped because tests that perform real uploads should
-    construct their own instance and clean up after themselves.
-    """
-    if not hf_username:
-        pytest.skip("No Hugging Face username available for upload tests")
-    return Annotator(
-        model_id=test_model_id,
-        prompt_template_file=prompt_template_file,
-        num_proc=None,
-        upload_every_n_samples=2,
-        new_hub_id=f"{hf_username}/llm_annotator_test_ds",
     )
 
 

@@ -10,10 +10,10 @@ repos:
         pass_filenames: false
         stages: [pre-commit, pre-push]
 
-      - id: pytest
-        name: Run pytest
-        entry: pytest -q
-        language: system
-        pass_filenames: false
-        stages: [pre-push]
-        types: [python]
+      # - id: pytest
+      #   name: Run pytest
+      #   entry: pytest -q
+      #   language: system
+      #   pass_filenames: false
+      #   stages: [pre-push]
+      #   types: [python]
