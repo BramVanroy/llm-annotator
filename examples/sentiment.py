@@ -33,8 +33,8 @@ def main():
 
     with Annotator(model_id="Qwen/Qwen2.5-0.5B-Instruct") as anno:
         ds = anno.annotate_dataset(
-            "stanfordnlp/imdb",
             output_dir="outputs/sentiment-imdb-qwen",
+            dataset_name="stanfordnlp/imdb",
             dataset_split="test",
             new_hub_id=f"{hf_user}/sentiment-imdb",
             streaming=True,
