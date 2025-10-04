@@ -232,24 +232,18 @@ class Annotator:
             dataset = self._preprocess_dataset(dataset=dataset)
 
             dataset = dataset.map(
-                lambda sample, idx: {
-                    f"{prefix}prompted": self.tokenizer.apply_chat_template(
-                        [
-                            {
-                                "role": "user",
-                                "content": prompt_template.format(**{fld: sample[fld] for fld in prompt_fields}),
-                            }
-                        ],
-                        tokenize=False,
-                        add_generation_template=True,
-                        enable_thinking=self.enable_thinking,
-                    ),
-                    idx_column: idx,
-                },
+                self.apply_prompt_template,
                 with_indices=True,
                 num_proc=self.num_proc,
+                fn_kwargs={
+                    "prompt_fields": prompt_fields,
+                    "prompt_template": prompt_template,
+                    "idx_column": idx_column,
+                    "prefix": prefix,
+                },
                 desc="Applying prompt template",
             )
+
             if cache_input_dataset:
                 dataset.save_to_disk(p_cached_input_ds)
 
@@ -272,6 +266,38 @@ class Annotator:
 
         dataset = self._postprocess_dataset(dataset=dataset)
         return dataset, processed_n_samples
+
+    def apply_prompt_template(
+        self, sample: dict, idx: int, prompt_fields: Iterable[str], prompt_template: str, idx_column: str, prefix: str
+    ) -> dict[str, str | int]:
+        """Apply the prompt template to a single dataset sample. Fills in the prompt template with values from the sample,
+        based on the prompt_fields.
+
+        Args:
+            sample: The dataset sample to process.
+            idx: The index of the sample in the dataset.
+            prompt_fields: Fields required by the prompt template.
+            prompt_template: The prompt template string with placeholders.
+            idx_column: Column name to use as unique identifier.
+            prefix: String prefix to use for internal column names.
+
+        Returns:
+            A dictionary with the filled-in prompt and the sample index.
+        """
+        return {
+            f"{prefix}prompted": self.tokenizer.apply_chat_template(
+                [
+                    {
+                        "role": "user",
+                        "content": prompt_template.format(**{fld: sample[fld] for fld in prompt_fields}),
+                    }
+                ],
+                tokenize=False,
+                add_generation_template=True,
+                enable_thinking=self.enable_thinking,
+            ),
+            idx_column: idx,
+        }
 
     def _preprocess_dataset(self, *, dataset: Dataset) -> Dataset:
         """Preprocess the dataset before applying prompt templates.
