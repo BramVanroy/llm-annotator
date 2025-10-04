@@ -3,6 +3,7 @@ import json
 import shutil
 import string
 from dataclasses import dataclass, field
+from functools import wraps
 from math import ceil
 from os import PathLike
 from pathlib import Path
@@ -18,6 +19,24 @@ from vllm.distributed import destroy_distributed_environment, destroy_model_para
 from vllm.sampling_params import GuidedDecodingParams
 
 from llm_annotator.utils import remove_empty_jsonl_files, retry
+
+
+def destroy_model_on_error(func):
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        try:
+            return func(self, *args, **kwargs)
+        except BaseException as e:
+            # Catch BaseException so we also clean on KeyboardInterrupt/SystemExit
+            try:
+                self.destroy_model()
+            except Exception as clean_err:
+                # Don't hide the original error; attach a note (Python 3.11+)
+                if hasattr(e, "__notes__"):
+                    e.__notes__.append(f"Cleanup failed: {clean_err!r}")
+            raise  # re-raise the original exception
+
+    return wrapper
 
 
 @dataclass(slots=True)
@@ -413,16 +432,21 @@ class Annotator:
         """
         if isinstance(self.pipe, LLM):
             destroy_model_parallel()
+            destroy_distributed_environment()
+
             try:
                 self.pipe.llm_engine.model_executor.shutdown()
                 del self.pipe.llm_engine.model_executor
             except Exception:
                 pass
+            try:
+                self.pipe.llm_engine.engine_core.shutdown()
+                del self.pipe.llm_engine.engine_core
+            except Exception:
+                pass
             del self.pipe.llm_engine
             del self.pipe
-            gc.collect()
             cuda.empty_cache()
-            destroy_distributed_environment()
             gc.collect()
 
             self.pipe = None
@@ -462,6 +486,7 @@ class Annotator:
 
         return results
 
+    @destroy_model_on_error
     def annotate_dataset(
         self,
         output_dir: str | Path,

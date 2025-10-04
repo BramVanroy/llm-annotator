@@ -32,11 +32,11 @@ def main():
             dataset_split="test",
             new_hub_id=f"{hf_user}/sentiment-imdb",
             streaming=True,
-            max_num_samples=250,
+            max_num_samples=200,
             cache_input_dataset=False,  # `True` is generally useful, not for demo purposes
             prompt_template=prompt_template,
             output_schema=output_schema,
-            # Backup to HF every 10 samples.
+            # Backup to HF every 100 samples.
             # In practice, set to a higher value (e.g., 1000+)
             upload_every_n_samples=100,
         )
