@@ -62,7 +62,7 @@ class Annotator:
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        self.reset_model()
+        self.destroy_model()
 
     def _get_skip_idxs(
         self, *, pdout: Path, idx_column: str, dataset_split: str | None, dataset_config: str | None
@@ -406,29 +406,21 @@ class Annotator:
             **result,
         }
 
-    def reset_model(self) -> None:
+    def destroy_model(self) -> None:
         """Clean up model resources to free memory.
 
-        Destroys the distributed environment, clears GPU cache, and resets internal state..
+        Destroys the distributed environment, clears GPU cache, and resets internal state.
         """
-        destroy_model_parallel()
-        destroy_distributed_environment()
+        if isinstance(self.pipe, LLM):
+            destroy_model_parallel()
+            del self.pipe.llm_engine
+            del self.pipe
+            gc.collect()
+            cuda.empty_cache()
+            destroy_distributed_environment()
+            gc.collect()
 
-        try:
-            # Remove nested attributes if present
-            if hasattr(self.pipe, "llm_engine") and hasattr(self.pipe.llm_engine, "model_executor"):
-                del self.pipe.llm_engine.model_executor
-        except Exception:
-            pass
-
-        del self.pipe
-        del self.tokenizer
-
-        self.pipe = None
-        self.tokenizer = None
-
-        cuda.empty_cache()
-        gc.collect()
+            self.pipe = None
 
     def _process_batch(
         self,
@@ -597,8 +589,15 @@ class Annotator:
         if pdout.is_dir() and overwrite:
             shutil.rmtree(pdout)
         pdout.mkdir(exist_ok=True, parents=True)
+        
+        # We need to clear the model before doing self._load_dataset because the model
+        # cannot be be pickled (which is needed for multiprocessing in dataset.map)
+        if self.pipe is not None and self.num_proc is not None:
+            self.destroy_model()
 
-        self._load_tokenizer()
+        if self.tokenizer is None:
+            self._load_tokenizer()
+        
         dataset, processed_n_samples = self._load_dataset(
             prompt_template=prompt_template,
             idx_column=idx_column,
