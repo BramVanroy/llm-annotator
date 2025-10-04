@@ -16,7 +16,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer, PreTrainedTokenizer
 from vllm import LLM, RequestOutput, SamplingParams
 from vllm.distributed import destroy_distributed_environment, destroy_model_parallel
-from vllm.sampling_params import GuidedDecodingParams
+from vllm.sampling_params import StructuredOutputsParams
 
 from llm_annotator.utils import remove_empty_jsonl_files, retry
 
@@ -471,7 +471,7 @@ class Annotator:
         Returns:
             List of processed output dictionaries for each sample in the batch.
         """
-        output_schema = sampling_params.guided_decoding.json if sampling_params.guided_decoding else None
+        output_schema = sampling_params.structured_outputs.json if sampling_params.structured_outputs else None
         outputs = self.pipe.generate(batch[f"{prefix}prompted"], sampling_params, use_tqdm=False)
         results = [self._process_output(output=outp, output_schema=output_schema, prefix=prefix) for outp in outputs]
 
@@ -657,11 +657,11 @@ class Annotator:
 
             sampling_params = sampling_params or {}
             if output_schema:
-                if "guided_decoding" in sampling_params:
+                if "structured_outputs" in sampling_params:
                     raise ValueError(
-                        "If 'output_schema' is provided, do not set 'guided_decoding' in sampling_params yourself"
+                        "If 'output_schema' is provided, do not set 'structured_outputs' in sampling_params yourself"
                     )
-                sampling_params["guided_decoding"] = GuidedDecodingParams(
+                sampling_params["structured_outputs"] = StructuredOutputsParams(
                     json=output_schema,
                     whitespace_pattern=whitespace_pattern,
                 )
