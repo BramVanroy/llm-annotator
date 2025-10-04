@@ -1,10 +1,10 @@
 quality:
-	ruff check src/llm_annotator tests/
-	ruff format --check src/llm_annotator tests/
+	ruff check src/llm_annotator tests/ examples/
+	ruff format --check src/llm_annotator tests/ examples/
 
 style:
-	ruff check src/llm_annotator tests/ --fix
-	ruff format src/llm_annotator tests/
+	ruff check src/llm_annotator tests/ examples/ --fix
+	ruff format src/llm_annotator tests/ examples/
 
 setup:
 	uv sync --dev

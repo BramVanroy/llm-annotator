@@ -589,7 +589,7 @@ class Annotator:
         if pdout.is_dir() and overwrite:
             shutil.rmtree(pdout)
         pdout.mkdir(exist_ok=True, parents=True)
-        
+
         # We need to clear the model before doing self._load_dataset because the model
         # cannot be be pickled (which is needed for multiprocessing in dataset.map)
         if self.pipe is not None and self.num_proc is not None:
@@ -597,7 +597,7 @@ class Annotator:
 
         if self.tokenizer is None:
             self._load_tokenizer()
-        
+
         dataset, processed_n_samples = self._load_dataset(
             prompt_template=prompt_template,
             idx_column=idx_column,
