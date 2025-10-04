@@ -413,6 +413,11 @@ class Annotator:
         """
         if isinstance(self.pipe, LLM):
             destroy_model_parallel()
+            try:
+                self.pipe.llm_engine.model_executor.shutdown()
+                del self.pipe.llm_engine.model_executor
+            except Exception:
+                pass
             del self.pipe.llm_engine
             del self.pipe
             gc.collect()
