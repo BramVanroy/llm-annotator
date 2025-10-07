@@ -406,18 +406,20 @@ class Annotator:
         if not output_schema:
             return data
 
-        required_keys = output_schema["properties"].keys()
-        result = dict.fromkeys(required_keys)
-
-        valid_fields = True
+        print(output_schema)
+        valid_fields = None
+        result = dict.fromkeys(output_schema.get("properties", {}).keys())
         try:
             parsed_response = json.loads(raw_response)
         except json.JSONDecodeError:
             valid_fields = False
         else:
-            result.update(parsed_response)
+            result = parsed_response
 
-        valid_fields = valid_fields and all(result[key] is not None for key in required_keys)
+            if "required" in output_schema:
+                print("yup")
+                required_keys = output_schema["required"]
+                valid_fields = all(result[key] for key in required_keys)
 
         return {
             **data,
@@ -510,7 +512,7 @@ class Annotator:
         prompt_field_swapper: dict[str, str] | None = None,
         output_schema_file: str | PathLike | None = None,
         output_schema: str | dict[str, Any] | None = None,
-        whitespace_pattern: str | None = None,
+        whitespace_pattern: str | None = r"[ ]?",
         idx_column: str = "idx",
         upload_every_n_samples: int = 0,
         max_samples_per_output_file: int = 0,
