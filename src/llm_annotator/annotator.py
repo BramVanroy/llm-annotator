@@ -406,7 +406,6 @@ class Annotator:
         if not output_schema:
             return data
 
-        print(output_schema)
         valid_fields = None
         result = dict.fromkeys(output_schema.get("properties", {}).keys())
         try:
@@ -417,9 +416,8 @@ class Annotator:
             result = parsed_response
 
             if "required" in output_schema:
-                print("yup")
                 required_keys = output_schema["required"]
-                valid_fields = all(result[key] for key in required_keys)
+                valid_fields = all(key in result for key in required_keys)
 
         return {
             **data,
