@@ -46,6 +46,7 @@ VLLM_ARGS: set[str] = {
     "enforce_eager",
     "max_num_seqs",
     "gpu_memory_utilization",
+    "max_num_batched_tokens",
 }
 
 
@@ -82,6 +83,7 @@ class Annotator:
     # Add new args for vLLM init kwargs ALSO in `VLLM_ARGS` above!
     verbose: bool = False
     max_model_len: int | None = None
+    max_num_batched_tokens: int | None = None
     enable_thinking: bool = False
     # Extra kwargs to pass to vLLM LLM init. In case of conflict, these
     # take lower precedence than the explicitly defined args above.
@@ -146,6 +148,7 @@ class Annotator:
         use_cached_input_dataset: bool = True,
         prompt_fields: Iterable[str] = (),
         task_prefix: str = "",
+        sort_by_length: bool = False,
     ) -> tuple[Dataset, int]:
         """Load and preprocess the dataset for annotation.
 
@@ -167,6 +170,7 @@ class Annotator:
             use_cached_input_dataset: Whether to use a cached input dataset if available.
             prompt_fields: Fields required by the prompt template.
             task_prefix: String prefix to use for internal column names and file operations.
+            sort_by_length: Whether to sort the dataset by prompt length for more efficient batching.
 
         Returns:
             A tuple containing:
@@ -276,6 +280,17 @@ class Annotator:
                 },
                 desc="Applying prompt template",
             )
+
+            if sort_by_length:
+                if self.verbose:
+                    print("Sorting dataset roughly by prompt length for more efficient batching (longest first)...")
+                dataset = dataset.map(
+                    lambda prompt: {f"{task_prefix}_length": len(prompt)},
+                    num_proc=self.num_proc,
+                    input_columns=[f"{task_prefix}prompted"],
+                )
+                # Sort by longest first to trigger OOM as soon as possible
+                dataset = dataset.sort(f"{task_prefix}_length", reverse=True).remove_columns([f"{task_prefix}_length"])
 
             if cache_input_dataset:
                 dataset.save_to_disk(p_cached_input_ds)
@@ -532,6 +547,7 @@ class Annotator:
         upload_every_n_samples: int = 0,
         max_samples_per_output_file: int = 0,
         task_prefix: str = "",
+        sort_by_length: bool = False,
     ) -> Dataset:
         """Annotate an entire dataset using the configured model and prompt.
 
@@ -578,6 +594,7 @@ class Annotator:
             upload_every_n_samples: Upload to hub every N samples (0 to disable).
             max_samples_per_output_file: Maximum samples per output file (0 for unlimited).
             task_prefix: String prefix to use for internal column names and file operations.
+            sort_by_length: Whether to sort the dataset by prompt length for more efficient batching.
         """
         # Verify shared_prompt_template
         if prompt_template_prefix:
@@ -589,6 +606,15 @@ class Annotator:
 
             self.extra_vllm_init_kwargs["enable_chunked_prefill"] = True
             self.extra_vllm_init_kwargs["enable_prefix_caching"] = True
+
+        # If shuffle_seed and sorting by length, warn that shuffling will be
+        # effectively disabled
+        if shuffle_seed is not None and sort_by_length:
+            print(
+                "Warning: 'shuffle_seed' is set but 'sort_by_length' is also True."
+                " After processing the full dataset (sorted by length), the order"
+                " will therefore be restored to the shuffled order, NOT the original order."
+            )
 
         # Verify 'max_samples_per_output_file'
         if max_samples_per_output_file is not None and max_samples_per_output_file < 0:
@@ -659,6 +685,7 @@ class Annotator:
             use_cached_input_dataset=use_cached_input_dataset,
             prompt_fields=prompt_fields,
             task_prefix=task_prefix,
+            sort_by_length=sort_by_length,
         )
         if len(dataset) > 0:
             pfout = self.get_pfout_name(
@@ -750,7 +777,7 @@ class Annotator:
             if pfin.stat().st_size > 0:
                 ds_parts.append(Dataset.from_json(str(pfin)))
 
-        ds = concatenate_datasets(ds_parts).remove_columns(idx_column)
+        ds: Dataset = concatenate_datasets(ds_parts).sort(idx_column).remove_columns([idx_column])
 
         if new_hub_id:
             ds.push_to_hub(new_hub_id, private=True)

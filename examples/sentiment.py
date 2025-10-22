@@ -44,9 +44,11 @@ Classification:"""
             cache_input_dataset=False,  # `True` is generally useful, not for demo purposes
             prompt_template_prefix=prompt_prefix,
             output_schema=output_schema,
-            # Backup to HF every 100 samples.
+            keep_columns=["text", "label"],  # Keep all original columns
+            # Backup to HF every 100 samples (in separate backup branch).
             # In practice, set to a higher value (e.g., 1000+)
             upload_every_n_samples=100,
+            sort_by_length=True,  # Sort by prompt length for more efficient batching -- final dataset will be re-ordered to original
         )
     print(ds)
     shutil.rmtree("outputs/sentiment-imdb-qwen")
