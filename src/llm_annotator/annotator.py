@@ -59,7 +59,7 @@ class Annotator:
     with support for streaming, batching, and uploading to Hugging Face Hub.
 
     Args:
-        model_id: The Hugging Face model identifier or local path.
+        model: The Hugging Face model identifier or local path.
         num_proc: Number of processes for dataset operations.
         tensor_parallel_size: Number of GPUs for tensor parallelism. Especially useful if running on
             multiple GPUs; set to the number of GPUs available.
@@ -73,7 +73,7 @@ class Annotator:
         verbose: Whether to enable verbose logging.
     """
 
-    model_id: str
+    model: str
     num_proc: int | None = None
     tensor_parallel_size: int = 1
     max_num_seqs: int = 256
@@ -146,7 +146,7 @@ class Annotator:
         cache_input_dataset: bool = True,
         use_cached_input_dataset: bool = True,
         prompt_fields: Iterable[str] = (),
-        prefix: str = "",
+        task_prefix: str = "",
     ) -> tuple[Dataset, int]:
         """Load and preprocess the dataset for annotation.
 
@@ -167,7 +167,7 @@ class Annotator:
                 Especially useful if using streaming + max_num_samples.
             use_cached_input_dataset: Whether to use a cached input dataset if available.
             prompt_fields: Fields required by the prompt template.
-            prefix: String prefix to use for internal column names and file operations.
+            task_prefix: String prefix to use for internal column names and file operations.
 
         Returns:
             A tuple containing:
@@ -198,7 +198,7 @@ class Annotator:
                 raise ValueError(f"Dataset '{dataset_name}' does not have a split named '{dataset_split}'")
 
         pdout = Path(pdout)
-        p_cached_input_ds = pdout / f"{prefix}cached_input_dataset"
+        p_cached_input_ds = pdout / f"{task_prefix}cached_input_dataset"
 
         # If exists and not empty, try to load from cache. If loading the
         # cached dataset fails (corrupted cache), fall back to loading from
@@ -273,7 +273,7 @@ class Annotator:
                     "prompt_fields": prompt_fields,
                     "prompt_template": prompt_template,
                     "idx_column": idx_column,
-                    "prefix": prefix,
+                    "task_prefix": task_prefix,
                 },
                 desc="Applying prompt template",
             )
@@ -302,7 +302,7 @@ class Annotator:
         return dataset, processed_n_samples
 
     def _apply_prompt_template(
-        self, sample: dict, idx: int, prompt_fields: Iterable[str], prompt_template: str, idx_column: str, prefix: str
+        self, sample: dict, idx: int, prompt_fields: Iterable[str], prompt_template: str, idx_column: str, task_prefix: str
     ) -> dict[str, str | int]:
         """Apply the prompt template to a single dataset sample. Fills in the prompt template with values from the sample,
         based on the prompt_fields.
@@ -313,13 +313,13 @@ class Annotator:
             prompt_fields: Fields required by the prompt template.
             prompt_template: The prompt template string with placeholders.
             idx_column: Column name to use as unique identifier.
-            prefix: String prefix to use for internal column names.
+            task_prefix: String prefix to use for internal column names.
 
         Returns:
             A dictionary with the filled-in prompt and the sample index.
         """
         return {
-            f"{prefix}prompted": self.tokenizer.apply_chat_template(
+            f"{task_prefix}prompted": self.tokenizer.apply_chat_template(
                 [
                     {
                         "role": "user",
@@ -367,7 +367,7 @@ class Annotator:
         Sets up the tokenizer with appropriate padding settings and ensures
         a pad token is available.
         """
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model)
 
         self.tokenizer.padding_side = "left"
 
@@ -388,7 +388,7 @@ class Annotator:
         self.pipe: LLM = LLM(**defaults)
 
     def _process_output(
-        self, *, output: RequestOutput, output_schema: dict | None = None, prefix: str = ""
+        self, *, output: RequestOutput, output_schema: dict | None = None, task_prefix: str = ""
     ) -> dict[str, Any]:
         """Process a single model output into the desired annotation format.
 
@@ -397,7 +397,7 @@ class Annotator:
         Args:
             output: The raw output from the model for a single input.
             output_schema: Optional JSON schema for guided decoding.
-            prefix: String prefix to use for internal column names.
+            task_prefix: String prefix to use for internal column names.
         Returns:
             - A key '{prefix}_response' containing the raw model output text.
             - A key '{prefix}_finish_reason' indicating why generation stopped.
@@ -410,9 +410,9 @@ class Annotator:
         raw_response = output.outputs[0].text
 
         data = {
-            f"{prefix}response": raw_response,
-            f"{prefix}finish_reason": output.outputs[0].finish_reason if output.outputs else "unknown",
-            f"{prefix}num_tokens": len(output.outputs[0].token_ids) if output.outputs else 0,
+            f"{task_prefix}response": raw_response,
+            f"{task_prefix}finish_reason": output.outputs[0].finish_reason if output.outputs else "unknown",
+            f"{task_prefix}num_tokens": len(output.outputs[0].token_ids) if output.outputs else 0,
         }
         if not output_schema:
             return data
@@ -432,7 +432,7 @@ class Annotator:
 
         return {
             **data,
-            f"{prefix}valid_fields": valid_fields,
+            f"{task_prefix}valid_fields": valid_fields,
             **result,
         }
 
@@ -467,7 +467,7 @@ class Annotator:
         *,
         batch: dict[str, list[Any]],
         sampling_params: SamplingParams,
-        prefix: str = "",
+        task_prefix: str = "",
     ) -> list[dict[str, Any]]:
         """Process a batch of samples through the model.
 
@@ -477,17 +477,17 @@ class Annotator:
         Args:
             batch: Dictionary containing batch data with prompted samples.
             sampling_params: Sampling parameters for model generation.
-            prefix: String prefix to use for internal column names.
+            task_prefix: String prefix to use for internal column names.
 
         Returns:
             List of processed output dictionaries for each sample in the batch.
         """
         output_schema = sampling_params.structured_outputs.json if sampling_params.structured_outputs else None
-        outputs = self.pipe.generate(batch[f"{prefix}prompted"], sampling_params, use_tqdm=False)
-        results = [self._process_output(output=outp, output_schema=output_schema, prefix=prefix) for outp in outputs]
+        outputs = self.pipe.generate(batch[f"{task_prefix}prompted"], sampling_params, use_tqdm=False)
+        results = [self._process_output(output=outp, output_schema=output_schema, task_prefix=task_prefix) for outp in outputs]
 
-        if f"{prefix}valid_fields" in results[0]:
-            n_invalid = sum([1 for res in results if not res[f"{prefix}valid_fields"]])
+        if f"{task_prefix}valid_fields" in results[0]:
+            n_invalid = sum([1 for res in results if not res[f"{task_prefix}valid_fields"]])
             if n_invalid == len(results) and self.verbose:
                 print(
                     "Warning: All samples in the batch failed to produce valid fields."
@@ -500,8 +500,10 @@ class Annotator:
     @destroy_model_on_error
     def annotate_dataset(
         self,
-        output_dir: str | Path,
+        output_dir: str | Path,        
+        full_prompt_template: str,
         *,
+        prompt_template_prefix: str | None = None,
         dataset_name: str | None = None,
         dataset: Dataset | None = None,
         new_hub_id: str | None = None,
@@ -516,16 +518,13 @@ class Annotator:
         max_num_samples: int | None = None,
         cache_input_dataset: bool = True,
         use_cached_input_dataset: bool = True,
-        prompt_template_file: str | PathLike | None = None,
-        prompt_template: str | None = None,
         prompt_field_swapper: dict[str, str] | None = None,
-        output_schema_file: str | PathLike | None = None,
         output_schema: str | dict[str, Any] | None = None,
         whitespace_pattern: str | None = r"[ ]?",
         idx_column: str = "idx",
         upload_every_n_samples: int = 0,
         max_samples_per_output_file: int = 0,
-        prefix: str = "",
+        task_prefix: str = "",
     ) -> Dataset:
         """Annotate an entire dataset using the configured model and prompt.
 
@@ -533,7 +532,17 @@ class Annotator:
         from dataset loading through model inference to output generation.
 
         Args:
-            output_dir: Directory to save annotation results.
+            output_dir: Directory to save annotation results.            
+            full_prompt_template: Prompt template string. Can/should
+                contain fields in `{}` that match dataset column names, e.g.
+                "Analyze the following text: {text}".
+            prompt_template_prefix: The prefix in the prompt that is shared across
+                all queries. Often times the first part of the instruction is common
+                across requests ("Your task is to do X"), so we can cache that
+                in vLLM for efficiency. When this is given, we will enable
+                chunked prefill and prefix caching in vLLM.
+                
+                Must be part of "full_prompt_template"
             dataset_name: Name or path of the dataset to annotate.
             dataset: Pre-loaded dataset to use instead of loading from name/path.
             new_hub_id: Optional Hugging Face dataset ID for uploads.
@@ -554,21 +563,26 @@ class Annotator:
             cache_input_dataset: Whether to cache the input dataset. Especially useful if
                 using streaming + max_num_samples.
             use_cached_input_dataset: Whether to use a cached input dataset if available.
-            prompt_template_file: Path to the prompt template file. Can/should contain fields in `{}`
-            that match dataset column names, e.g. "Analyze the following text: {text}".
-            prompt_template: Prompt template string (alternative to prompt_template_file). Can/should
-                contain fields in `{}` that match dataset column names, e.g. "Analyze the
-                following text: {text}".
             prompt_field_swapper: Optional mapping to replace template fields. Useful if you want to use
                 the same template with different datasets that use different field names.
-            output_schema_file: Path to a JSON schema file for guided decoding (optional).
-            output_schema: JSON schema as a dictionary or string (alternative to output_schema_file).
+            output_schema: JSON schema as a dictionary or string (optional).
             whitespace_pattern: Regex pattern for whitespace handling in guided decoding.
             idx_column: Column name to use as unique identifier.
             upload_every_n_samples: Upload to hub every N samples (0 to disable).
             max_samples_per_output_file: Maximum samples per output file (0 for unlimited).
-            prefix: String prefix to use for internal column names and file operations.
+            task_prefix: String prefix to use for internal column names and file operations.
         """
+        # Verify shared_prompt_template
+        if prompt_template_prefix:
+            if prompt_template_prefix not in full_prompt_template:
+                raise ValueError(
+                "'prompt_template_prefix' must be a substring of 'full_prompt_template'."
+                " Especially check white-spaces."
+            )
+            
+            self.extra_vllm_init_kwargs["enable_chunked_prefill"] = True
+            self.extra_vllm_init_kwargs["enable_prefix_caching"] = True
+
         # Verify 'max_samples_per_output_file'
         if max_samples_per_output_file is not None and max_samples_per_output_file < 0:
             raise ValueError("'max_samples_per_output_file' must be None or 0 or a positive integer")
@@ -598,32 +612,15 @@ class Annotator:
         if isinstance(keep_columns, set):
             keep_columns.add(idx_column)
 
-        # Verify prompt template inputs
-        if not prompt_template_file and not prompt_template:
-            raise ValueError("Either prompt_template_file or prompt_template must be provided")
-
-        if prompt_template_file and prompt_template:
-            raise ValueError("Only one of prompt_template_file or prompt_template should be provided")
-
-        if prompt_template_file:
-            prompt_template = Path(prompt_template_file).read_text(encoding="utf-8")
-
         prompt_field_swapper = prompt_field_swapper or {}
 
         for fld, value in prompt_field_swapper.items():
-            prompt_template = prompt_template.replace(f"{{{fld}}}", value)
+            full_prompt_template = full_prompt_template.replace(f"{{{fld}}}", value)
 
         _str_formatter = string.Formatter()
         prompt_fields = tuple(
-            [fld[1] for fld in _str_formatter.parse(prompt_template) if fld[1] is not None and not fld[2]]
+            [fld[1] for fld in _str_formatter.parse(full_prompt_template) if fld[1] is not None and not fld[2]]
         )
-
-        # Verify output schema inputs
-        if output_schema_file and output_schema:
-            raise ValueError("Only one of output_schema_file or output_schema should be provided")
-
-        if output_schema_file:
-            output_schema = json.loads(Path(output_schema_file).read_text(encoding="utf-8"))
 
         # Set up output directory
         pdout = Path(output_dir)
@@ -640,7 +637,7 @@ class Annotator:
             self._load_tokenizer()
 
         dataset, processed_n_samples = self._load_dataset(
-            prompt_template=prompt_template,
+            prompt_template=full_prompt_template,
             idx_column=idx_column,
             pdout=pdout,
             dataset_name=dataset_name,
@@ -654,7 +651,7 @@ class Annotator:
             cache_input_dataset=cache_input_dataset,
             use_cached_input_dataset=use_cached_input_dataset,
             prompt_fields=prompt_fields,
-            prefix=prefix,
+            task_prefix=task_prefix,
         )
         if len(dataset) > 0:
             pfout = self.get_pfout_name(
@@ -665,6 +662,11 @@ class Annotator:
             fhout = pfout.open("a", encoding="utf-8")
 
             self._load_pipeline()
+
+            if prompt_template_prefix:
+                if self.verbose:
+                    print("Warming up shared prompt cache...")                
+                self.pipe.generate([prompt_template_prefix], SamplingParams(max_tokens=1, temperature=0), use_tqdm=False)
 
             sampling_params = sampling_params or {}
             if output_schema:
@@ -685,7 +687,7 @@ class Annotator:
                 desc=f"Annotating (max_bs={self.max_num_seqs})",
                 unit="batch",
             ):
-                results = self._process_batch(batch=batch, sampling_params=sampling_params, prefix=prefix)
+                results = self._process_batch(batch=batch, sampling_params=sampling_params, task_prefix=task_prefix)
 
                 batch_size = len(batch[idx_column])
                 if keep_columns is True:
@@ -780,7 +782,7 @@ class Annotator:
             return pdout.joinpath(f"{stem}_{count_idx}.jsonl")
 
     @retry()
-    def push_dir_to_hub(self, dir_path: Path | str, new_hub_id: str | None = None, *, prefix: str = "") -> None:
+    def push_dir_to_hub(self, dir_path: Path | str, new_hub_id: str | None = None, *, task_prefix: str = "") -> None:
         """Upload the output directory to Hugging Face Hub.
 
         Creates a dataset repository and uploads all annotation files,
@@ -789,7 +791,7 @@ class Annotator:
         Args:
             dir_path: Path to the directory containing annotation files.
             new_hub_id: Optional Hugging Face dataset ID to override the instance's new_hub_id.
-            prefix: String prefix to use for branch naming.
+            task_prefix: String prefix to use for branch naming.
 
         Raises:
             Exception: If upload fails after retries (handled by @retry decorator).
@@ -798,18 +800,18 @@ class Annotator:
             raise ValueError("'new_hub_id' must be set to push data to the HuggingFace Hub")
 
         create_repo(new_hub_id, repo_type="dataset", exist_ok=True, private=True)
-        create_branch(new_hub_id, repo_type="dataset", branch=f"{prefix}jsonl_upload", exist_ok=True)
+        create_branch(new_hub_id, repo_type="dataset", branch=f"{task_prefix}jsonl_upload", exist_ok=True)
 
         upload_large_folder(
             repo_id=new_hub_id,
             repo_type="dataset",
             folder_path=str(dir_path),
             allow_patterns=["*.jsonl", "*.json"],  # Include data files (jsonl) and config files (json)
-            ignore_patterns=[f"{prefix}cached_input_dataset/*", ".cache/*"],  # Ignore cached input dataset
+            ignore_patterns=[f"{task_prefix}cached_input_dataset/*", ".cache/*"],  # Ignore cached input dataset
             private=True,
-            revision=f"{prefix}jsonl_upload",
+            revision=f"{task_prefix}jsonl_upload",
             print_report=False,
         )
         if self.verbose:
-            url = f"https://huggingface.co/datasets/{new_hub_id}/tree/{prefix}jsonl_upload"
+            url = f"https://huggingface.co/datasets/{new_hub_id}/tree/{task_prefix}jsonl_upload"
             print(f"Backed-up data to the HF Hub: {url}")

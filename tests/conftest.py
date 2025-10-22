@@ -96,7 +96,7 @@ def json_schema_file(temp_dir):
 def test_annotator(test_model_id, prompt_template_file):
     """Create a test annotator instance."""
     return Annotator(
-        model_id=test_model_id,
+        model=test_model_id,
         num_proc=None,
     )
 
