@@ -1,6 +1,7 @@
 import shutil
 
 from huggingface_hub import HfApi
+
 from llm_annotator import Annotator
 
 
@@ -15,12 +16,15 @@ def get_hf_username() -> str | None:
 def main():
     hf_user = get_hf_username()
     prompt_prefix = """Analyze the sentiment of the following movie review and classify it as positive or negative.
-    
-    Review: 
-    """
-    prompt_template = prompt_prefix + """{text}
 
-    Classification:"""
+Review: 
+"""  # noqa: W291
+    prompt_template = (
+        prompt_prefix
+        + """{text}
+
+Classification:"""
+    )  # noqa: W291
 
     output_schema = {
         "type": "object",
@@ -28,10 +32,7 @@ def main():
         "required": ["sentiment"],
     }
 
-    with Annotator(
-        model="Qwen/Qwen2.5-0.5B-Instruct",
-        max_model_len=4096,
-        verbose=True) as anno:
+    with Annotator(model="Qwen/Qwen2.5-0.5B-Instruct", max_model_len=4096, verbose=True) as anno:
         ds = anno.annotate_dataset(
             output_dir="outputs/sentiment-imdb-qwen",
             full_prompt_template=prompt_template,

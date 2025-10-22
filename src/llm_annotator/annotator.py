@@ -5,7 +5,6 @@ import string
 from dataclasses import dataclass, field
 from functools import wraps
 from math import ceil
-from os import PathLike
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -302,7 +301,13 @@ class Annotator:
         return dataset, processed_n_samples
 
     def _apply_prompt_template(
-        self, sample: dict, idx: int, prompt_fields: Iterable[str], prompt_template: str, idx_column: str, task_prefix: str
+        self,
+        sample: dict,
+        idx: int,
+        prompt_fields: Iterable[str],
+        prompt_template: str,
+        idx_column: str,
+        task_prefix: str,
     ) -> dict[str, str | int]:
         """Apply the prompt template to a single dataset sample. Fills in the prompt template with values from the sample,
         based on the prompt_fields.
@@ -484,7 +489,9 @@ class Annotator:
         """
         output_schema = sampling_params.structured_outputs.json if sampling_params.structured_outputs else None
         outputs = self.pipe.generate(batch[f"{task_prefix}prompted"], sampling_params, use_tqdm=False)
-        results = [self._process_output(output=outp, output_schema=output_schema, task_prefix=task_prefix) for outp in outputs]
+        results = [
+            self._process_output(output=outp, output_schema=output_schema, task_prefix=task_prefix) for outp in outputs
+        ]
 
         if f"{task_prefix}valid_fields" in results[0]:
             n_invalid = sum([1 for res in results if not res[f"{task_prefix}valid_fields"]])
@@ -500,7 +507,7 @@ class Annotator:
     @destroy_model_on_error
     def annotate_dataset(
         self,
-        output_dir: str | Path,        
+        output_dir: str | Path,
         full_prompt_template: str,
         *,
         prompt_template_prefix: str | None = None,
@@ -532,7 +539,7 @@ class Annotator:
         from dataset loading through model inference to output generation.
 
         Args:
-            output_dir: Directory to save annotation results.            
+            output_dir: Directory to save annotation results.
             full_prompt_template: Prompt template string. Can/should
                 contain fields in `{}` that match dataset column names, e.g.
                 "Analyze the following text: {text}".
@@ -541,7 +548,7 @@ class Annotator:
                 across requests ("Your task is to do X"), so we can cache that
                 in vLLM for efficiency. When this is given, we will enable
                 chunked prefill and prefix caching in vLLM.
-                
+
                 Must be part of "full_prompt_template"
             dataset_name: Name or path of the dataset to annotate.
             dataset: Pre-loaded dataset to use instead of loading from name/path.
@@ -576,10 +583,10 @@ class Annotator:
         if prompt_template_prefix:
             if prompt_template_prefix not in full_prompt_template:
                 raise ValueError(
-                "'prompt_template_prefix' must be a substring of 'full_prompt_template'."
-                " Especially check white-spaces."
-            )
-            
+                    "'prompt_template_prefix' must be a substring of 'full_prompt_template'."
+                    " Especially check white-spaces."
+                )
+
             self.extra_vllm_init_kwargs["enable_chunked_prefill"] = True
             self.extra_vllm_init_kwargs["enable_prefix_caching"] = True
 
@@ -665,8 +672,10 @@ class Annotator:
 
             if prompt_template_prefix:
                 if self.verbose:
-                    print("Warming up shared prompt cache...")                
-                self.pipe.generate([prompt_template_prefix], SamplingParams(max_tokens=1, temperature=0), use_tqdm=False)
+                    print("Warming up shared prompt cache...")
+                self.pipe.generate(
+                    [prompt_template_prefix], SamplingParams(max_tokens=1, temperature=0), use_tqdm=False
+                )
 
             sampling_params = sampling_params or {}
             if output_schema:
