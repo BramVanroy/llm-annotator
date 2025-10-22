@@ -39,6 +39,17 @@ def destroy_model_on_error(func):
     return wrapper
 
 
+VLLM_ARGS: set[str] = {
+    "model",
+    "tensor_parallel_size",
+    "quantization",
+    "max_model_len",
+    "enforce_eager",
+    "max_num_seqs",
+    "gpu_memory_utilization",
+}
+
+
 @dataclass(slots=True)
 class Annotator:
     """Sensible base class for LLM-based dataset annotation.
@@ -69,9 +80,13 @@ class Annotator:
     gpu_memory_utilization: float = 0.95
     enforce_eager: bool = False
     quantization: str | None = None
+    # Add new args for vLLM init kwargs ALSO in `VLLM_ARGS` above!
     verbose: bool = False
     max_model_len: int | None = None
     enable_thinking: bool = False
+    # Extra kwargs to pass to vLLM LLM init. In case of conflict, these
+    # take lower precedence than the explicitly defined args above.
+    extra_vllm_init_kwargs: dict[str, Any] = field(default_factory=dict)
     verbose: bool = False
 
     pipe: LLM | None = field(default=None, init=False)
@@ -251,7 +266,7 @@ class Annotator:
             dataset = self._preprocess_dataset(dataset=dataset)
 
             dataset = dataset.map(
-                self.apply_prompt_template,
+                self._apply_prompt_template,
                 with_indices=True,
                 num_proc=self.num_proc,
                 fn_kwargs={
@@ -286,7 +301,7 @@ class Annotator:
         dataset = self._postprocess_dataset(dataset=dataset)
         return dataset, processed_n_samples
 
-    def apply_prompt_template(
+    def _apply_prompt_template(
         self, sample: dict, idx: int, prompt_fields: Iterable[str], prompt_template: str, idx_column: str, prefix: str
     ) -> dict[str, str | int]:
         """Apply the prompt template to a single dataset sample. Fills in the prompt template with values from the sample,
@@ -363,18 +378,14 @@ class Annotator:
     def _load_pipeline(self) -> None:
         """Load and initialize the vLLM pipeline for inference.
 
-        Configures the LLM with the specified parameters including tensor
-        parallelism, quantization, and memory settings.
+        Configures the LLM with the specified parameters in class init. When `extra_vllm_init_kwargs`
+        are provided, they are merged with the explicitly defined args, with the explicitly defined
+        args taking precedence.
         """
-        self.pipe = LLM(
-            model=self.model_id,
-            tensor_parallel_size=self.tensor_parallel_size,
-            quantization=self.quantization,
-            max_model_len=self.max_model_len,
-            enforce_eager=self.enforce_eager,
-            max_num_seqs=self.max_num_seqs,
-            gpu_memory_utilization=self.gpu_memory_utilization,
-        )
+        defaults = self.extra_vllm_init_kwargs.copy()
+        kwargs = {k: getattr(self, k) for k in VLLM_ARGS if getattr(self, k) is not None}
+        defaults.update(kwargs)
+        self.pipe: LLM = LLM(**defaults)
 
     def _process_output(
         self, *, output: RequestOutput, output_schema: dict | None = None, prefix: str = ""
