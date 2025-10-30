@@ -500,7 +500,7 @@ class Annotator:
             sampling_params: Sampling parameters for model generation.
             task_prefix: String prefix to use for internal column names.
             validate_fn: Optional custom validation function that takes a processed
-                output dictionary and must return a boolean indicating validity. If a JSON schema 
+                output dictionary and must return a boolean indicating validity. If a JSON schema
                 was passed, and the fields were invalid, this function will not be called
                 and `valid` will be set to False directly. The function will receive a single dictionary
                 with keys as produced by `_process_output`: 1. the raw response ("{prefix}response"),
@@ -533,7 +533,7 @@ class Annotator:
                     " but if it happens often it suggest a deeper issue,"
                     " such as too few 'max_tokens' in sampling_params or limited 'model_len' in init."
                 )
-        
+
         if f"{task_prefix}valid" in results[0]:
             n_invalid = sum([1 for res in results if not res[f"{task_prefix}valid"]])
             if n_invalid == len(results) and self.verbose:
@@ -624,7 +624,7 @@ class Annotator:
             task_prefix: String prefix to use for internal column names and file operations.
             sort_by_length: Whether to sort the dataset by prompt length for more efficient batching.
             validate_fn: Optional custom validation function that takes a processed
-                output dictionary and must return a boolean indicating validity. If a JSON schema 
+                output dictionary and must return a boolean indicating validity. If a JSON schema
                 was passed, and the fields were invalid, this function will not be called
                 and `valid` will be set to False directly. The function will receive a single dictionary
                 with keys as produced by `_process_output`: 1. the raw response ("{prefix}response"),
@@ -758,7 +758,9 @@ class Annotator:
                 desc=f"Annotating (max_bs={self.max_num_seqs})",
                 unit="batch",
             ):
-                results = self._process_batch(batch=batch, sampling_params=sampling_params, task_prefix=task_prefix, validate_fn=validate_fn)
+                results = self._process_batch(
+                    batch=batch, sampling_params=sampling_params, task_prefix=task_prefix, validate_fn=validate_fn
+                )
 
                 batch_size = len(batch[idx_column])
                 if keep_columns is True:
