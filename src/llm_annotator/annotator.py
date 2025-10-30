@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from functools import wraps
 from math import ceil
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from datasets import Dataset, IterableDataset, concatenate_datasets, get_dataset_split_names, load_dataset
 from huggingface_hub import create_branch, create_repo, upload_large_folder
@@ -488,7 +488,7 @@ class Annotator:
         batch: dict[str, list[Any]],
         sampling_params: SamplingParams,
         task_prefix: str = "",
-        validate_fn: callable | None = None,
+        validate_fn: Callable | None = None,
     ) -> list[dict[str, Any]]:
         """Process a batch of samples through the model.
 
@@ -575,7 +575,8 @@ class Annotator:
         max_samples_per_output_file: int = 0,
         task_prefix: str = "",
         sort_by_length: bool = False,
-        validate_fn: callable | None = None,
+        validate_fn: Callable | None = None,
+        num_retries_invalid: int = 0,
     ) -> Dataset:
         """Annotate an entire dataset using the configured model and prompt.
 
@@ -630,6 +631,9 @@ class Annotator:
                 with keys as produced by `_process_output`: 1. the raw response ("{prefix}response"),
                 2. the finish reason ("{prefix}finish_reason"), 3. the number of tokens ("{prefix}num_tokens").
                 When an output schema was provided, also the parsed JSON fields and the "{prefix}valid_fields" key.
+            num_retries_invalid: Number of retries for samples that produce invalid outputs (when
+                a JSON schema is given and {prefix}valid_fields is False, or when a validate_fn is given
+                and it {prefix}valid is False).
         """
         # Verify shared_prompt_template
         if prompt_template_prefix:
@@ -761,6 +765,53 @@ class Annotator:
                 results = self._process_batch(
                     batch=batch, sampling_params=sampling_params, task_prefix=task_prefix, validate_fn=validate_fn
                 )
+
+                if num_retries_invalid > 0:
+                    # Identify invalid samples
+                    invalid_indices = [
+                        idx
+                        for idx, res in enumerate(results)
+                        if (
+                            (f"{task_prefix}valid" in res and not res[f"{task_prefix}valid"])
+                            or (f"{task_prefix}valid_fields" in res and not res[f"{task_prefix}valid_fields"])
+                        )
+                    ]
+
+                    n_retries = 0
+                    while invalid_indices and n_retries < num_retries_invalid:
+                        n_retries += 1
+                        if self.verbose:
+                            print(
+                                f"Retrying {len(invalid_indices):,} invalid samples (attempt {n_retries}/{num_retries_invalid})..."
+                            )
+
+                        retry_batch = {k: [v[i] for i in invalid_indices] for k, v in batch.items()}
+                        retry_results = self._process_batch(
+                            batch=retry_batch,
+                            sampling_params=sampling_params,
+                            task_prefix=task_prefix,
+                            validate_fn=validate_fn,
+                        )
+
+                        # Update results with retried outputs
+                        for local_idx, global_idx in enumerate(invalid_indices):
+                            results[global_idx] = retry_results[local_idx]
+
+                        # Identify remaining invalid samples
+                        invalid_indices = [
+                            idx
+                            for idx, res in enumerate(results)
+                            if (
+                                (f"{task_prefix}valid" in res and not res[f"{task_prefix}valid"])
+                                or (f"{task_prefix}valid_fields" in res and not res[f"{task_prefix}valid_fields"])
+                            )
+                        ]
+
+                        if self.verbose:
+                            if invalid_indices and n_retries == num_retries_invalid:
+                                print(
+                                    f"After {n_retries}/{num_retries_invalid} attempts, {len(invalid_indices):,} samples are still invalid. Skipping..."
+                                )
 
                 batch_size = len(batch[idx_column])
                 if keep_columns is True:

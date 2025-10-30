@@ -1,3 +1,4 @@
+import random
 import shutil
 
 from huggingface_hub import HfApi
@@ -32,6 +33,9 @@ Classification:"""
         "required": ["sentiment"],
     }
 
+    def random_validitity(sample):
+        return random.random() < 0.5
+
     with Annotator(model="Qwen/Qwen2.5-0.5B-Instruct", max_model_len=4096, verbose=True) as anno:
         ds = anno.annotate_dataset(
             output_dir="outputs/sentiment-imdb-qwen",
@@ -49,6 +53,8 @@ Classification:"""
             # In practice, set to a higher value (e.g., 1000+)
             upload_every_n_samples=100,
             sort_by_length=True,  # Sort by prompt length for more efficient batching -- final dataset will be re-ordered to original
+            validate_fn=random_validitity,
+            num_retries_invalid=3,
         )
     print(ds)
     shutil.rmtree("outputs/sentiment-imdb-qwen")
