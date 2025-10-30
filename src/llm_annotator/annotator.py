@@ -17,7 +17,7 @@ from vllm import LLM, RequestOutput, SamplingParams
 from vllm.distributed import destroy_distributed_environment, destroy_model_parallel
 from vllm.sampling_params import StructuredOutputsParams
 
-from llm_annotator.utils import remove_empty_jsonl_files, retry
+from llm_annotator.utils import ensure_returns_bool, remove_empty_jsonl_files, retry
 
 
 def destroy_model_on_error(func):
@@ -488,6 +488,7 @@ class Annotator:
         batch: dict[str, list[Any]],
         sampling_params: SamplingParams,
         task_prefix: str = "",
+        validate_fn: callable | None = None,
     ) -> list[dict[str, Any]]:
         """Process a batch of samples through the model.
 
@@ -498,6 +499,10 @@ class Annotator:
             batch: Dictionary containing batch data with prompted samples.
             sampling_params: Sampling parameters for model generation.
             task_prefix: String prefix to use for internal column names.
+            validate_fn: Optional custom validation function that takes a processed
+                output dictionary and must return a boolean indicating validity. If a JSON schema 
+                was passed, and the fields were invalid, this function will not be called
+                and `valid` will be set to False directly.
 
         Returns:
             List of processed output dictionaries for each sample in the batch.
@@ -508,13 +513,32 @@ class Annotator:
             self._process_output(output=outp, output_schema=output_schema, task_prefix=task_prefix) for outp in outputs
         ]
 
+        if validate_fn:
+            for res in results:
+                if f"{task_prefix}valid_fields" in res and res[f"{task_prefix}valid_fields"] is False:
+                    is_valid = False
+                else:
+                    is_valid = ensure_returns_bool(validate_fn, res)
+                res[f"{task_prefix}valid"] = is_valid
+
         if f"{task_prefix}valid_fields" in results[0]:
             n_invalid = sum([1 for res in results if not res[f"{task_prefix}valid_fields"]])
             if n_invalid == len(results) and self.verbose:
                 print(
-                    "Warning: All samples in the batch failed to produce valid fields."
-                    " This might be exceptional but if it happens often it suggest a deeper issue,"
-                    " such as too few 'max_tokens' in sampling_params."
+                    "Warning: All samples in the batch failed to produce valid JSON fields."
+                    " This might be exceptional (esp. for smaller batches) "
+                    " but if it happens often it suggest a deeper issue,"
+                    " such as too few 'max_tokens' in sampling_params or limited 'model_len' in init."
+                )
+        
+        if f"{task_prefix}valid" in results[0]:
+            n_invalid = sum([1 for res in results if not res[f"{task_prefix}valid"]])
+            if n_invalid == len(results) and self.verbose:
+                print(
+                    "Warning: All samples in the batch failed to produce valid outputs after"
+                    " running the custom validation function. This might be exceptional (esp. for smaller batches) "
+                    " but if it happens often it suggest a deeper issue,"
+                    " such as too few 'max_tokens' in sampling_params or limited 'model_len' in init."
                 )
 
         return results
@@ -548,6 +572,7 @@ class Annotator:
         max_samples_per_output_file: int = 0,
         task_prefix: str = "",
         sort_by_length: bool = False,
+        validate_fn: callable | None = None,
     ) -> Dataset:
         """Annotate an entire dataset using the configured model and prompt.
 
@@ -595,6 +620,10 @@ class Annotator:
             max_samples_per_output_file: Maximum samples per output file (0 for unlimited).
             task_prefix: String prefix to use for internal column names and file operations.
             sort_by_length: Whether to sort the dataset by prompt length for more efficient batching.
+            validate_fn: Optional custom validation function that takes a processed
+                output dictionary and must return a boolean indicating validity. If a JSON schema 
+                was passed, and the fields were invalid, this function will not be called
+                and `valid` will be set to False directly.
         """
         # Verify shared_prompt_template
         if prompt_template_prefix:
@@ -723,7 +752,7 @@ class Annotator:
                 desc=f"Annotating (max_bs={self.max_num_seqs})",
                 unit="batch",
             ):
-                results = self._process_batch(batch=batch, sampling_params=sampling_params, task_prefix=task_prefix)
+                results = self._process_batch(batch=batch, sampling_params=sampling_params, task_prefix=task_prefix, validate_fn=validate_fn)
 
                 batch_size = len(batch[idx_column])
                 if keep_columns is True:

@@ -147,3 +147,10 @@ def remove_empty_jsonl_files(pdout: Path) -> list[Path]:
             pfin.unlink()
 
     return files_removed
+
+def ensure_returns_bool(func, *args, **kwargs):
+    """Ensure that the given function returns a boolean value. If not, raise a TypeError."""
+    result = func(*args, **kwargs)
+    if not isinstance(result, bool):
+        raise TypeError(f"{func.__name__} should return a bool, got {type(result).__name__}")
+    return result
