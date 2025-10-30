@@ -502,7 +502,10 @@ class Annotator:
             validate_fn: Optional custom validation function that takes a processed
                 output dictionary and must return a boolean indicating validity. If a JSON schema 
                 was passed, and the fields were invalid, this function will not be called
-                and `valid` will be set to False directly.
+                and `valid` will be set to False directly. The function will receive a single dictionary
+                with keys as produced by `_process_output`: 1. the raw response ("{prefix}response"),
+                2. the finish reason ("{prefix}finish_reason"), 3. the number of tokens ("{prefix}num_tokens").
+                When an output schema was provided, also the parsed JSON fields and the "{prefix}valid_fields" key.
 
         Returns:
             List of processed output dictionaries for each sample in the batch.
@@ -623,7 +626,10 @@ class Annotator:
             validate_fn: Optional custom validation function that takes a processed
                 output dictionary and must return a boolean indicating validity. If a JSON schema 
                 was passed, and the fields were invalid, this function will not be called
-                and `valid` will be set to False directly.
+                and `valid` will be set to False directly. The function will receive a single dictionary
+                with keys as produced by `_process_output`: 1. the raw response ("{prefix}response"),
+                2. the finish reason ("{prefix}finish_reason"), 3. the number of tokens ("{prefix}num_tokens").
+                When an output schema was provided, also the parsed JSON fields and the "{prefix}valid_fields" key.
         """
         # Verify shared_prompt_template
         if prompt_template_prefix:
