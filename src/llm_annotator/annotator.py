@@ -385,15 +385,30 @@ class Annotator:
         """Load and configure the tokenizer for the model.
 
         Sets up the tokenizer with appropriate padding settings and ensures
-        a pad token is available.
+        a pad token is available. Some models (like recent Mistral) do not have
+        a chat template defined in their tokenizer, so we attempt to load
+        a processor instead in that case.
         """
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model)
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model)
+            if self.tokenizer.chat_template is None:
+                raise ValueError("No chat template defined in the tokenizer.")
+        except ValueError as tokenizer_error:
+            try:
+                self.tokenizer = self.AutoProcessor.from_pretrained(self.model)
+                if self.tokenizer.chat_template is None:
+                    raise ValueError("No chat template defined in the processor either.") from tokenizer_error
+            except Exception as exc:
+                raise ValueError(
+                    "Failed to load tokenizer or processor with chat template."
+                    " Are you correctly using an instruct model?"
+                ) from exc
+        else:
+            self.tokenizer.padding_side = "left"
 
-        self.tokenizer.padding_side = "left"
-
-        if not self.tokenizer.pad_token_id:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-            self.tokenizer.pad_token_id = self.tokenizer.convert_tokens_to_ids(self.tokenizer.pad_token)
+            if not self.tokenizer.pad_token_id:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+                self.tokenizer.pad_token_id = self.tokenizer.convert_tokens_to_ids(self.tokenizer.pad_token)
 
     def _load_pipeline(self) -> None:
         """Load and initialize the vLLM pipeline for inference.
@@ -576,7 +591,8 @@ class Annotator:
         task_prefix: str = "",
         sort_by_length: bool = False,
         validate_fn: Callable | None = None,
-        num_retries_invalid: int = 0,
+        num_retries_invalid: int = 5,
+        keep_idx_column: bool = False,
     ) -> Dataset:
         """Annotate an entire dataset using the configured model and prompt.
 
@@ -634,6 +650,10 @@ class Annotator:
             num_retries_invalid: Number of retries for samples that produce invalid outputs (when
                 a JSON schema is given and {prefix}valid_fields is False, or when a validate_fn is given
                 and it {prefix}valid is False).
+            keep_idx_column: Whether to keep the idx_column in the final dataset before uploading and returning.
+
+        Returns:
+            The concatenated dataset of all annotation results (JSON-invalid samples are NOT removed)
         """
         # Verify shared_prompt_template
         if prompt_template_prefix:
@@ -846,9 +866,13 @@ class Annotator:
             if new_hub_id and upload_every_n_samples > 0:
                 self.push_dir_to_hub(pdout, new_hub_id=new_hub_id)
 
-        return self._post_annotate(pdout=pdout, idx_column=idx_column, new_hub_id=new_hub_id)
+        return self._post_annotate(
+            pdout=pdout, idx_column=idx_column, new_hub_id=new_hub_id, keep_idx_column=keep_idx_column
+        )
 
-    def _post_annotate(self, *, pdout: Path, idx_column: str, new_hub_id: str | None = None) -> Dataset:
+    def _post_annotate(
+        self, *, pdout: Path, idx_column: str, new_hub_id: str | None = None, keep_idx_column: bool = False
+    ) -> Dataset:
         """Clean up after annotation is complete.
 
         Removes empty output files and performs any final cleanup operations.
@@ -856,6 +880,8 @@ class Annotator:
         Args:
             pdout: Output directory path to clean up.
             new_hub_id: Optional Hugging Face dataset ID for uploads.
+            idx_column: Column name used as unique identifier.
+            keep_idx_column: Whether to keep the idx_column in the final dataset before uploading and returning
 
         Returns:
             The concatenated dataset of all annotation results (JSON-invalid samples are NOT removed)
@@ -865,7 +891,9 @@ class Annotator:
             if pfin.stat().st_size > 0:
                 ds_parts.append(Dataset.from_json(str(pfin)))
 
-        ds: Dataset = concatenate_datasets(ds_parts).sort(idx_column).remove_columns([idx_column])
+        ds: Dataset = concatenate_datasets(ds_parts).sort(idx_column)
+        if not keep_idx_column:
+            ds = ds.remove_columns([idx_column])
 
         if new_hub_id:
             ds.push_to_hub(new_hub_id, private=True)
