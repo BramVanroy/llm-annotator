@@ -17,7 +17,7 @@ from vllm import LLM, RequestOutput, SamplingParams
 from vllm.distributed import destroy_distributed_environment, destroy_model_parallel
 from vllm.sampling_params import StructuredOutputsParams
 
-from llm_annotator.utils import ensure_returns_bool, remove_empty_jsonl_files, retry
+from llm_annotator.utils import ensure_returns_bool, ensure_returns_dict, remove_empty_jsonl_files, retry
 
 
 def destroy_model_on_error(func):
@@ -504,6 +504,7 @@ class Annotator:
         sampling_params: SamplingParams,
         task_prefix: str = "",
         validate_fn: Callable | None = None,
+        postprocess_fn: Callable | None = None,
     ) -> list[dict[str, Any]]:
         """Process a batch of samples through the model.
 
@@ -521,23 +522,28 @@ class Annotator:
                 with keys as produced by `_process_output`: 1. the raw response ("{prefix}response"),
                 2. the finish reason ("{prefix}finish_reason"), 3. the number of tokens ("{prefix}num_tokens").
                 When an output schema was provided, also the parsed JSON fields and the "{prefix}valid_fields" key.
+            postprocess_fn: Optional function to postprocess each sample after annotation. Must return a modified
+                sample dictionary.
 
         Returns:
             List of processed output dictionaries for each sample in the batch.
         """
         output_schema = sampling_params.structured_outputs.json if sampling_params.structured_outputs else None
         outputs = self.pipe.generate(batch[f"{task_prefix}prompted"], sampling_params, use_tqdm=False)
-        results = [
-            self._process_output(output=outp, output_schema=output_schema, task_prefix=task_prefix) for outp in outputs
-        ]
 
-        if validate_fn:
-            for res in results:
+        results = []
+        for outp in outputs:
+            res = self._process_output(output=outp, output_schema=output_schema, task_prefix=task_prefix)
+            if postprocess_fn:
+                res = ensure_returns_dict(postprocess_fn, res)
+
+            if validate_fn:
                 if f"{task_prefix}valid_fields" in res and res[f"{task_prefix}valid_fields"] is False:
                     is_valid = False
                 else:
                     is_valid = ensure_returns_bool(validate_fn, res)
                 res[f"{task_prefix}valid"] = is_valid
+            results.append(res)
 
         if f"{task_prefix}valid_fields" in results[0]:
             n_invalid = sum([1 for res in results if not res[f"{task_prefix}valid_fields"]])
@@ -591,6 +597,7 @@ class Annotator:
         task_prefix: str = "",
         sort_by_length: bool = False,
         validate_fn: Callable | None = None,
+        postprocess_fn: Callable | None = None,
         num_retries_invalid: int = 5,
         keep_idx_column: bool = False,
     ) -> Dataset:
@@ -647,6 +654,8 @@ class Annotator:
                 with keys as produced by `_process_output`: 1. the raw response ("{prefix}response"),
                 2. the finish reason ("{prefix}finish_reason"), 3. the number of tokens ("{prefix}num_tokens").
                 When an output schema was provided, also the parsed JSON fields and the "{prefix}valid_fields" key.
+            postprocess_fn: Optional function to postprocess each sample after annotation. Must return a modified
+                sample dictionary.
             num_retries_invalid: Number of retries for samples that produce invalid outputs (when
                 a JSON schema is given and {prefix}valid_fields is False, or when a validate_fn is given
                 and it {prefix}valid is False).
@@ -655,7 +664,6 @@ class Annotator:
         Returns:
             The concatenated dataset of all annotation results (JSON-invalid samples are NOT removed)
         """
-        # Verify shared_prompt_template
         if prompt_template_prefix:
             if prompt_template_prefix not in full_prompt_template:
                 raise ValueError(
@@ -783,7 +791,11 @@ class Annotator:
                 unit="batch",
             ):
                 results = self._process_batch(
-                    batch=batch, sampling_params=sampling_params, task_prefix=task_prefix, validate_fn=validate_fn
+                    batch=batch,
+                    sampling_params=sampling_params,
+                    task_prefix=task_prefix,
+                    validate_fn=validate_fn,
+                    postprocess_fn=postprocess_fn,
                 )
 
                 if num_retries_invalid > 0:
