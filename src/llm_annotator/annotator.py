@@ -12,7 +12,6 @@ from datasets import Dataset, IterableDataset, concatenate_datasets, get_dataset
 from huggingface_hub import create_branch, create_repo, upload_large_folder
 from torch import cuda
 from tqdm import tqdm
-from transformers import AutoTokenizer, PreTrainedTokenizer
 from vllm import LLM, RequestOutput, SamplingParams
 from vllm.distributed import destroy_distributed_environment, destroy_model_parallel
 from vllm.sampling_params import StructuredOutputsParams
@@ -91,7 +90,6 @@ class Annotator:
     verbose: bool = False
 
     pipe: LLM | None = field(default=None, init=False)
-    tokenizer: PreTrainedTokenizer | None = field(default=None, init=False)
 
     def __enter__(self):
         return self
@@ -269,7 +267,7 @@ class Annotator:
             dataset = self._preprocess_dataset(dataset=dataset)
 
             dataset = dataset.map(
-                self._apply_prompt_template,
+                self._create_messages,
                 with_indices=True,
                 num_proc=self.num_proc,
                 fn_kwargs={
@@ -315,7 +313,7 @@ class Annotator:
         dataset = self._postprocess_dataset(dataset=dataset)
         return dataset, processed_n_samples
 
-    def _apply_prompt_template(
+    def _create_messages(
         self,
         sample: dict,
         idx: int,
@@ -324,7 +322,7 @@ class Annotator:
         idx_column: str,
         task_prefix: str,
     ) -> dict[str, str | int]:
-        """Apply the prompt template to a single dataset sample. Fills in the prompt template with values from the sample,
+        """Restructure the sample into a "messages" format. Fills in the prompt template with values from the sample,
         based on the prompt_fields.
 
         Args:
@@ -339,17 +337,12 @@ class Annotator:
             A dictionary with the filled-in prompt and the sample index.
         """
         return {
-            f"{task_prefix}prompted": self.tokenizer.apply_chat_template(
-                [
-                    {
-                        "role": "user",
-                        "content": prompt_template.format(**{fld: sample[fld] for fld in prompt_fields}),
-                    }
-                ],
-                tokenize=False,
-                add_generation_template=True,
-                enable_thinking=self.enable_thinking,
-            ),
+            f"{task_prefix}prompted": [
+                {
+                    "role": "user",
+                    "content": prompt_template.format(**{fld: sample[fld] for fld in prompt_fields}),
+                }
+            ],
             idx_column: idx,
         }
 
@@ -380,35 +373,6 @@ class Annotator:
             The postprocessed dataset ready for annotation.
         """
         return dataset
-
-    def _load_tokenizer(self) -> None:
-        """Load and configure the tokenizer for the model.
-
-        Sets up the tokenizer with appropriate padding settings and ensures
-        a pad token is available. Some models (like recent Mistral) do not have
-        a chat template defined in their tokenizer, so we attempt to load
-        a processor instead in that case.
-        """
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model)
-            if self.tokenizer.chat_template is None:
-                raise ValueError("No chat template defined in the tokenizer.")
-        except ValueError as tokenizer_error:
-            try:
-                self.tokenizer = self.AutoProcessor.from_pretrained(self.model)
-                if self.tokenizer.chat_template is None:
-                    raise ValueError("No chat template defined in the processor either.") from tokenizer_error
-            except Exception as exc:
-                raise ValueError(
-                    "Failed to load tokenizer or processor with chat template."
-                    " Are you correctly using an instruct model?"
-                ) from exc
-        else:
-            self.tokenizer.padding_side = "left"
-
-            if not self.tokenizer.pad_token_id:
-                self.tokenizer.pad_token = self.tokenizer.eos_token
-                self.tokenizer.pad_token_id = self.tokenizer.convert_tokens_to_ids(self.tokenizer.pad_token)
 
     def _load_pipeline(self) -> None:
         """Load and initialize the vLLM pipeline for inference.
@@ -529,7 +493,7 @@ class Annotator:
             List of processed output dictionaries for each sample in the batch.
         """
         output_schema = sampling_params.structured_outputs.json if sampling_params.structured_outputs else None
-        outputs = self.pipe.generate(batch[f"{task_prefix}prompted"], sampling_params, use_tqdm=False)
+        outputs = self.pipe.chat(batch[f"{task_prefix}prompted"], sampling_params, use_tqdm=False)
 
         results = []
         for outp in outputs:
@@ -732,9 +696,6 @@ class Annotator:
         # cannot be be pickled (which is needed for multiprocessing in dataset.map)
         if self.pipe is not None and self.num_proc is not None:
             self.destroy_model()
-
-        if self.tokenizer is None:
-            self._load_tokenizer()
 
         dataset, processed_n_samples = self._load_dataset(
             prompt_template=full_prompt_template,
