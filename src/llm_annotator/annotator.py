@@ -183,15 +183,17 @@ class Annotator:
         """
         if dataset is not None and dataset_name is not None:
             raise ValueError("Provide only one of 'dataset' or 'dataset_name', not both.")
-        
+
         if dataset is None and dataset_name is None:
             raise ValueError("Either 'dataset' or 'dataset_name' must be provided.")
-        
+
         if max_num_samples is not None and max_num_samples <= 0:
             raise ValueError("'max_num_samples' must be a positive integer or None")
-        
+
         if streaming and not max_num_samples:
-            raise ValueError("When 'streaming' is True, 'max_num_samples' must be set to a positive integer (otherwise might as well not use streaming).")
+            raise ValueError(
+                "When 'streaming' is True, 'max_num_samples' must be set to a positive integer (otherwise might as well not use streaming)."
+            )
 
         # Split verification and defaulting
         if dataset_name:
@@ -298,7 +300,9 @@ class Annotator:
                 else:
                     do_reverse = True
 
-                dataset = dataset.sort(f"{task_prefix}_length", reverse=do_reverse).remove_columns([f"{task_prefix}_length"])
+                dataset = dataset.sort(f"{task_prefix}_length", reverse=do_reverse).remove_columns(
+                    [f"{task_prefix}_length"]
+                )
 
             if cache_input_dataset:
                 dataset.save_to_disk(p_cached_input_ds)
@@ -645,7 +649,7 @@ class Annotator:
             streaming = True
 
         upload_every_n_samples = upload_every_n_samples or 0
-        
+
         if prompt_template_prefix:
             if prompt_template_prefix not in full_prompt_template:
                 raise ValueError(
