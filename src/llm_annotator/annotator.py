@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from functools import wraps
 from math import ceil
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Literal
 
 from datasets import Dataset, IterableDataset, concatenate_datasets, get_dataset_split_names, load_dataset
 from huggingface_hub import create_branch, create_repo, upload_large_folder
@@ -146,7 +146,7 @@ class Annotator:
         use_cached_input_dataset: bool = True,
         prompt_fields: Iterable[str] = (),
         task_prefix: str = "",
-        sort_by_length: bool = False,
+        sort_by_length: bool | Literal["shortest_first", "longest_first"] = False,
     ) -> tuple[Dataset, int]:
         """Load and preprocess the dataset for annotation.
 
@@ -169,6 +169,9 @@ class Annotator:
             prompt_fields: Fields required by the prompt template.
             task_prefix: String prefix to use for internal column names and file operations.
             sort_by_length: Whether to sort the dataset by prompt length for more efficient batching.
+                If set to "shortest_first", sort by shortest first, "longest_first" for longest first.
+                If set to True, defaults to longest first as that makes most sense to avoid OOM errors
+                down the line.
 
         Returns:
             A tuple containing:
@@ -178,15 +181,21 @@ class Annotator:
         Raises:
             ValueError: If configuration is invalid or required fields are missing.
         """
+        if dataset is not None and dataset_name is not None:
+            raise ValueError("Provide only one of 'dataset' or 'dataset_name', not both.")
+        
+        if dataset is None and dataset_name is None:
+            raise ValueError("Either 'dataset' or 'dataset_name' must be provided.")
+        
         if max_num_samples is not None and max_num_samples <= 0:
             raise ValueError("'max_num_samples' must be a positive integer or None")
-
-        if not dataset_name and dataset is None:
-            raise ValueError("Either 'dataset_name' or 'dataset' must be provided")
+        
+        if streaming and not max_num_samples:
+            raise ValueError("When 'streaming' is True, 'max_num_samples' must be set to a positive integer (otherwise might as well not use streaming).")
 
         # Split verification and defaulting
         if dataset_name:
-            split_names = get_dataset_split_names(dataset_name)
+            split_names = get_dataset_split_names(dataset_name, config_name=dataset_config)
             if not dataset_split:
                 if len(split_names) == 1:
                     dataset_split = split_names[0]
@@ -212,18 +221,13 @@ class Annotator:
         if loaded_ds is not None:
             dataset = loaded_ds
         else:
-            if streaming and not max_num_samples:
-                raise ValueError(
-                    "Streaming mode requires max_num_samples to be set."
-                    " The dataset itself will be streamed and stored up to"
-                    " the requested number of samples."
-                )
-
             # No dataset provided, so got to load it from dataset_name
-            if dataset is None and streaming:
-                ds_iter: IterableDataset = load_dataset(
-                    dataset_name, name=dataset_config, data_dir=data_dir, split=dataset_split, streaming=True
-                )
+            if streaming:
+                ds_iter = dataset
+                if ds_iter is None:
+                    ds_iter: IterableDataset = load_dataset(
+                        dataset_name, name=dataset_config, data_dir=data_dir, split=dataset_split, streaming=True
+                    )
 
                 if shuffle_seed is not None:
                     # IterableDataset.shuffle does not accept buffer_size in some
@@ -242,12 +246,10 @@ class Annotator:
                             break
 
                 # Convert to Dataset
-                dataset = Dataset.from_generator(yield_fn, split=dataset_split)
+                dataset = Dataset.from_generator(yield_fn)
             else:
                 # Use the provided dataset if available
-                if dataset is not None:
-                    dataset = dataset
-                else:
+                if dataset is None:
                     dataset = load_dataset(dataset_name, name=dataset_config, data_dir=data_dir, split=dataset_split)
 
                 if shuffle_seed is not None:
@@ -262,7 +264,10 @@ class Annotator:
             if dataset is not None and prompt_fields:
                 missing = [fld for fld in prompt_fields if fld not in dataset.column_names]
                 if missing:
-                    raise ValueError(f"Template contains field '{missing[0]}' not present in dataset")
+                    raise ValueError(
+                        f"Template contains field '{missing[0]}' not present in dataset."
+                        f" Available columns: {dataset.column_names}"
+                    )
 
             dataset = self._preprocess_dataset(dataset=dataset)
 
@@ -288,7 +293,12 @@ class Annotator:
                     input_columns=[f"{task_prefix}prompted"],
                 )
                 # Sort by longest first to trigger OOM as soon as possible
-                dataset = dataset.sort(f"{task_prefix}_length", reverse=True).remove_columns([f"{task_prefix}_length"])
+                if sort_by_length == "shortest_first":
+                    do_reverse = False
+                else:
+                    do_reverse = True
+
+                dataset = dataset.sort(f"{task_prefix}_length", reverse=do_reverse).remove_columns([f"{task_prefix}_length"])
 
             if cache_input_dataset:
                 dataset.save_to_disk(p_cached_input_ds)
@@ -556,10 +566,10 @@ class Annotator:
         output_schema: str | dict[str, Any] | None = None,
         whitespace_pattern: str | None = r"[ ]?",
         idx_column: str = "idx",
-        upload_every_n_samples: int = 0,
+        upload_every_n_samples: int | None = 0,
         max_samples_per_output_file: int = 0,
         task_prefix: str = "",
-        sort_by_length: bool = False,
+        sort_by_length: bool | Literal["shortest_first", "longest_first"] = False,
         validate_fn: Callable | None = None,
         postprocess_fn: Callable | None = None,
         num_retries_invalid: int = 5,
@@ -607,10 +617,13 @@ class Annotator:
             output_schema: JSON schema as a dictionary or string (optional).
             whitespace_pattern: Regex pattern for whitespace handling in guided decoding.
             idx_column: Column name to use as unique identifier.
-            upload_every_n_samples: Upload to hub every N samples (0 to disable).
+            upload_every_n_samples: Upload to hub every N samples (0 or None to disable).
             max_samples_per_output_file: Maximum samples per output file (0 for unlimited).
             task_prefix: String prefix to use for internal column names and file operations.
             sort_by_length: Whether to sort the dataset by prompt length for more efficient batching.
+                If set to "shortest_first", sort by shortest first, "longest_first" for longest first.
+                If set to True, defaults to longest first as that makes most sense to avoid OOM errors
+                down the line.
             validate_fn: Optional custom validation function that takes a processed
                 output dictionary and must return a boolean indicating validity. If a JSON schema
                 was passed, and the fields were invalid, this function will not be called
@@ -628,6 +641,11 @@ class Annotator:
         Returns:
             The concatenated dataset of all annotation results (JSON-invalid samples are NOT removed)
         """
+        if dataset is not None and isinstance(dataset, IterableDataset):
+            streaming = True
+
+        upload_every_n_samples = upload_every_n_samples or 0
+        
         if prompt_template_prefix:
             if prompt_template_prefix not in full_prompt_template:
                 raise ValueError(
@@ -642,7 +660,7 @@ class Annotator:
         # effectively disabled
         if shuffle_seed is not None and sort_by_length:
             print(
-                "Warning: 'shuffle_seed' is set but 'sort_by_length' is also True."
+                "Warning: 'shuffle_seed' is set but 'sort_by_length' is also set."
                 " After processing the full dataset (sorted by length), the order"
                 " will therefore be restored to the shuffled order, NOT the original order."
             )

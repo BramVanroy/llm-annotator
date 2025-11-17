@@ -12,7 +12,7 @@ requires-python = ">=3.12"
 dependencies = [
     "datasets>=4.1.1,<5",
     "hf-transfer>=0.1.9,<1",
-    "hf-xet>=1.1.10,<2",
+    "hf-xet>=1.2.0,<2",
     "mistral-common>=1.8.5",
     "vllm>=0.11,<0.12",
 ]
