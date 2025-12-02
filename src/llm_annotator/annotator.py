@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from functools import wraps
 from math import ceil
 from pathlib import Path
-from typing import Any, Callable, Iterable, Literal
+from typing import Any, Callable, Iterable, Literal, Sequence
 
 from datasets import Dataset, IterableDataset, concatenate_datasets, get_dataset_split_names, load_dataset
 from huggingface_hub import create_branch, create_repo, upload_large_folder
@@ -66,7 +66,6 @@ class Annotator:
         gpu_memory_utilization: Max. GPU memory utilization goal.
         enforce_eager: Whether to enforce eager execution mode. Eager mode is safer but may be slower.
         quantization: Quantization method to use (optional).
-        verbose: Whether to enable verbose logging.
         max_model_len: Maximum model sequence length.
         enable_thinking: Whether to enable thinking mode for chat templates.
         verbose: Whether to enable verbose logging.
@@ -80,7 +79,6 @@ class Annotator:
     enforce_eager: bool = False
     quantization: str | None = None
     # Add new args for vLLM init kwargs ALSO in `VLLM_ARGS` above!
-    verbose: bool = False
     max_model_len: int | None = None
     max_num_batched_tokens: int | None = None
     enable_thinking: bool = False
@@ -99,7 +97,7 @@ class Annotator:
         self.destroy_model()
 
     def _get_skip_idxs(
-        self, *, pdout: Path, idx_column: str, dataset_split: str | None, dataset_config: str | None
+        self, *, pdout: Path, idx_column: str, dataset_split: str | None = None, dataset_config: str | None = None
     ) -> set[int]:
         """Get indices of samples that have already been processed.
 
@@ -652,9 +650,9 @@ class Annotator:
         upload_every_n_samples = upload_every_n_samples or 0
 
         if prompt_template_prefix:
-            if prompt_template_prefix not in full_prompt_template:
+            if not full_prompt_template.startswith(prompt_template_prefix):
                 raise ValueError(
-                    "'prompt_template_prefix' must be a substring of 'full_prompt_template'."
+                    "'prompt_template_prefix' must be a starting substring of 'full_prompt_template'."
                     " Especially check white-spaces."
                 )
 
@@ -866,6 +864,109 @@ class Annotator:
             pdout=pdout, idx_column=idx_column, new_hub_id=new_hub_id, keep_idx_column=keep_idx_column
         )
 
+    def generate_dataset(        
+        self,
+        output_dir: str | Path,
+        prompts: str | Sequence[str],
+        *,
+        prompt_prefix: str | None = None,
+        new_hub_id: str | None = None,
+        overwrite: bool = False,
+        sampling_params: dict[str, Any] | None = None,
+        max_num_samples: int | None = None,
+        output_schema: str | dict[str, Any] | None = None,
+        whitespace_pattern: str | None = r"[ ]?",
+        idx_column: str = "idx",
+        upload_every_n_samples: int | None = 0,
+        max_samples_per_output_file: int = 0,
+        task_prefix: str = "",
+        validate_fn: Callable | None = None,
+        postprocess_fn: Callable | None = None,
+        num_retries_invalid: int = 5,
+    ):
+        """Rather than annotating an existing dataset, generate a new dataset from scratch.
+
+        Main entry point for from-scratch data generation. Handles the complete pipeline
+        from dataset loading through model inference to output generation.
+
+        Args:
+            output_dir: Directory to save annotation results.
+            prompts: a single prompt that will be used `max_num_samples` times (`max_num_samples`
+                must be given), or a sequence of prompts to generate outputs for, in which cases
+                `max_num_samples` will be ignored.
+            prompt_prefix: The prefix in the prompt that is shared across
+                all prompts. Often times the first part of the instruction is common
+                across requests ("Your task is to do X"), so we can cache that
+                in vLLM for efficiency. When this is given, we will enable
+                chunked prefill and prefix caching in vLLM.
+            new_hub_id: Optional Hugging Face dataset ID for uploads.
+            overwrite: Whether to overwrite existing output directory.
+            sampling_params: Parameters for model generation (optional).
+            max_num_samples: Maximum number of samples to annotate. If 'prompts' is a sequence, 
+                'max_num_samples' will be ignored.
+            output_schema: JSON schema as a dictionary or string (optional).
+            whitespace_pattern: Regex pattern for whitespace handling in guided decoding.
+            idx_column: Column name to use as unique identifier.
+            upload_every_n_samples: Upload to hub every N samples (0 or None to disable).
+            max_samples_per_output_file: Maximum samples per output file (0 for unlimited).
+            task_prefix: String prefix to use for internal column names and file operations.
+            validate_fn: Optional custom validation function that takes a processed
+                output dictionary and must return a boolean indicating validity. If a JSON schema
+                was passed, and the fields were invalid, this function will not be called
+                and `valid` will be set to False directly. The function will receive a single dictionary
+                with keys as produced by `_process_output`: 1. the raw response ("{prefix}response"),
+                2. the finish reason ("{prefix}finish_reason"), 3. the number of tokens ("{prefix}num_tokens").
+                When an output schema was provided, also the parsed JSON fields and the "{prefix}valid_fields" key.
+            postprocess_fn: Optional function to postprocess each sample after annotation. Must return a modified
+                sample dictionary.
+            num_retries_invalid: Number of retries for samples that produce invalid outputs (when
+                a JSON schema is given and {prefix}valid_fields is False, or when a validate_fn is given
+                and it {prefix}valid is False).
+        Returns:
+            The concatenated dataset of all annotation results (JSON-invalid samples are NOT removed)
+        """
+
+        if isinstance(prompts, str):
+            prompts = [prompts] * (max_num_samples or 1)
+            # If a single prompt is given, all prompts will always be the same
+            # so the first query will be cached automatically -- no separate run needed
+            prompt_prefix = None
+        max_num_samples = len(prompts)
+
+        if prompt_prefix:
+            for prompt in prompts:
+                if not prompt_prefix.startswith(prompt):
+                    raise ValueError(
+                        "'prompt_template_prefix' must be a starting substring of all given prompts."
+                        " Especially check white-spaces."
+                        f" Was not the case for: {prompt}"
+                    )
+
+            self.extra_vllm_init_kwargs["enable_chunked_prefill"] = True
+            self.extra_vllm_init_kwargs["enable_prefix_caching"] = True
+        
+        dataset = Dataset.from_dict({idx_column: list(range(max_num_samples)), "prompt": prompts})
+
+        return self.annotate_dataset(
+            output_dir=output_dir,
+            full_prompt_template="{prompt}",
+            prompt_template_prefix=prompt_prefix,
+            dataset=dataset,
+            new_hub_id=new_hub_id,
+            overwrite=overwrite,
+            sampling_params=sampling_params,
+            max_num_samples=max_num_samples,
+            output_schema=output_schema,
+            whitespace_pattern=whitespace_pattern,
+            idx_column=idx_column,
+            upload_every_n_samples=upload_every_n_samples,
+            max_samples_per_output_file=max_samples_per_output_file,
+            task_prefix=task_prefix,
+            validate_fn=validate_fn,
+            postprocess_fn=postprocess_fn,
+            num_retries_invalid=num_retries_invalid,
+        )
+
     def _post_annotate(
         self, *, pdout: Path, idx_column: str, new_hub_id: str | None = None, keep_idx_column: bool = False
     ) -> Dataset:
@@ -882,14 +983,13 @@ class Annotator:
         Returns:
             The concatenated dataset of all annotation results (JSON-invalid samples are NOT removed)
         """
-        ds_parts = []
-        for pfin in pdout.glob("*.jsonl"):
-            if pfin.stat().st_size > 0:
-                ds_parts.append(Dataset.from_json(str(pfin)))
-
-        ds: Dataset = concatenate_datasets(ds_parts).sort(idx_column)
+        ds: Dataset = concatenate_datasets(
+            [Dataset.from_json(str(pfin)) for pfin in pdout.glob("*.jsonl") if pfin.stat().st_size > 0]
+        ).sort(idx_column)
         if not keep_idx_column:
             ds = ds.remove_columns([idx_column])
+
+        ds.save_to_disk(pdout / "done_disk_dataset")
 
         if new_hub_id:
             ds.push_to_hub(new_hub_id, private=True)

@@ -140,13 +140,13 @@ def remove_empty_jsonl_files(pdout: Path) -> list[Path]:
     Returns:
         A list of removed files.
     """
-    files_removed = []
+    files_removed = set()
     for pfin in pdout.glob("*.jsonl"):
         if pfin.stat().st_size == 0:
-            files_removed.append(pfin)
+            files_removed.add(pfin)
             pfin.unlink()
 
-    return files_removed
+    return list(sorted(files_removed))
 
 
 def ensure_returns_bool(func, *args, **kwargs):
