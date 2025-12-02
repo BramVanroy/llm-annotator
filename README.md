@@ -62,3 +62,19 @@ Or check out the [examples/](examples/) directory for complete working examples.
 ```sh
 pytest -q
 ```
+
+## Documentation
+
+Build the documentation locally:
+
+```sh
+make docs
+```
+
+Serve the documentation locally (at http://localhost:8000):
+
+```sh
+make docs-serve
+```
+
+The documentation is automatically built and deployed to GitHub Pages when changes are pushed to the `main` branch. The pre-commit hook will check that documentation builds successfully before allowing a push if docstrings or documentation files have changed.
