@@ -1,8 +1,11 @@
 # A simple, extensible LLM Annotator
 
 This repository provides a small, resumable framework for annotating datasets with
-LLMs (via `vllm`). Below is a minimal usage example showing how to instantiate the
-`Annotator` class and run a short annotation job.
+LLMs (via `vllm`).
+
+## Documentation
+
+📚 **[Read the full documentation](https://bramvanroy.github.io/llm-annotator/)** for detailed guides, API reference, and examples.
 
 ## Installation
 
@@ -28,7 +31,30 @@ uv pip install flashinfer-jit-cache --index-url https://flashinfer.ai/whl/cu128
 
 ## Usage
 
-See [examples/](examples/) for usage examples.
+Quick example:
+
+```python
+from llm_annotator import Annotator
+
+# Annotate a dataset with sentiment classification
+with Annotator(model="meta-llama/Llama-3.2-3B-Instruct", max_model_len=4096) as anno:
+    ds = anno.annotate_dataset(
+        output_dir="outputs/sentiment",
+        full_prompt_template="Classify the sentiment: {text}",
+        dataset_name="stanfordnlp/imdb",
+        dataset_split="test",
+        max_num_samples=100,
+    )
+```
+
+See the **[documentation](https://bramvanroy.github.io/llm-annotator/)** for more examples, including:
+- Structured output with JSON schemas
+- Custom validation and postprocessing
+- Large-scale streaming annotation
+- Generating datasets from scratch
+- Multi-GPU support
+
+Or check out the [examples/](examples/) directory for complete working examples.
 
 
 ## Testing
