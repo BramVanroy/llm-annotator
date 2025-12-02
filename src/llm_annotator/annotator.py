@@ -80,14 +80,13 @@ class Annotator:
     enforce_eager: bool = False
     quantization: str | None = None
     # Add new args for vLLM init kwargs ALSO in `VLLM_ARGS` above!
-    verbose: bool = False
     max_model_len: int | None = None
     max_num_batched_tokens: int | None = None
     enable_thinking: bool = False
+    verbose: bool = False
     # Extra kwargs to pass to vLLM LLM init. In case of conflict, these
     # take lower precedence than the explicitly defined args above.
     extra_vllm_init_kwargs: dict[str, Any] = field(default_factory=dict)
-    verbose: bool = False
 
     pipe: LLM | None = field(default=None, init=False)
 
@@ -119,10 +118,19 @@ class Annotator:
                     continue
                 ds = Dataset.from_json(str(pfin))
 
-                if dataset_split and "dataset_split" in ds.column_names:
+                # Combine filter operations into a single pass
+                if (
+                    dataset_split
+                    and "dataset_split" in ds.column_names
+                    and dataset_config
+                    and "dataset_config" in ds.column_names
+                ):
+                    ds = ds.filter(
+                        lambda s: s["dataset_split"] == dataset_split and s["dataset_config"] == dataset_config
+                    )
+                elif dataset_split and "dataset_split" in ds.column_names:
                     ds = ds.filter(lambda s: s["dataset_split"] == dataset_split)
-
-                if dataset_config and "dataset_config" in ds.column_names:
+                elif dataset_config and "dataset_config" in ds.column_names:
                     ds = ds.filter(lambda s: s["dataset_config"] == dataset_config)
 
                 ids_done.update(ds.unique(idx_column))
@@ -525,7 +533,7 @@ class Annotator:
             results.append(res)
 
         if f"{task_prefix}valid_fields" in results[0]:
-            n_invalid = sum([1 for res in results if not res[f"{task_prefix}valid_fields"]])
+            n_invalid = sum(1 for res in results if not res[f"{task_prefix}valid_fields"])
             if n_invalid == len(results) and self.verbose:
                 print(
                     "Warning: All samples in the batch failed to produce valid JSON fields."
@@ -535,7 +543,7 @@ class Annotator:
                 )
 
         if f"{task_prefix}valid" in results[0]:
-            n_invalid = sum([1 for res in results if not res[f"{task_prefix}valid"]])
+            n_invalid = sum(1 for res in results if not res[f"{task_prefix}valid"])
             if n_invalid == len(results) and self.verbose:
                 print(
                     "Warning: All samples in the batch failed to produce valid outputs after"
@@ -706,7 +714,7 @@ class Annotator:
 
         _str_formatter = string.Formatter()
         prompt_fields = tuple(
-            [fld[1] for fld in _str_formatter.parse(full_prompt_template) if fld[1] is not None and not fld[2]]
+            fld[1] for fld in _str_formatter.parse(full_prompt_template) if fld[1] is not None and not fld[2]
         )
 
         # Set up output directory
@@ -783,15 +791,14 @@ class Annotator:
                 )
 
                 if num_retries_invalid > 0:
-                    # Identify invalid samples
-                    invalid_indices = [
-                        idx
-                        for idx, res in enumerate(results)
-                        if (
-                            (f"{task_prefix}valid" in res and not res[f"{task_prefix}valid"])
-                            or (f"{task_prefix}valid_fields" in res and not res[f"{task_prefix}valid_fields"])
+                    # Helper function to check if a result is invalid
+                    def is_invalid(res):
+                        return (f"{task_prefix}valid" in res and not res[f"{task_prefix}valid"]) or (
+                            f"{task_prefix}valid_fields" in res and not res[f"{task_prefix}valid_fields"]
                         )
-                    ]
+
+                    # Identify invalid samples
+                    invalid_indices = [idx for idx, res in enumerate(results) if is_invalid(res)]
 
                     n_retries = 0
                     while invalid_indices and n_retries < num_retries_invalid:
@@ -814,14 +821,7 @@ class Annotator:
                             results[global_idx] = retry_results[local_idx]
 
                         # Identify remaining invalid samples
-                        invalid_indices = [
-                            idx
-                            for idx, res in enumerate(results)
-                            if (
-                                (f"{task_prefix}valid" in res and not res[f"{task_prefix}valid"])
-                                or (f"{task_prefix}valid_fields" in res and not res[f"{task_prefix}valid_fields"])
-                            )
-                        ]
+                        invalid_indices = [idx for idx, res in enumerate(results) if is_invalid(res)]
 
                         if self.verbose:
                             if invalid_indices and n_retries == num_retries_invalid:
@@ -882,10 +882,8 @@ class Annotator:
         Returns:
             The concatenated dataset of all annotation results (JSON-invalid samples are NOT removed)
         """
-        ds_parts = []
-        for pfin in pdout.glob("*.jsonl"):
-            if pfin.stat().st_size > 0:
-                ds_parts.append(Dataset.from_json(str(pfin)))
+        # Use list comprehension for more efficient filtering and loading
+        ds_parts = [Dataset.from_json(str(pfin)) for pfin in pdout.glob("*.jsonl") if pfin.stat().st_size > 0]
 
         ds: Dataset = concatenate_datasets(ds_parts).sort(idx_column)
         if not keep_idx_column:

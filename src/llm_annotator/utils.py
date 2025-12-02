@@ -86,6 +86,9 @@ def yield_jsonl_robust(
     pfiles = [Path(pfile) for pfile in pfiles]
     seen = set()
     num_duplicates_removed = 0
+    # Convert keep_columns to a set for O(1) lookup instead of O(n)
+    keep_columns_set = set(keep_columns) if keep_columns else None
+
     with tqdm(total=len(pfiles), desc="Reading", unit="file", disable=disable_tqdm) as pbar:
         for pfin in pfiles:
             if pfin.stat().st_size == 0:
@@ -106,8 +109,8 @@ def yield_jsonl_robust(
                                 continue
                             seen.add(hashed_col)
 
-                        if keep_columns:
-                            data = {k: v for k, v in data.items() if k in keep_columns}
+                        if keep_columns_set:
+                            data = {k: v for k, v in data.items() if k in keep_columns_set}
 
                         yield data
                     except json.JSONDecodeError:
@@ -128,7 +131,7 @@ def yield_jsonl_robust(
 def count_lines(fname: str | PathLike) -> int:
     """Count the number of lines in a file."""
     with open(fname, "r", encoding="utf-8") as fhin:
-        return sum([1 for _ in fhin])
+        return sum(1 for _ in fhin)
 
 
 def remove_empty_jsonl_files(pdout: Path) -> list[Path]:
@@ -140,13 +143,10 @@ def remove_empty_jsonl_files(pdout: Path) -> list[Path]:
     Returns:
         A list of removed files.
     """
-    files_removed = []
-    for pfin in pdout.glob("*.jsonl"):
-        if pfin.stat().st_size == 0:
-            files_removed.append(pfin)
-            pfin.unlink()
-
-    return files_removed
+    empty_files = [pfin for pfin in pdout.glob("*.jsonl") if pfin.stat().st_size == 0]
+    for pfin in empty_files:
+        pfin.unlink()
+    return empty_files
 
 
 def ensure_returns_bool(func, *args, **kwargs):
