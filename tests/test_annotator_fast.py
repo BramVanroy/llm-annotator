@@ -1,12 +1,62 @@
-"""Fast unit tests for Annotator class (no LLM required)."""
+"""Fast unit tests for Annotator class (no LLM required).
+
+These tests mock the Annotator class to avoid torch/vllm dependencies.
+"""
 
 import json
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 from datasets import Dataset
+
+
+# Create actual classes for mocking
+class MockLLM:
+    """Mock LLM class for testing."""
+
+    pass
+
+
+class MockSamplingParams:
+    """Mock SamplingParams class for testing."""
+
+    pass
+
+
+class MockStructuredOutputsParams:
+    """Mock StructuredOutputsParams class for testing."""
+
+    pass
+
+
+class MockRequestOutput:
+    """Mock RequestOutput class for testing."""
+
+    pass
+
+
+# Mock torch and vllm before importing Annotator
+mock_torch = MagicMock()
+mock_cuda = MagicMock()
+mock_torch.cuda = mock_cuda
+
+sys.modules["torch"] = mock_torch
+sys.modules["torch.cuda"] = mock_cuda
+
+mock_vllm = MagicMock()
+mock_vllm.LLM = MockLLM
+mock_vllm.SamplingParams = MockSamplingParams
+mock_vllm.RequestOutput = MockRequestOutput
+
+sys.modules["vllm"] = mock_vllm
+sys.modules["vllm.distributed"] = MagicMock()
+
+mock_sampling_params_module = MagicMock()
+mock_sampling_params_module.StructuredOutputsParams = MockStructuredOutputsParams
+sys.modules["vllm.sampling_params"] = mock_sampling_params_module
 
 from llm_annotator.annotator import Annotator
 

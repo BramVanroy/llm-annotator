@@ -8,8 +8,6 @@ import pytest
 from datasets import Dataset
 from huggingface_hub import HfApi, delete_repo
 
-from llm_annotator.annotator import Annotator
-
 
 @pytest.fixture(scope="session")
 def hf_username():
@@ -19,9 +17,13 @@ def hf_username():
     fixtures depend on it (for example cleanup tasks) and ensures the value
     is computed only once.
     """
-    whoami = HfApi().whoami()
-    if whoami and "name" in whoami and whoami["type"] == "user":
-        return whoami["name"]
+    try:
+        whoami = HfApi().whoami()
+        if whoami and "name" in whoami and whoami["type"] == "user":
+            return whoami["name"]
+    except Exception:
+        # No token available, which is fine for fast tests
+        pass
     return None
 
 
@@ -95,6 +97,9 @@ def json_schema_file(temp_dir):
 @pytest.fixture(scope="session")
 def test_annotator(test_model_id, prompt_template_file):
     """Create a test annotator instance."""
+    # Import only when needed to avoid loading torch for fast tests
+    from llm_annotator.annotator import Annotator
+
     return Annotator(
         model=test_model_id,
         num_proc=None,
@@ -125,10 +130,10 @@ def cleanup_remote_datasets(hf_username):
     """
     yield
     # Cleanup after all tests
-    try:
-        if not hf_username:
-            pytest.skip("No Hugging Face username available for upload tests")
+    if not hf_username:
+        return
 
+    try:
         test_repo = f"{hf_username}/llm_annotator_test_ds"
         delete_repo(test_repo, repo_type="dataset", missing_ok=True)
         print(f"Cleaned up test dataset: {test_repo}")

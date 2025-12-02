@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+# Import directly from module to avoid importing annotator (which requires torch)
 from llm_annotator.utils import (
     convert_int_to_str,
     count_lines,
