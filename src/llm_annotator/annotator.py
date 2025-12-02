@@ -87,7 +87,7 @@ class Annotator:
         Basic usage with context manager (recommended):
 
         >>> from llm_annotator import Annotator
-        >>> 
+        >>>
         >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct", max_model_len=4096) as anno:
         ...     ds = anno.annotate_dataset(
         ...         output_dir="outputs/sentiment",
@@ -703,7 +703,7 @@ class Annotator:
             Basic sentiment classification with structured output:
 
             >>> from llm_annotator import Annotator
-            >>> 
+            >>>
             >>> # Define prompt template and output schema
             >>> prompt_prefix = "Analyze the sentiment of the following movie review.\\n\\nReview: "
             >>> prompt_template = prompt_prefix + "{text}\\n\\nClassification:"
@@ -712,7 +712,7 @@ class Annotator:
             ...     "properties": {"sentiment": {"type": "string", "enum": ["positive", "negative"]}},
             ...     "required": ["sentiment"],
             ... }
-            >>> 
+            >>>
             >>> # Create annotator and process dataset
             >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct", max_model_len=4096) as anno:
             ...     ds = anno.annotate_dataset(
@@ -748,13 +748,13 @@ class Annotator:
             >>> def validate_translation(sample):
             ...     # Custom validation: check if translation is not empty
             ...     return bool(sample.get("response", "").strip())
-            >>> 
+            >>>
             >>> def postprocess_sample(sample):
             ...     # Strip whitespace from response
             ...     if "response" in sample:
             ...         sample["response"] = sample["response"].strip()
             ...     return sample
-            >>> 
+            >>>
             >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct") as anno:
             ...     ds = anno.annotate_dataset(
             ...         output_dir="outputs/validated",
@@ -1008,8 +1008,8 @@ class Annotator:
     ):
         """Generate a new dataset from scratch using LLM completions.
 
-        Main entry point for from-scratch data generation. Unlike ``annotate_dataset``, 
-        this method creates a new dataset by generating completions for given prompts 
+        Main entry point for from-scratch data generation. Unlike ``annotate_dataset``,
+        this method creates a new dataset by generating completions for given prompts
         rather than annotating an existing dataset.
 
         Args:
@@ -1053,14 +1053,14 @@ class Annotator:
             Generate multiple samples from a single prompt:
 
             >>> from llm_annotator import Annotator
-            >>> 
+            >>>
             >>> prompt = "Generate a creative short story about a robot learning to paint."
             >>> sampling_params = {
             ...     "temperature": 1.0,
             ...     "top_p": 0.95,
             ...     "max_tokens": 512,
             ... }
-            >>> 
+            >>>
             >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct", max_model_len=2048) as anno:
             ...     ds = anno.generate_dataset(
             ...         output_dir="outputs/creative-stories",
@@ -1077,7 +1077,7 @@ class Annotator:
             ...     "Write a haiku about autumn.",
             ...     "Write a haiku about winter.",
             ... ]
-            >>> 
+            >>>
             >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct") as anno:
             ...     ds = anno.generate_dataset(
             ...         output_dir="outputs/seasonal-haikus",
@@ -1088,7 +1088,7 @@ class Annotator:
 
             >>> prompt_prefix = "You are a creative writer. Your task is to generate NER training data.\\n\\n"
             >>> prompt = prompt_prefix + "Generate a sentence with person names and locations."
-            >>> 
+            >>>
             >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct", verbose=True) as anno:
             ...     ds = anno.generate_dataset(
             ...         output_dir="outputs/ner-data",
@@ -1118,7 +1118,7 @@ class Annotator:
             ...     },
             ...     "required": ["sentence", "entities"],
             ... }
-            >>> 
+            >>>
             >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct") as anno:
             ...     ds = anno.generate_dataset(
             ...         output_dir="outputs/ner-structured",
