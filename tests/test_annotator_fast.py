@@ -1,6 +1,12 @@
 """Fast unit tests for Annotator class (no LLM required).
 
 These tests mock the Annotator class to avoid torch/vllm dependencies.
+
+Note: Some tests that require Dataset operations are difficult to mock completely
+due to the datasets library's internal use of pickle/dill with type checking.
+Those tests will work with the full torch/vllm installation but may fail with
+mocked dependencies. For complete test coverage, run slow tests which use
+the actual dependencies.
 """
 
 import json
