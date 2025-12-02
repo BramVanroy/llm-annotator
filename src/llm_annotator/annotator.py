@@ -864,7 +864,7 @@ class Annotator:
             pdout=pdout, idx_column=idx_column, new_hub_id=new_hub_id, keep_idx_column=keep_idx_column
         )
 
-    def generate_dataset(        
+    def generate_dataset(
         self,
         output_dir: str | Path,
         prompts: str | Sequence[str],
@@ -902,7 +902,7 @@ class Annotator:
             new_hub_id: Optional Hugging Face dataset ID for uploads.
             overwrite: Whether to overwrite existing output directory.
             sampling_params: Parameters for model generation (optional).
-            max_num_samples: Maximum number of samples to annotate. If 'prompts' is a sequence, 
+            max_num_samples: Maximum number of samples to annotate. If 'prompts' is a sequence,
                 'max_num_samples' will be ignored.
             output_schema: JSON schema as a dictionary or string (optional).
             whitespace_pattern: Regex pattern for whitespace handling in guided decoding.
@@ -944,7 +944,7 @@ class Annotator:
 
             self.extra_vllm_init_kwargs["enable_chunked_prefill"] = True
             self.extra_vllm_init_kwargs["enable_prefix_caching"] = True
-        
+
         dataset = Dataset.from_dict({idx_column: list(range(max_num_samples)), "prompt": prompts})
 
         return self.annotate_dataset(

@@ -146,7 +146,7 @@ def remove_empty_jsonl_files(pdout: Path) -> list[Path]:
             files_removed.add(pfin)
             pfin.unlink()
 
-    return list(sorted(files_removed))
+    return sorted(files_removed)
 
 
 def ensure_returns_bool(func, *args, **kwargs):
