@@ -92,6 +92,7 @@ class Annotator:
     pipe: LLM | None = field(default=None, init=False)
 
     def __enter__(self):
+        # You can use the annotator in a "with" block to ensure proper cleanup
         return self
 
     def __exit__(self, exc_type, exc, tb):
