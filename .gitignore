@@ -1,6 +1,7 @@
 copilot-instructions.md
 .vscode/
-.github/
+.github/*
+!.github/workflows/
 output/
 outputs/
 config/
