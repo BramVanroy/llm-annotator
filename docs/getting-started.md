@@ -154,7 +154,7 @@ with Annotator(model="meta-llama/Llama-3.2-3B-Instruct") as anno:
     dataset = anno.annotate_dataset(
         output_dir="outputs/hub-upload",
         full_prompt_template="Analyze: {text}",
-        dataset_name="imdb",
+        dataset_name="stanfordnlp/imdb",
         dataset_split="test",
         max_num_samples=1000,
         new_hub_id="your-username/annotated-imdb",  # Your Hub dataset ID
@@ -184,7 +184,7 @@ with Annotator(model="meta-llama/Llama-3.2-3B-Instruct") as anno:
     dataset = anno.annotate_dataset(
         output_dir="outputs/validated",
         full_prompt_template="Rewrite in simple English: {text}",
-        dataset_name="imdb",
+        dataset_name="stanfordnlp/imdb",
         dataset_split="test",
         max_num_samples=100,
         validate_fn=validate_output,
@@ -204,7 +204,7 @@ with Annotator(model="meta-llama/Llama-3.2-3B-Instruct") as anno:
     dataset = anno.annotate_dataset(
         output_dir="outputs/optimized",
         full_prompt_template="Process: {text}",
-        dataset_name="imdb",
+        dataset_name="stanfordnlp/imdb",
         dataset_split="test",
         sort_by_length=True,  # or "longest_first" or "shortest_first"
     )
@@ -223,7 +223,7 @@ with Annotator(model="meta-llama/Llama-3.2-3B-Instruct") as anno:
         output_dir="outputs/cached",
         full_prompt_template=prompt_template,
         prompt_template_prefix=prompt_prefix,  # Cache this prefix
-        dataset_name="imdb",
+        dataset_name="stanfordnlp/imdb",
         dataset_split="test",
     )
 ```
@@ -242,7 +242,7 @@ with Annotator(
     dataset = anno.annotate_dataset(
         output_dir="outputs/multi-gpu",
         full_prompt_template="Analyze: {text}",
-        dataset_name="imdb",
+        dataset_name="stanfordnlp/imdb",
         dataset_split="test",
     )
 ```

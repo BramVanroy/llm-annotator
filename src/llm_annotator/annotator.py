@@ -92,7 +92,7 @@ class Annotator:
         ...     ds = anno.annotate_dataset(
         ...         output_dir="outputs/sentiment",
         ...         full_prompt_template="Classify sentiment: {text}",
-        ...         dataset_name="imdb",
+        ...         dataset_name="stanfordnlp/imdb",
         ...         dataset_split="test",
         ...         max_num_samples=100,
         ...     )
