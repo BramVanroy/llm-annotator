@@ -32,6 +32,11 @@ jobs:
         with:
           version: "0.9.7"
       
+      - name: Debug: show sphinx
+        run: |
+          uv run -- which sphinx-build || true
+          uv run -- sphinx-build --version || true
+          
       - name: Install dependencies
         run: uv sync --dev --group docs
       
