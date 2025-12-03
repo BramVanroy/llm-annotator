@@ -63,7 +63,7 @@ Or check out the [examples/](examples/) directory for complete working examples.
 pytest -q
 ```
 
-## Documentation
+## Building documentation
 
 Build the documentation locally:
 
