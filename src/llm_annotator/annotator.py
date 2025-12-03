@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import gc
 import json
 import shutil
@@ -57,6 +59,17 @@ class Annotator:
     through the vLLM library. It handles dataset loading, processing, and output generation
     with support for streaming, batching, and uploading to Hugging Face Hub.
 
+    The ``Annotator`` class offers two main public methods for working with datasets:
+
+    - :meth:`annotate_dataset`: Annotate an existing dataset by applying a prompt template
+      to each sample and generating model completions.
+    - :meth:`generate_dataset`: Generate a new dataset from scratch by creating completions
+      for given prompts without requiring an input dataset.
+
+    Both methods support advanced features like structured output via JSON schemas,
+    automatic retries for invalid outputs, custom validation and postprocessing,
+    and incremental uploads to Hugging Face Hub.
+
     Args:
         model: The Hugging Face model identifier or local path.
         num_proc: Number of processes for dataset operations.
@@ -69,6 +82,48 @@ class Annotator:
         max_model_len: Maximum model sequence length.
         enable_thinking: Whether to enable thinking mode for chat templates.
         verbose: Whether to enable verbose logging.
+
+    Examples:
+        Basic usage with context manager (recommended):
+
+        >>> from llm_annotator import Annotator
+        >>>
+        >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct", max_model_len=4096) as anno:
+        ...     ds = anno.annotate_dataset(
+        ...         output_dir="outputs/sentiment",
+        ...         full_prompt_template="Classify sentiment: {text}",
+        ...         dataset_name="imdb",
+        ...         dataset_split="test",
+        ...         max_num_samples=100,
+        ...     )
+
+        Advanced configuration with multiple GPUs:
+
+        >>> with Annotator(
+        ...     model="meta-llama/Llama-3.1-70B-Instruct",
+        ...     tensor_parallel_size=4,  # Use 4 GPUs
+        ...     max_num_seqs=128,
+        ...     gpu_memory_utilization=0.9,
+        ...     quantization="fp8",
+        ...     verbose=True,
+        ... ) as anno:
+        ...     ds = anno.annotate_dataset(
+        ...         output_dir="outputs/annotations",
+        ...         full_prompt_template="Analyze: {text}",
+        ...         dataset_name="my-dataset",
+        ...     )
+
+        Manual resource management (if not using context manager):
+
+        >>> anno = Annotator(model="meta-llama/Llama-3.2-3B-Instruct")
+        >>> try:
+        ...     ds = anno.annotate_dataset(
+        ...         output_dir="outputs/data",
+        ...         full_prompt_template="Process: {text}",
+        ...         dataset_name="my-dataset",
+        ...     )
+        ... finally:
+        ...     anno.destroy_model()  # Clean up GPU resources
     """
 
     model: str
@@ -643,6 +698,73 @@ class Annotator:
 
         Returns:
             The concatenated dataset of all annotation results (JSON-invalid samples are NOT removed)
+
+        Examples:
+            Basic sentiment classification with structured output:
+
+            >>> from llm_annotator import Annotator
+            >>>
+            >>> # Define prompt template and output schema
+            >>> prompt_prefix = "Analyze the sentiment of the following movie review.\\n\\nReview: "
+            >>> prompt_template = prompt_prefix + "{text}\\n\\nClassification:"
+            >>> output_schema = {
+            ...     "type": "object",
+            ...     "properties": {"sentiment": {"type": "string", "enum": ["positive", "negative"]}},
+            ...     "required": ["sentiment"],
+            ... }
+            >>>
+            >>> # Create annotator and process dataset
+            >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct", max_model_len=4096) as anno:
+            ...     ds = anno.annotate_dataset(
+            ...         output_dir="outputs/sentiment-imdb",
+            ...         full_prompt_template=prompt_template,
+            ...         dataset_name="stanfordnlp/imdb",
+            ...         dataset_split="test",
+            ...         max_num_samples=100,
+            ...         prompt_template_prefix=prompt_prefix,
+            ...         output_schema=output_schema,
+            ...         keep_columns=["text", "label"],
+            ...         sort_by_length=True,
+            ...     )
+
+            Advanced usage with streaming and Hub uploads:
+
+            >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct", verbose=True) as anno:
+            ...     ds = anno.annotate_dataset(
+            ...         output_dir="outputs/large-dataset",
+            ...         full_prompt_template="Translate to French: {text}",
+            ...         dataset_name="wmt14",
+            ...         dataset_config="fr-en",
+            ...         dataset_split="train",
+            ...         streaming=True,  # Enable streaming for large datasets
+            ...         max_num_samples=10000,
+            ...         new_hub_id="username/translated-dataset",
+            ...         upload_every_n_samples=1000,  # Backup every 1000 samples
+            ...         cache_input_dataset=True,
+            ...     )
+
+            Using custom validation and postprocessing:
+
+            >>> def validate_translation(sample):
+            ...     # Custom validation: check if translation is not empty
+            ...     return bool(sample.get("response", "").strip())
+            >>>
+            >>> def postprocess_sample(sample):
+            ...     # Strip whitespace from response
+            ...     if "response" in sample:
+            ...         sample["response"] = sample["response"].strip()
+            ...     return sample
+            >>>
+            >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct") as anno:
+            ...     ds = anno.annotate_dataset(
+            ...         output_dir="outputs/validated",
+            ...         full_prompt_template="Translate: {text}",
+            ...         dataset_name="opus100",
+            ...         dataset_split="train",
+            ...         validate_fn=validate_translation,
+            ...         postprocess_fn=postprocess_sample,
+            ...         num_retries_invalid=3,
+            ...     )
         """
         if dataset is not None and isinstance(dataset, IterableDataset):
             streaming = True
@@ -884,10 +1006,11 @@ class Annotator:
         postprocess_fn: Callable | None = None,
         num_retries_invalid: int = 5,
     ):
-        """Rather than annotating an existing dataset, generate a new dataset from scratch.
+        """Generate a new dataset from scratch using LLM completions.
 
-        Main entry point for from-scratch data generation. Handles the complete pipeline
-        from dataset loading through model inference to output generation.
+        Main entry point for from-scratch data generation. Unlike ``annotate_dataset``,
+        this method creates a new dataset by generating completions for given prompts
+        rather than annotating an existing dataset.
 
         Args:
             output_dir: Directory to save annotation results.
@@ -922,8 +1045,87 @@ class Annotator:
             num_retries_invalid: Number of retries for samples that produce invalid outputs (when
                 a JSON schema is given and {prefix}valid_fields is False, or when a validate_fn is given
                 and it {prefix}valid is False).
+
         Returns:
             The concatenated dataset of all annotation results (JSON-invalid samples are NOT removed)
+
+        Examples:
+            Generate multiple samples from a single prompt:
+
+            >>> from llm_annotator import Annotator
+            >>>
+            >>> prompt = "Generate a creative short story about a robot learning to paint."
+            >>> sampling_params = {
+            ...     "temperature": 1.0,
+            ...     "top_p": 0.95,
+            ...     "max_tokens": 512,
+            ... }
+            >>>
+            >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct", max_model_len=2048) as anno:
+            ...     ds = anno.generate_dataset(
+            ...         output_dir="outputs/creative-stories",
+            ...         prompts=prompt,
+            ...         max_num_samples=100,
+            ...         sampling_params=sampling_params,
+            ...     )
+
+            Generate from a list of different prompts:
+
+            >>> prompts = [
+            ...     "Write a haiku about spring.",
+            ...     "Write a haiku about summer.",
+            ...     "Write a haiku about autumn.",
+            ...     "Write a haiku about winter.",
+            ... ]
+            >>>
+            >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct") as anno:
+            ...     ds = anno.generate_dataset(
+            ...         output_dir="outputs/seasonal-haikus",
+            ...         prompts=prompts,
+            ...     )
+
+            Using a shared prompt prefix for efficiency:
+
+            >>> prompt_prefix = "You are a creative writer. Your task is to generate NER training data.\\n\\n"
+            >>> prompt = prompt_prefix + "Generate a sentence with person names and locations."
+            >>>
+            >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct", verbose=True) as anno:
+            ...     ds = anno.generate_dataset(
+            ...         output_dir="outputs/ner-data",
+            ...         prompts=prompt,
+            ...         prompt_prefix=prompt_prefix,  # Cached for efficiency
+            ...         max_num_samples=1000,
+            ...         sampling_params={"temperature": 0.9, "top_k": 64},
+            ...     )
+
+            Generate with structured output schema:
+
+            >>> output_schema = {
+            ...     "type": "object",
+            ...     "properties": {
+            ...         "sentence": {"type": "string"},
+            ...         "entities": {
+            ...             "type": "array",
+            ...             "items": {
+            ...                 "type": "object",
+            ...                 "properties": {
+            ...                     "text": {"type": "string"},
+            ...                     "label": {"type": "string", "enum": ["PER", "LOC", "ORG"]},
+            ...                 },
+            ...                 "required": ["text", "label"],
+            ...             },
+            ...         },
+            ...     },
+            ...     "required": ["sentence", "entities"],
+            ... }
+            >>>
+            >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct") as anno:
+            ...     ds = anno.generate_dataset(
+            ...         output_dir="outputs/ner-structured",
+            ...         prompts="Generate a sentence with named entities.",
+            ...         max_num_samples=500,
+            ...         output_schema=output_schema,
+            ...     )
         """
 
         if isinstance(prompts, str):
