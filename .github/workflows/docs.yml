@@ -36,9 +36,7 @@ jobs:
         run: uv sync --dev --group docs
       
       - name: Build documentation
-        run: |
-          cd docs
-          make html
+        run: uv run -- bash -lc "cd docs && make html"
       
       - name: Upload artifact
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
