@@ -1,4 +1,4 @@
-# A simple, extensible LLM Annotator
+# A simple, extensible LLM-based dataset generator and annotator
 
 This repository provides a small, resumable framework for annotating datasets with
 LLMs (via `vllm`).
