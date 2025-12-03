@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.abspath("../src"))
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = "llm-annotator"
-copyright = "2024, Bram Vanroy"
+copyright = "2025, Bram Vanroy"
 author = "Bram Vanroy"
 
 # -- General configuration ---------------------------------------------------
