@@ -10,6 +10,14 @@ repos:
         pass_filenames: false
         stages: [pre-commit, pre-push]
 
+      - id: check-docs-build
+        name: Check documentation builds
+        entry: bash -c 'cd docs && python -m sphinx -b html . _build/html'
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+        files: ^(docs/|src/llm_annotator/.*\.py$)
+
       # - id: pytest
       #   name: Run pytest
       #   entry: pytest -q

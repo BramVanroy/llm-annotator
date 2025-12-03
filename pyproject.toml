@@ -8,7 +8,7 @@ authors = [
 ]
 license = "Apache-2.0"
 license-files = ["LICEN[CS]E*"]
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "datasets>=4.1.1,<5",
     "hf-transfer>=0.1.9,<1",
@@ -23,6 +23,12 @@ dev = [
     "pytest>=8.4.2,<9",
     "pytest-cov>=7.0.0,<8",
     "ruff>=0.13.1,<0.14",
+]
+docs = [
+    "sphinx>=7.0.0",
+    "furo>=2024.0.0",
+    "sphinx-copybutton>=0.5.0",
+    "myst-parser>=2.0.0",
 ]
 
 [build-system]
