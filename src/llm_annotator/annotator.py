@@ -18,7 +18,7 @@ from vllm import LLM, RequestOutput, SamplingParams
 from vllm.distributed import destroy_distributed_environment, destroy_model_parallel
 from vllm.sampling_params import StructuredOutputsParams
 
-from llm_annotator.utils import ensure_returns_bool, ensure_returns_dict, remove_empty_jsonl_files, retry
+from llm_annotator.utils import ensure_returns_bool, ensure_returns_dict, get_lib_versions, remove_empty_jsonl_files, retry
 
 
 def destroy_model_on_error(func):
@@ -834,6 +834,12 @@ class Annotator:
         if pdout.is_dir() and overwrite:
             shutil.rmtree(pdout)
         pdout.mkdir(exist_ok=True, parents=True)
+
+        pdout.joinpath("_version.json").write_text(json.dumps(get_lib_versions(), indent=4), encoding="utf-8")
+
+        # Push initial empty dir with versions file to hub
+        if new_hub_id:
+            self.push_dir_to_hub(pdout, new_hub_id=new_hub_id)
 
         # We need to clear the model before doing self._load_dataset because the model
         # cannot be be pickled (which is needed for multiprocessing in dataset.map)

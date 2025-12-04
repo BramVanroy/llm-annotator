@@ -5,6 +5,7 @@ import sys
 import time
 from os import PathLike
 from pathlib import Path
+from importlib.metadata import version
 
 from tqdm import tqdm
 
@@ -163,3 +164,16 @@ def ensure_returns_dict(func, *args, **kwargs):
     if not isinstance(result, dict):
         raise TypeError(f"{func.__name__} should return a dict, got {type(result).__name__}")
     return result
+
+
+def get_lib_versions() -> dict:
+    """Get the versions of key dependencies."""
+
+    versions = {
+        "python": ".".join(str(part) for part in sys.version_info[:3]),
+        "llm_annotator": version("llm_annotator"),
+        "vllm": version("vllm"),
+        "torch": version("torch"),
+        "transformers": version("transformers"),
+    }
+    return versions
