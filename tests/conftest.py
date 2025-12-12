@@ -9,6 +9,7 @@ from datasets import Dataset
 from huggingface_hub import HfApi, delete_repo
 
 from llm_annotator.annotator import Annotator
+from llm_annotator.utils import get_hf_username
 
 
 @pytest.fixture(scope="session")
@@ -19,10 +20,7 @@ def hf_username():
     fixtures depend on it (for example cleanup tasks) and ensures the value
     is computed only once.
     """
-    whoami = HfApi().whoami()
-    if whoami and "name" in whoami and whoami["type"] == "user":
-        return whoami["name"]
-    return None
+    return get_hf_username()
 
 
 @pytest.fixture(scope="session")

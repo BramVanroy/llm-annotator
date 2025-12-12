@@ -4,14 +4,9 @@ import shutil
 from huggingface_hub import HfApi
 
 from llm_annotator import Annotator
+from llm_annotator.utils import get_hf_username
 
 
-def get_hf_username() -> str | None:
-    whoami = HfApi().whoami()
-    if whoami and "name" in whoami and whoami["type"] == "user":
-        return whoami["name"]
-    else:
-        raise ValueError("No Hugging Face username found. Please login using `hf auth login`.")
 
 
 def main():

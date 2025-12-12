@@ -466,13 +466,13 @@ class Annotator:
             output_schema: Optional JSON schema for guided decoding.
             task_prefix: String prefix to use for internal column names.
         Returns:
-            - A key '{prefix}_response' containing the raw model output text.
-            - A key '{prefix}_finish_reason' indicating why generation stopped.
-            - A key '{prefix}_num_tokens' indicating the number of tokens in the output.
+            - A key '{prefix}response' containing the raw model output text.
+            - A key '{prefix}finish_reason' indicating why generation stopped.
+            - A key '{prefix}num_tokens' indicating the number of tokens in the output.
 
             And if an output_schema is provided, also:
                 - Keys from the output_schema with their parsed values (or None if parsing failed).
-                - A key '{prefix}_valid_fields' indicating if all required fields were valid.
+                - A key '{prefix}valid_fields' indicating if all required fields were valid.
         """
         raw_response = output.outputs[0].text
 

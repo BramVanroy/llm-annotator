@@ -7,6 +7,7 @@ from os import PathLike
 from pathlib import Path
 from importlib.metadata import version
 
+from huggingface_hub import whoami
 from tqdm import tqdm
 
 
@@ -177,3 +178,17 @@ def get_lib_versions() -> dict:
         "transformers": version("transformers"),
     }
     return versions
+
+
+def get_hf_username() -> str | None:
+    """Get the Hugging Face username of the current user, if logged in. Otherwise, return None.
+    
+    Returns:
+        The Hugging Face username, or None if not logged in.
+    Raises:
+        LocalTokenNotFoundError: If no local token is found.
+    """
+    whowasi = whoami()
+    if whowasi and "name" in whowasi and whowasi["type"] == "user":
+        return whowasi["name"]
+    return None
