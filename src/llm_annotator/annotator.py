@@ -18,7 +18,13 @@ from vllm import LLM, RequestOutput, SamplingParams
 from vllm.distributed import destroy_distributed_environment, destroy_model_parallel
 from vllm.sampling_params import StructuredOutputsParams
 
-from llm_annotator.utils import ensure_returns_bool, ensure_returns_dict, get_lib_versions, remove_empty_jsonl_files, retry
+from llm_annotator.utils import (
+    ensure_returns_bool,
+    ensure_returns_dict,
+    get_lib_versions,
+    remove_empty_jsonl_files,
+    retry,
+)
 
 
 def destroy_model_on_error(func):

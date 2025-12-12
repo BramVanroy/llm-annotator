@@ -1,9 +1,11 @@
-from transformers import AutoTokenizer
-from llm_annotator.annotator import load_dataset
-from llm_annotator.utils import get_hf_username
 from pathlib import Path
 
 import numpy as np
+from transformers import AutoTokenizer
+
+from llm_annotator.annotator import load_dataset
+from llm_annotator.utils import get_hf_username
+
 
 CURR_DIR = Path(__file__).parent
 
@@ -17,7 +19,10 @@ def main():
 
     def count_tokens_with_template(texts):
         prompted_texts = [[{"role": "user", "content": prompt_template.format(text=text)}] for text in texts]
-        tokens = [tokenizer.apply_chat_template(prompted_text, encode=True, add_generation_prompt=True) for prompted_text in prompted_texts]
+        tokens = [
+            tokenizer.apply_chat_template(prompted_text, encode=True, add_generation_prompt=True)
+            for prompted_text in prompted_texts
+        ]
         return {"num_tokens": [len(ids) for ids in tokens]}
 
     ds = ds.map(count_tokens_with_template, batched=True, batch_size=1000, input_columns=["text"], num_proc=8)
@@ -35,7 +40,9 @@ def main():
     print(f"99.95th percentile: {np.percentile(token_counts, 99.95)}")
     print(f"99.99th percentile: {np.percentile(token_counts, 99.99)}")
 
-    ds = ds.filter(lambda num_tokens: num_tokens <= 36000, input_columns=["num_tokens"], num_proc=8).remove_columns(["num_tokens"])
+    ds = ds.filter(lambda num_tokens: num_tokens <= 36000, input_columns=["num_tokens"], num_proc=8).remove_columns(
+        ["num_tokens"]
+    )
     ds.push_to_hub(f"{hf_user}/finemath-4plus-lte36k", private=False)
 
 

@@ -1,12 +1,8 @@
 import random
 import shutil
 
-from huggingface_hub import HfApi
-
 from llm_annotator import Annotator
 from llm_annotator.utils import get_hf_username
-
-
 
 
 def main():

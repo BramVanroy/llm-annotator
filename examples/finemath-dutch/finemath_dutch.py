@@ -30,7 +30,7 @@ def main():
         max_model_len=72_000,
         max_num_seqs=4,
         gpu_memory_utilization=0.95,
-        extra_vllm_init_kwargs=extra_vllm_init_kwargs
+        extra_vllm_init_kwargs=extra_vllm_init_kwargs,
     ) as anno:
         anno.annotate_dataset(
             output_dir=f"outputs/finemath-dutch-{max_num_samples}",

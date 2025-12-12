@@ -3,9 +3,9 @@ import hashlib
 import json
 import sys
 import time
+from importlib.metadata import version
 from os import PathLike
 from pathlib import Path
-from importlib.metadata import version
 
 from huggingface_hub import whoami
 from tqdm import tqdm
@@ -182,7 +182,7 @@ def get_lib_versions() -> dict:
 
 def get_hf_username() -> str | None:
     """Get the Hugging Face username of the current user, if logged in. Otherwise, return None.
-    
+
     Returns:
         The Hugging Face username, or None if not logged in.
     Raises:

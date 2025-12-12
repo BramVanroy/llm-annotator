@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 from datasets import Dataset
-from huggingface_hub import HfApi, delete_repo
+from huggingface_hub import delete_repo
 
 from llm_annotator.annotator import Annotator
 from llm_annotator.utils import get_hf_username
