@@ -207,6 +207,7 @@ class Annotator:
         prompt_fields: Iterable[str] = (),
         task_prefix: str = "",
         sort_by_length: bool | Literal["shortest_first", "longest_first"] = False,
+        system_message: str | None = None,
     ) -> tuple[Dataset, int]:
         """Load and preprocess the dataset for annotation.
 
@@ -232,6 +233,7 @@ class Annotator:
                 If set to "shortest_first", sort by shortest first, "longest_first" for longest first.
                 If set to True, defaults to longest first as that makes most sense to avoid OOM errors
                 down the line.
+            system_message: Optional system message to add as "system" role in chat prompts.
 
         Returns:
             A tuple containing:
@@ -342,6 +344,7 @@ class Annotator:
                     "prompt_template": prompt_template,
                     "idx_column": idx_column,
                     "task_prefix": task_prefix,
+                    "system_message": system_message,
                 },
                 desc="Applying prompt template",
             )
@@ -395,6 +398,7 @@ class Annotator:
         prompt_template: str,
         idx_column: str,
         task_prefix: str,
+        system_message: str | None = None,
     ) -> dict[str, str | int]:
         """Restructure the sample into a "messages" format. Fills in the prompt template with values from the sample,
         based on the prompt_fields.
@@ -406,19 +410,32 @@ class Annotator:
             prompt_template: The prompt template string with placeholders.
             idx_column: Column name to use as unique identifier.
             task_prefix: String prefix to use for internal column names.
+            system_message: Optional system message to add as "system" role in chat prompts.
 
         Returns:
             A dictionary with the filled-in prompt and the sample index.
         """
-        return {
-            f"{task_prefix}prompted": [
-                {
-                    "role": "user",
-                    "content": prompt_template.format(**{fld: sample[fld] for fld in prompt_fields}),
-                }
-            ],
-            idx_column: idx,
-        }
+        if system_message is not None:
+            return {
+                f"{task_prefix}prompted": [
+                    {"role": "system", "content": system_message},
+                    {
+                        "role": "user",
+                        "content": prompt_template.format(**{fld: sample[fld] for fld in prompt_fields}),
+                    }
+                ],
+                idx_column: idx,
+            }
+        else:
+            return {
+                f"{task_prefix}prompted": [
+                    {
+                        "role": "user",
+                        "content": prompt_template.format(**{fld: sample[fld] for fld in prompt_fields}),
+                    }
+                ],
+                idx_column: idx,
+            }
 
     def _preprocess_dataset(self, *, dataset: Dataset) -> Dataset:
         """Preprocess the dataset before applying prompt templates.
@@ -637,6 +654,7 @@ class Annotator:
         validate_fn: Callable | None = None,
         postprocess_fn: Callable | None = None,
         num_retries_invalid: int = 5,
+        system_message: str | None = None,
         keep_idx_column: bool = False,
     ) -> Dataset:
         """Annotate an entire dataset using the configured model and prompt.
@@ -700,6 +718,7 @@ class Annotator:
             num_retries_invalid: Number of retries for samples that produce invalid outputs (when
                 a JSON schema is given and {prefix}valid_fields is False, or when a validate_fn is given
                 and it {prefix}valid is False).
+            system_message: Optional system message to add as "system" role in chat prompts.
             keep_idx_column: Whether to keep the idx_column in the final dataset before uploading and returning.
 
         Returns:
@@ -869,6 +888,7 @@ class Annotator:
             prompt_fields=prompt_fields,
             task_prefix=task_prefix,
             sort_by_length=sort_by_length,
+            system_message=system_message,
         )
         if len(dataset) > 0:
             pfout = self.get_pfout_name(
@@ -1017,6 +1037,7 @@ class Annotator:
         validate_fn: Callable | None = None,
         postprocess_fn: Callable | None = None,
         num_retries_invalid: int = 5,
+        system_message: str | None = None,
     ):
         """Generate a new dataset from scratch using LLM completions.
 
@@ -1057,6 +1078,7 @@ class Annotator:
             num_retries_invalid: Number of retries for samples that produce invalid outputs (when
                 a JSON schema is given and {prefix}valid_fields is False, or when a validate_fn is given
                 and it {prefix}valid is False).
+            system_message: Optional system message to add as "system" role in chat prompts.
 
         Returns:
             The concatenated dataset of all annotation results (JSON-invalid samples are NOT removed)
@@ -1179,6 +1201,7 @@ class Annotator:
             validate_fn=validate_fn,
             postprocess_fn=postprocess_fn,
             num_retries_invalid=num_retries_invalid,
+            system_message=system_message,
         )
 
     def _post_annotate(
