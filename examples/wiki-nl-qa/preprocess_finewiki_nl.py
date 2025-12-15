@@ -22,6 +22,7 @@ def main(num_workers: int | None = None):
 
 if __name__ == "__main__":
     import argparse
+
     cparser = argparse.ArgumentParser()
     cparser.add_argument("-j", "--num-workers", type=int, default=None)
     cargs = cparser.parse_args()
