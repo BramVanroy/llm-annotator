@@ -422,7 +422,7 @@ class Annotator:
                     {
                         "role": "user",
                         "content": prompt_template.format(**{fld: sample[fld] for fld in prompt_fields}),
-                    }
+                    },
                 ],
                 idx_column: idx,
             }
@@ -900,13 +900,6 @@ class Annotator:
 
             self._load_pipeline()
 
-            if prompt_template_prefix:
-                if self.verbose:
-                    print("Warming up shared prompt cache...")
-                self.pipe.generate(
-                    [prompt_template_prefix], SamplingParams(max_tokens=1, temperature=0), use_tqdm=False
-                )
-
             sampling_params = sampling_params or {}
             if output_schema:
                 if "structured_outputs" in sampling_params:
@@ -1161,6 +1154,9 @@ class Annotator:
             ...         output_schema=output_schema,
             ...     )
         """
+        # TODO: remove the prompt_prefix. It was not working to begin with (as we just
+        # added the text but without chat template applied), and I do not think it is needed
+        # as VLLM will automatically match the prefix of the previous cache if possible.
 
         if isinstance(prompts, str):
             prompts = [prompts] * (max_num_samples or 1)
