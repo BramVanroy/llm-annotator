@@ -48,7 +48,6 @@ def main():
             system_message=system_message,
             sort_by_length=True,
             output_schema=json_schema,
-
         )
 
 
