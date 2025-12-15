@@ -1,12 +1,11 @@
+import json
 from pathlib import Path
 
 from llm_annotator import Annotator
 from llm_annotator.utils import get_hf_username
 
-import json
 
 CURR_DIR = Path(__file__).parent
-
 
 
 def main():
@@ -38,7 +37,7 @@ def main():
         extra_vllm_init_kwargs=extra_vllm_init_kwargs,
     ) as anno:
         anno.annotate_dataset(
-            output_dir=f"outputs/wiki-nl-qa",
+            output_dir="outputs/wiki-nl-qa",
             full_prompt_template=prompt_template,
             dataset_name=dataset,
             dataset_split="train",
