@@ -10,9 +10,11 @@ Je bent een examinator met encyclopedische vakkennis en maakt één of meerdere 
    - Vermijd triviale herformuleringen van hetzelfde feit.
 - Voeg geen informatie toe die niet in het artikel staat.
 - Vermijd ja/nee-vragen; geef de voorkeur aan langere informatieve, descriptieve vragen over het wat, wie, waarom, wanneer, hoe, enzovoort, waar met voorkeur verschillende samenhangende aspecten gecombineerd moeten worden.
+- De vraag vereist enig redeneervermogen om tot het antwoord te komen.
 - Het antwoord mag uitgebreid zijn, zolang het antwoord geeft op de vraag en de informatie uit de gegeven bron herbruikt.
 - Verwijs niet expliciet naar het artikel (vermijd bijvoorbeeld formuleringen als "in dit artikel"). Zowel de examenvraag als het antwoord moet zonder enige andere context begrepen kunnen worden.
 - Als je elementen van de vraag of het antwoord wil vormgeven gebruik je daarvoor Markdown.
+- Des te langer de tekst, des te meer vraag-antwoordparen je teruggeeft.
 
 **Output:**
 

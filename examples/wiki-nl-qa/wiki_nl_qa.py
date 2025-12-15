@@ -16,11 +16,11 @@ def main():
     json_schema = json.loads(CURR_DIR.joinpath("output.schema.json").read_text(encoding="utf-8"))
 
     model = "RedHatAI/Mistral-Small-3.2-24B-Instruct-2506-FP8"
-    dataset = "BramVanroy/finewiki-nl-gte200"
+    dataset = "BramVanroy/finewiki-nl-30-to-24k-tokens"
 
     sampling_params = {
         "temperature": 0.15,
-        "max_tokens": 8192,
+        "max_tokens": 12000,
     }
     extra_vllm_init_kwargs = {
         "load_format": "mistral",
@@ -31,8 +31,8 @@ def main():
     with Annotator(
         model=model,
         verbose=True,
-        max_model_len=12_800,
-        max_num_seqs=64,
+        max_model_len=48000,
+        max_num_seqs=32,
         gpu_memory_utilization=0.95,
         extra_vllm_init_kwargs=extra_vllm_init_kwargs,
     ) as anno:
