@@ -9,7 +9,6 @@ CURR_DIR = Path(__file__).parent
 
 def main():
     hf_user = get_hf_username()
-    prompt_prefix = CURR_DIR.joinpath("prompt_prefix.md").read_text(encoding="utf-8")
     prompt_template = CURR_DIR.joinpath("prompt_template.md").read_text(encoding="utf-8")
 
     model = "RedHatAI/gemma-3-27b-it-FP8-dynamic"
@@ -34,12 +33,11 @@ def main():
     ) as anno:
         anno.annotate_dataset(
             output_dir=f"outputs/finemath-dutch-{max_num_samples}",
-            full_prompt_template=prompt_template,
+            prompt_template=prompt_template,
             dataset_name="BramVanroy/finemath-4plus-seqlen36k",
             dataset_split="train",
             new_hub_id=f"{hf_user}/finemath-dutch-{max_num_samples}",
             max_num_samples=max_num_samples,
-            prompt_template_prefix=prompt_prefix,
             keep_columns=True,
             upload_every_n_samples=None,
             sampling_params=sampling_params,

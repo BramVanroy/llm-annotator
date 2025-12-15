@@ -4,6 +4,7 @@ import gc
 import json
 import shutil
 import string
+from copy import deepcopy
 from dataclasses import dataclass, field
 from functools import wraps
 from math import ceil
@@ -21,6 +22,7 @@ from vllm.sampling_params import StructuredOutputsParams
 from llm_annotator.utils import (
     ensure_returns_bool,
     ensure_returns_dict,
+    extract_prompt_prefix,
     get_lib_versions,
     remove_empty_jsonl_files,
     retry,
@@ -97,7 +99,7 @@ class Annotator:
         >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct", max_model_len=4096) as anno:
         ...     ds = anno.annotate_dataset(
         ...         output_dir="outputs/sentiment",
-        ...         full_prompt_template="Classify sentiment: {text}",
+        ...         prompt_template="Classify sentiment: {text}",
         ...         dataset_name="stanfordnlp/imdb",
         ...         dataset_split="test",
         ...         max_num_samples=100,
@@ -115,7 +117,7 @@ class Annotator:
         ... ) as anno:
         ...     ds = anno.annotate_dataset(
         ...         output_dir="outputs/annotations",
-        ...         full_prompt_template="Analyze: {text}",
+        ...         prompt_template="Analyze: {text}",
         ...         dataset_name="my-dataset",
         ...     )
 
@@ -125,7 +127,7 @@ class Annotator:
         >>> try:
         ...     ds = anno.annotate_dataset(
         ...         output_dir="outputs/data",
-        ...         full_prompt_template="Process: {text}",
+        ...         prompt_template="Process: {text}",
         ...         dataset_name="my-dataset",
         ...     )
         ... finally:
@@ -622,13 +624,42 @@ class Annotator:
 
         return results
 
+    def do_cache_run(
+        self, prompt_prefix: str | None, system_message: str | None, sampling_params: SamplingParams | None = None
+    ):
+        """Run a dummy inference to initialize Automatic Prefix Caching with vLLM.
+        We could *not* do this but for large batch sizes this is beneficial: instead
+        of caching after the first batch has completed (might take longer),
+        we do a quick dummy run to initialize the cache right after model loading with
+        minimal overhead.
+
+        Args:
+            prompt_prefix: Optional prompt prefix to use as user message.
+            system_message: Optional system message to use as system role.
+            sampling_params: Optional sampling parameters to use for the dummy run.
+        """
+        if not prompt_prefix and not system_message:
+            return
+
+        messages = []
+        if system_message is not None:
+            messages.append({"role": "system", "content": system_message})
+        if prompt_prefix is not None:
+            messages.append({"role": "user", "content": prompt_prefix})
+
+        if sampling_params:
+            sampling_params = deepcopy(sampling_params)
+            sampling_params.max_tokens = 1
+        else:
+            sampling_params = SamplingParams(max_tokens=1)
+        self.pipe.chat([messages], sampling_params, use_tqdm=False)
+
     @destroy_model_on_error
     def annotate_dataset(
         self,
         output_dir: str | Path,
-        full_prompt_template: str,
+        prompt_template: str,
         *,
-        prompt_template_prefix: str | None = None,
         dataset_name: str | None = None,
         dataset: Dataset | None = None,
         new_hub_id: str | None = None,
@@ -664,16 +695,10 @@ class Annotator:
 
         Args:
             output_dir: Directory to save annotation results.
-            full_prompt_template: Prompt template string. Can/should
-                contain fields in `{}` that match dataset column names, e.g.
-                "Analyze the following text: {text}".
-            prompt_template_prefix: The prefix in the prompt that is shared across
-                all queries. Often times the first part of the instruction is common
-                across requests ("Your task is to do X"), so we can cache that
-                in vLLM for efficiency. When this is given, we will enable
-                chunked prefill and prefix caching in vLLM.
-
-                Must be part of "full_prompt_template"
+            prompt_template: Prompt template string. Can contain fields in `{}`
+              that match dataset column names, e.g. "Analyze the following text: {text}".
+              A prefix will be automatically extracted for more efficient caching so
+              we can use Automatic Prefix Caching in vLLM.
             dataset_name: Name or path of the dataset to annotate.
             dataset: Pre-loaded dataset to use instead of loading from name/path.
             new_hub_id: Optional Hugging Face dataset ID for uploads.
@@ -742,11 +767,10 @@ class Annotator:
             >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct", max_model_len=4096) as anno:
             ...     ds = anno.annotate_dataset(
             ...         output_dir="outputs/sentiment-imdb",
-            ...         full_prompt_template=prompt_template,
+            ...         prompt_template=prompt_template,
             ...         dataset_name="stanfordnlp/imdb",
             ...         dataset_split="test",
             ...         max_num_samples=100,
-            ...         prompt_template_prefix=prompt_prefix,
             ...         output_schema=output_schema,
             ...         keep_columns=["text", "label"],
             ...         sort_by_length=True,
@@ -757,7 +781,7 @@ class Annotator:
             >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct", verbose=True) as anno:
             ...     ds = anno.annotate_dataset(
             ...         output_dir="outputs/large-dataset",
-            ...         full_prompt_template="Translate to French: {text}",
+            ...         prompt_template="Translate to French: {text}",
             ...         dataset_name="wmt14",
             ...         dataset_config="fr-en",
             ...         dataset_split="train",
@@ -783,7 +807,7 @@ class Annotator:
             >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct") as anno:
             ...     ds = anno.annotate_dataset(
             ...         output_dir="outputs/validated",
-            ...         full_prompt_template="Translate: {text}",
+            ...         prompt_template="Translate: {text}",
             ...         dataset_name="opus100",
             ...         dataset_split="train",
             ...         validate_fn=validate_translation,
@@ -796,15 +820,11 @@ class Annotator:
 
         upload_every_n_samples = upload_every_n_samples or 0
 
-        if prompt_template_prefix:
-            if not full_prompt_template.startswith(prompt_template_prefix):
-                raise ValueError(
-                    "'prompt_template_prefix' must be a starting substring of 'full_prompt_template'."
-                    " Especially check white-spaces."
-                )
+        prompt_template_prefix = extract_prompt_prefix(prompt_template)
 
-            self.extra_vllm_init_kwargs["enable_chunked_prefill"] = True
-            self.extra_vllm_init_kwargs["enable_prefix_caching"] = True
+        # We ALWAYS enable chunked prefill and prefix caching for efficiency
+        self.extra_vllm_init_kwargs["enable_chunked_prefill"] = True
+        self.extra_vllm_init_kwargs["enable_prefix_caching"] = True
 
         # If shuffle_seed and sorting by length, warn that shuffling will be
         # effectively disabled
@@ -847,11 +867,11 @@ class Annotator:
         prompt_field_swapper = prompt_field_swapper or {}
 
         for fld, value in prompt_field_swapper.items():
-            full_prompt_template = full_prompt_template.replace(f"{{{fld}}}", value)
+            prompt_template = prompt_template.replace(f"{{{fld}}}", value)
 
         _str_formatter = string.Formatter()
         prompt_fields = tuple(
-            [fld[1] for fld in _str_formatter.parse(full_prompt_template) if fld[1] is not None and not fld[2]]
+            [fld[1] for fld in _str_formatter.parse(prompt_template) if fld[1] is not None and not fld[2]]
         )
 
         # Set up output directory
@@ -872,7 +892,7 @@ class Annotator:
             self.destroy_model()
 
         dataset, processed_n_samples = self._load_dataset(
-            prompt_template=full_prompt_template,
+            prompt_template=prompt_template,
             idx_column=idx_column,
             pdout=pdout,
             dataset_name=dataset_name,
@@ -911,6 +931,13 @@ class Annotator:
                     whitespace_pattern=whitespace_pattern,
                 )
             sampling_params = SamplingParams(**sampling_params)
+
+            if system_message is not None or prompt_template_prefix is not None:
+                self.do_cache_run(
+                    prompt_prefix=prompt_template_prefix,
+                    system_message=system_message,
+                    sampling_params=sampling_params,
+                )
 
             total_num_batches = ceil(len(dataset) / self.max_num_seqs)
             for batch in tqdm(
@@ -1016,7 +1043,6 @@ class Annotator:
         output_dir: str | Path,
         prompts: str | Sequence[str],
         *,
-        prompt_prefix: str | None = None,
         new_hub_id: str | None = None,
         overwrite: bool = False,
         sampling_params: dict[str, Any] | None = None,
@@ -1043,11 +1069,6 @@ class Annotator:
             prompts: a single prompt that will be used `max_num_samples` times (`max_num_samples`
                 must be given), or a sequence of prompts to generate outputs for, in which cases
                 `max_num_samples` will be ignored.
-            prompt_prefix: The prefix in the prompt that is shared across
-                all prompts. Often times the first part of the instruction is common
-                across requests ("Your task is to do X"), so we can cache that
-                in vLLM for efficiency. When this is given, we will enable
-                chunked prefill and prefix caching in vLLM.
             new_hub_id: Optional Hugging Face dataset ID for uploads.
             overwrite: Whether to overwrite existing output directory.
             sampling_params: Parameters for model generation (optional).
@@ -1120,7 +1141,6 @@ class Annotator:
             ...     ds = anno.generate_dataset(
             ...         output_dir="outputs/ner-data",
             ...         prompts=prompt,
-            ...         prompt_prefix=prompt_prefix,  # Cached for efficiency
             ...         max_num_samples=1000,
             ...         sampling_params={"temperature": 0.9, "top_k": 64},
             ...     )
@@ -1154,35 +1174,17 @@ class Annotator:
             ...         output_schema=output_schema,
             ...     )
         """
-        # TODO: remove the prompt_prefix. It was not working to begin with (as we just
-        # added the text but without chat template applied), and I do not think it is needed
-        # as VLLM will automatically match the prefix of the previous cache if possible.
 
         if isinstance(prompts, str):
             prompts = [prompts] * (max_num_samples or 1)
-            # If a single prompt is given, all prompts will always be the same
-            # so the first query will be cached automatically -- no separate run needed
-            prompt_prefix = None
+
         max_num_samples = len(prompts)
-
-        if prompt_prefix:
-            for prompt in prompts:
-                if not prompt_prefix.startswith(prompt):
-                    raise ValueError(
-                        "'prompt_template_prefix' must be a starting substring of all given prompts."
-                        " Especially check white-spaces."
-                        f" Was not the case for: {prompt}"
-                    )
-
-            self.extra_vllm_init_kwargs["enable_chunked_prefill"] = True
-            self.extra_vllm_init_kwargs["enable_prefix_caching"] = True
 
         dataset = Dataset.from_dict({idx_column: list(range(max_num_samples)), "prompt": prompts})
 
         return self.annotate_dataset(
             output_dir=output_dir,
-            full_prompt_template="{prompt}",
-            prompt_template_prefix=prompt_prefix,
+            prompt_template="{prompt}",
             dataset=dataset,
             new_hub_id=new_hub_id,
             overwrite=overwrite,

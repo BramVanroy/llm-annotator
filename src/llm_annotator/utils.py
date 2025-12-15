@@ -1,6 +1,7 @@
 import functools
 import hashlib
 import json
+import re
 import sys
 import time
 from importlib.metadata import version
@@ -192,3 +193,21 @@ def get_hf_username() -> str | None:
     if whowasi and "name" in whowasi and whowasi["type"] == "user":
         return whowasi["name"]
     return None
+
+
+_PLACEHOLDER_RE = re.compile(r"\{[^}]+\}")
+
+
+def extract_prompt_prefix(prompt: str) -> str:
+    """Extract the prefix of a prompt up to the first occurrence of a {placeholder}, or,
+    if no such placeholder exists, return the entire prompt.
+
+    Can return an empty string if the prompt starts with a {placeholder}. This is
+    likely to happen when using the `generate_dataset` function with varying prompts
+
+    Args:
+        prompt: The full prompt string.
+    Returns:
+        The prefix of the prompt up to the first {placeholder} or the entire prompt if no placeholder exists.
+    """
+    return re.split(_PLACEHOLDER_RE, prompt, maxsplit=1)[0]

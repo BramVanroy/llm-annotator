@@ -43,7 +43,7 @@ Classification:"""
     ) as anno:
         ds = anno.annotate_dataset(
             output_dir="outputs/sentiment-imdb-qwen",
-            full_prompt_template=prompt_template,
+            prompt_template=prompt_template,
             dataset_name="stanfordnlp/imdb",
             dataset_split="test",
             new_hub_id=f"{hf_user}/sentiment-imdb",
