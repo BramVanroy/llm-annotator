@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "required": ["qa"],
+  "properties": {
+    "qa": {
+      "type": "array",
+      "description": "Lijst van vraag-antwoord-paren. Leeg indien onvoldoende informatie.",
+      "items": {
+        "type": "object",
+        "required": ["vraag", "antwoord"],
+        "properties": {
+          "vraag": {
+            "type": "string"
+          },
+          "antwoord": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
