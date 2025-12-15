@@ -36,11 +36,11 @@ def main():
         extra_vllm_init_kwargs=extra_vllm_init_kwargs,
     ) as anno:
         anno.annotate_dataset(
-            output_dir="outputs/wiki-nl-qa",
+            output_dir="outputs/wiki-nl-mcq",
             prompt_template=prompt_template,
             dataset_name=dataset,
             dataset_split="train",
-            new_hub_id=f"{hf_user}/wiki-nl-qa",
+            new_hub_id=f"{hf_user}/wiki-nl-mcq",
             keep_columns=["text", "title", "url"],
             upload_every_n_samples=None,
             sampling_params=sampling_params,

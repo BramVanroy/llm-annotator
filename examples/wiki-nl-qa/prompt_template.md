@@ -1,3 +1,3 @@
-Schrijf examenvragen en -antwoorden volgens de gegeven richtlijnen in correct en vlot Nederlands:
+Schrijf een examenvraag, vier mogelijke antwoord opties, en duidt de juiste optie aan. Gebruik correct en vlot Nederlands:
 
 {text}

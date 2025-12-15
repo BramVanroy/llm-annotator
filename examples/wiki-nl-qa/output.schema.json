@@ -1,23 +1,24 @@
 {
   "type": "object",
-  "required": ["qa"],
+  "required": ["vraag", "optie_1", "optie_2", "optie_3", "optie_4", "antwoord"],
   "properties": {
-    "qa": {
-      "type": "array",
-      "description": "Lijst van vraag-antwoord-paren. Leeg indien onvoldoende informatie.",
-      "items": {
-        "type": "object",
-        "required": ["vraag", "antwoord"],
-        "properties": {
-          "vraag": {
-            "type": "string"
-          },
-          "antwoord": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": false
-      }
+    "vraag": {
+      "type": "string"
+    },
+    "optie_1": {
+      "type": "string"
+    },
+    "optie_2": {
+      "type": "string"
+    },
+    "optie_3": {
+      "type": "string"
+    },
+    "optie_4": {
+      "type": "string"
+    },
+    "antwoord": {
+      "enum": ["optie_1", "optie_2", "optie_3", "optie_4"]
     }
   },
   "additionalProperties": false
