@@ -34,6 +34,7 @@ def main():
         max_num_seqs=32,
         gpu_memory_utilization=0.95,
         extra_vllm_init_kwargs=extra_vllm_init_kwargs,
+        num_proc=8,
     ) as anno:
         anno.annotate_dataset(
             output_dir="outputs/wiki-nl-mcq",
@@ -47,6 +48,7 @@ def main():
             system_message=system_message,
             sort_by_length=True,
             output_schema=json_schema,
+
         )
 
 

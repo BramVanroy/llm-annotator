@@ -10,9 +10,10 @@ def main(num_workers: int | None = None):
 
     # Must contain three sentences (= three periods followed by a space, and three capital letters)
     # Must contain between 30 and 24,000 words
+    # Must contain between 200 and 72,000 characters
     # (Add space at the end to count the last sentence if it ends with a period)
     ds = ds.filter(
-        lambda text: f"{text} ".count(". ") >= 3 and 30 < len(text.split()) < 24000,
+        lambda text: f"{text} ".count(". ") >= 3 and 30 < len(text.split()) < 24_000 and 200 < len(text) < 72_000,
         input_columns="text",
         num_proc=num_workers,
     )
