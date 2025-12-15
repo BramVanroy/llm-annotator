@@ -3,7 +3,7 @@ from datasets import load_dataset
 from llm_annotator.utils import get_hf_username
 
 
-def main():
+def main(num_workers: int | None = None):
     hf_user = get_hf_username()
 
     ds = load_dataset("HuggingFaceFW/finewiki", "nl")
@@ -14,11 +14,15 @@ def main():
     ds = ds.filter(
         lambda text: f"{text} ".count(". ") >= 3 and 30 < len(text.split()) < 24000,
         input_columns="text",
-        num_proc=8,
+        num_proc=num_workers,
     )
 
     ds.push_to_hub(f"{hf_user}/finewiki-nl-30-to-24k-tokens")
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    cparser = argparse.ArgumentParser()
+    cparser.add_argument("-j", "--num-workers", type=int, default=None)
+    cargs = cparser.parse_args()
+    main(num_workers=cargs.num_workers)
