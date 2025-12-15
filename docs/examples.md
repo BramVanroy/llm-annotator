@@ -34,11 +34,10 @@ with Annotator(
 ) as anno:
     ds = anno.annotate_dataset(
         output_dir="outputs/sentiment-imdb",
-        full_prompt_template=prompt_template,
+        prompt_template=prompt_template,
         dataset_name="stanfordnlp/imdb",
         dataset_split="test",
         max_num_samples=1000,
-        prompt_template_prefix=prompt_prefix,
         output_schema=output_schema,
         keep_columns=["text", "label"],
         sort_by_length=True,
@@ -49,13 +48,13 @@ with Annotator(
 
 ## Named Entity Recognition (NER) Data Generation
 
-Generate synthetic NER training data from scratch.
+Generate synthetic NER training data from scratch with a system message.
 
 ```python
 from llm_annotator import Annotator
 
 # Define the task prompt
-prompt_prefix = """You are a data generator for Named Entity Recognition (NER) tasks.
+system_message = """You are a data generator for Named Entity Recognition (NER) tasks.
 Generate diverse and realistic sentences containing named entities.
 
 Instructions:
@@ -65,7 +64,7 @@ Instructions:
 
 """
 
-prompt = prompt_prefix + "Generate a new sentence:"
+prompt = "Generate a new sentence:"
 
 # Define structured output schema
 output_schema = {
@@ -104,7 +103,7 @@ with Annotator(
     ds = anno.generate_dataset(
         output_dir="outputs/ner-generated",
         prompts=prompt,
-        prompt_prefix=prompt_prefix,
+        system_message=system_message,
         max_num_samples=1000,
         output_schema=output_schema,
         sampling_params=sampling_params,
@@ -145,7 +144,7 @@ with Annotator(
 ) as anno:
     ds = anno.annotate_dataset(
         output_dir="outputs/translation-en-fr",
-        full_prompt_template=prompt_template,
+        prompt_template=prompt_template,
         dataset_name="wmt14",
         dataset_config="fr-en",
         dataset_split="test",
@@ -177,7 +176,7 @@ with Annotator(
 ) as anno:
     ds = anno.annotate_dataset(
         output_dir="outputs/summaries-cnn",
-        full_prompt_template=prompt_template,
+        prompt_template=prompt_template,
         dataset_name="cnn_dailymail",
         dataset_config="3.0.0",
         dataset_split="train",
@@ -264,7 +263,7 @@ with Annotator(
 ) as anno:
     ds = anno.annotate_dataset(
         output_dir="outputs/paraphrased-imdb",
-        full_prompt_template=prompt_template,
+        prompt_template=prompt_template,
         dataset_name="stanfordnlp/imdb",
         dataset_split="train",
         max_num_samples=10000,
@@ -315,7 +314,7 @@ with Annotator(
 ) as anno:
     ds = anno.annotate_dataset(
         output_dir="outputs/qa-pairs",
-        full_prompt_template=prompt_template,
+        prompt_template=prompt_template,
         dataset_name="wikipedia",
         dataset_config="20220301.en",
         dataset_split="train",
@@ -371,7 +370,7 @@ with Annotator(
 ) as anno:
     ds = anno.annotate_dataset(
         output_dir="outputs/code-docs",
-        full_prompt_template=prompt_template,
+        prompt_template=prompt_template,
         dataset_name="code_search_net",
         dataset_config="python",
         dataset_split="train",
