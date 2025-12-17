@@ -6,6 +6,7 @@ from llm_annotator.utils import get_hf_username
 
 
 CURR_DIR = Path(__file__).parent
+OUTPUT_ROOT_DIR = CURR_DIR.parent.parent.joinpath("outputs")
 
 
 def main():
@@ -34,10 +35,9 @@ def main():
         max_num_seqs=32,
         gpu_memory_utilization=0.95,
         extra_vllm_init_kwargs=extra_vllm_init_kwargs,
-        num_proc=8,
     ) as anno:
         anno.annotate_dataset(
-            output_dir="outputs/wiki-nl-mcq",
+            output_dir=OUTPUT_ROOT_DIR / "wiki-nl-mcq",
             prompt_template=prompt_template,
             dataset_name=dataset,
             dataset_split="train",
