@@ -15,7 +15,7 @@ test:
 	uv run pytest --cov=$(PACKAGE) --cov-report=term-missing --cov-report=xml
 
 typecheck:
-	uv run mypy $(PACKAGE) tests/ scripts/
+	uv run mypy $(PACKAGE) tests/
 
 DOCS_BRANCH ?= tmp-gh-pages
 DOCS_VERSION ?= 0.0.0

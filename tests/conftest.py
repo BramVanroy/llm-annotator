@@ -9,6 +9,7 @@ from datasets import Dataset
 from huggingface_hub import delete_repo
 
 from llm_annotator.annotator import Annotator
+from llm_annotator.clients.vllm_offline_client import VLLMOfflineClient
 from llm_annotator.utils import get_hf_username
 
 
@@ -93,8 +94,9 @@ def json_schema_file(temp_dir):
 @pytest.fixture(scope="session")
 def test_annotator(test_model_id, prompt_template_file):
     """Create a test annotator instance."""
+    client = VLLMOfflineClient(model=test_model_id)
     return Annotator(
-        model=test_model_id,
+        client=client,
         num_proc=None,
     )
 

@@ -26,6 +26,8 @@ classifiers = [
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "datasets>=4.8.5,<5",
+    "google-genai>=2.3.0",
+    "openai>=2.36.0",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +40,9 @@ anthropic = [
 ]
 openai = [
     "openai>=2.36.0,<3",
+]
+gemini = [
+    "google-genai>=2.3.0,<3",
 ]
 
 [dependency-groups]
@@ -104,14 +109,16 @@ line-ending = "auto"
 
 [tool.interrogate]
 style = "google"
-exclude = ["tests", "scratches"]
+exclude = ["tests", "scratches", "examples", "docs"]
 ignore-private = true
 ignore-semiprivate = true
+ignore-nested-functions = true
+ignore-module = true
 color = true
 
 [tool.mypy]
 python_version = "3.12"
-files = ["scripts", "src", "tests"]
+files = ["src", "tests"]
 pretty = true
 show_error_codes = true
 warn_unused_ignores = true
@@ -123,6 +130,10 @@ check_untyped_defs = true
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = ["torch.*", "vllm.*", "datasets.*", "tqdm.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "src"]

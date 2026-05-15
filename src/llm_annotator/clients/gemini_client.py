@@ -4,36 +4,39 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from llm_annotator.client.base import (
+from llm_annotator.clients.base import (
     Client,
     Provider,
     ProviderRuntimeOptions,
     Response,
 )
-from llm_annotator.client.exceptions import ProviderError
+from llm_annotator.clients.exceptions import ProviderError
 
 
 if TYPE_CHECKING:
     from google.genai.types import GenerateContentResponse
 
 
-class GeminiClient(Client[GenerateContentResponse]):
+class GeminiClient(Client["GenerateContentResponse", ProviderRuntimeOptions]):
     """Client wrapper for Gemini APIs."""
 
     provider_type = Provider.GEMINI
 
-    def __init__(self, model: str, api_key: str | None = None) -> None:
+    def __init__(
+        self, model: str, max_workers: int = 4, api_key: str | None = None
+    ) -> None:
         """Initialize the Gemini client.
 
         Args:
             model: Gemini model identifier.
+            max_workers: Maximum number of concurrent worker threads for ``batch_generate``.
             api_key: Gemini API key. If omitted, the SDK will use
                 ``GEMINI_API_KEY`` from the environment.
         """
 
         from google import genai
 
-        super().__init__(model=model)
+        super().__init__(model=model, max_workers=max_workers)
         self._api_key = api_key
         self._client = genai.Client(api_key=self._api_key)
 
@@ -89,6 +92,12 @@ class GeminiClient(Client[GenerateContentResponse]):
         config = types.GenerateContentConfig(
             max_output_tokens=options.max_tokens,
             system_instruction=system_instruction or None,
+            response_schema=options.json_schema
+            if options.json_schema is not None
+            else None,
+            response_mime_type="application/json"
+            if options.json_schema is not None
+            else None,
         )
         try:
             response = self._client.models.generate_content(
@@ -107,10 +116,29 @@ class GeminiClient(Client[GenerateContentResponse]):
         messages: list[list[dict[str, str]]],
         options: ProviderRuntimeOptions | None = None,
     ) -> list[Response]:
-        """Batch generation for Gemini is not currently implemented."""
-        raise NotImplementedError(
-            "Batch generation is not yet implemented for the Gemini client."
-        )
+        """Generate responses for a batch of inputs concurrently.
+
+        The Gemini API has no native synchronous batch endpoint, so requests
+        are dispatched in parallel using a thread pool.
+
+        Args:
+            messages: List of message lists, one per request.
+            options: Optional generation configuration.
+
+        Returns:
+            A list of Response objects in the same order as the input.
+
+        Raises:
+            ProviderError: If any individual request fails.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = [
+                executor.submit(self.generate, messages=msgs, options=options)
+                for msgs in messages
+            ]
+        return [f.result() for f in futures]
 
     def _handle_stop_reason(
         self,

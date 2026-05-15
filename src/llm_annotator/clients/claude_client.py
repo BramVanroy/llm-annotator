@@ -4,34 +4,37 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from llm_annotator.client.base import (
+from llm_annotator.clients.base import (
     Client,
     Provider,
     ProviderRuntimeOptions,
     Response,
 )
-from llm_annotator.client.exceptions import ProviderError
+from llm_annotator.clients.exceptions import ProviderError
 
 
 if TYPE_CHECKING:
     from anthropic.types.message import Message as ClaudeMessage
 
 
-class ClaudeClient(Client[ClaudeMessage]):
+class ClaudeClient(Client["ClaudeMessage", ProviderRuntimeOptions]):
     """Client wrapper for Anthropic Claude APIs."""
 
     provider_type = Provider.CLAUDE
 
-    def __init__(self, model: str, api_key: str | None = None) -> None:
+    def __init__(
+        self, model: str, max_workers: int = 4, api_key: str | None = None
+    ) -> None:
         """Initialize the Claude client.
 
         Args:
             model: Claude model identifier.
+            max_workers: Maximum number of concurrent worker threads for ``batch_generate``.
             api_key: Anthropic API key. If not provided, the client will attempt to read from the environment variable `ANTHROPIC_API_KEY`.
         """
         from anthropic import Anthropic
 
-        super().__init__(model=model)
+        super().__init__(model=model, max_workers=max_workers)
 
         self._api_key = api_key
         self._client = Anthropic(api_key=self._api_key)
@@ -79,15 +82,21 @@ class ClaudeClient(Client[ClaudeMessage]):
 
         Raises:
             ProviderError: If the provider call fails.
-            ParsingError: If model output cannot be parsed as JSON.
         """
         options = options or ProviderRuntimeOptions()
         try:
             request_payload: dict[str, Any] = {
                 "model": self.model,
-                "max_tokens": options.max_tokens,
+                "max_tokens": options.max_tokens or 4096,
                 "messages": messages,
             }
+            if options.json_schema is not None:
+                request_payload["output_config"] = {
+                    "format": {
+                        "type": "json_schema",
+                        "schema": options.json_schema,
+                    }
+                }
 
             response = self._client.messages.create(**request_payload)
         except Exception as exc:
@@ -101,13 +110,29 @@ class ClaudeClient(Client[ClaudeMessage]):
         messages: list[list[dict[str, str]]],
         options: ProviderRuntimeOptions | None = None,
     ) -> list[Response]:
-        """Batch generation for Claude is not currently implemented.
-        Info: https://platform.claude.com/docs/en/build-with-claude/batch-processing#how-the-message-batches-api-works
-        Running batches can be cancelled: https://platform.claude.com/docs/en/build-with-claude/batch-processing#canceling-a-message-batch
+        """Generate responses for a batch of inputs concurrently.
+
+        The Anthropic API has no native synchronous batch endpoint, so requests
+        are dispatched in parallel using a thread pool.
+
+        Args:
+            messages: List of message lists, one per request.
+            options: Optional generation configuration.
+
+        Returns:
+            A list of Response objects in the same order as the input.
+
+        Raises:
+            ProviderError: If any individual request fails.
         """
-        raise NotImplementedError(
-            "Batch generation is not yet implemented for the Claude client."
-        )
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = [
+                executor.submit(self.generate, messages=msgs, options=options)
+                for msgs in messages
+            ]
+        return [f.result() for f in futures]
 
     def _handle_stop_reason(
         self, *, stop_reason: str | None, num_output_tokens: int | None

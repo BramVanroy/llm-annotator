@@ -1,24 +1,25 @@
 from __future__ import annotations
 
-import gc
+import dataclasses
 import json
 import shutil
 import string
-from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import wraps
 from math import ceil
 from pathlib import Path
 from typing import Any, Callable, Iterable, Literal, Sequence
 
-from datasets import Dataset, IterableDataset, concatenate_datasets, get_dataset_split_names, load_dataset
+from datasets import (
+    Dataset,
+    concatenate_datasets,
+    get_dataset_split_names,
+    load_dataset,
+)
 from huggingface_hub import create_branch, create_repo, upload_large_folder
-from torch import cuda
 from tqdm import tqdm
-from vllm import LLM, RequestOutput, SamplingParams
-from vllm.distributed import destroy_distributed_environment, destroy_model_parallel
-from vllm.sampling_params import StructuredOutputsParams
 
+from llm_annotator.clients.base import Client, ProviderRuntimeOptions, Response
 from llm_annotator.utils import (
     ensure_returns_bool,
     ensure_returns_dict,
@@ -29,138 +30,112 @@ from llm_annotator.utils import (
 )
 
 
-def destroy_model_on_error(func):
+def destroy_on_error(func):
+    """Decorate an ``Annotator`` method to call :meth:`~Annotator.destroy` on any exception.
+
+    Catches ``BaseException`` (including ``KeyboardInterrupt`` and ``SystemExit``)
+    so resources are freed even on forced termination. The original exception
+    is always re-raised after the cleanup attempt.
+
+    Args:
+        func: The instance method to wrap.
+
+    Returns:
+        The wrapped callable with automatic cleanup on failure.
+    """
+
     @wraps(func)
     def wrapper(self, *args, **kwargs):
         try:
             return func(self, *args, **kwargs)
         except BaseException as e:
-            # Catch BaseException so we also clean on KeyboardInterrupt/SystemExit
             try:
-                self.destroy_model()
+                self.destroy()
             except Exception as clean_err:
-                # Don't hide the original error; attach a note (Python 3.11+)
                 if hasattr(e, "__notes__"):
                     e.__notes__.append(f"Cleanup failed: {clean_err!r}")
-            raise  # re-raise the original exception
+            raise
 
     return wrapper
-
-
-VLLM_ARGS: set[str] = {
-    "model",
-    "tensor_parallel_size",
-    "quantization",
-    "max_model_len",
-    "enforce_eager",
-    "max_num_seqs",
-    "gpu_memory_utilization",
-    "max_num_batched_tokens",
-}
 
 
 @dataclass(slots=True)
 class Annotator:
     """Sensible base class for LLM-based dataset annotation.
 
-    This class provides a framework for annotating datasets using large language models
-    through the vLLM library. It handles dataset loading, processing, and output generation
-    with support for streaming, batching, and uploading to Hugging Face Hub.
+    This class provides a framework for annotating datasets using large language
+    models via a pluggable :class:`~llm_annotator.clients.base.Client`. It handles
+    dataset loading, processing, and output generation with support for batching
+    and uploading to Hugging Face Hub.
 
-    The ``Annotator`` class offers two main public methods for working with datasets:
+    The ``Annotator`` class offers two main public methods:
 
-    - :meth:`annotate_dataset`: Annotate an existing dataset by applying a prompt template
-      to each sample and generating model completions.
-    - :meth:`generate_dataset`: Generate a new dataset from scratch by creating completions
-      for given prompts without requiring an input dataset.
-
-    Both methods support advanced features like structured output via JSON schemas,
-    automatic retries for invalid outputs, custom validation and postprocessing,
-    and incremental uploads to Hugging Face Hub.
+    * :meth:`annotate_dataset` — annotate an existing dataset.
+    * :meth:`generate_dataset` — generate a brand-new dataset from a prompt.
 
     Args:
-        model: The Hugging Face model identifier or local path.
-        num_proc: Number of processes for dataset operations.
-        tensor_parallel_size: Number of GPUs for tensor parallelism. Especially useful if running on
-            multiple GPUs; set to the number of GPUs available.
-        max_num_seqs: Maximum number of sequences to process in parallel (~batch size).
-        gpu_memory_utilization: Max. GPU memory utilization goal.
-        enforce_eager: Whether to enforce eager execution mode. Eager mode is safer but may be slower.
-        quantization: Quantization method to use (optional).
-        max_model_len: Maximum model sequence length.
-        enable_thinking: Whether to enable thinking mode for chat templates.
-        verbose: Whether to enable verbose logging.
+        client: An initialised :class:`~llm_annotator.clients.base.Client`
+            instance that performs the actual generation.
+        batch_size: Number of samples per inference batch.
+        num_proc: Number of processes for dataset preprocessing. Do **not**
+            set this when ``client`` is a
+            :class:`~llm_annotator.clients.VLLMOfflineClient` — the model
+            cannot be pickled for multiprocessing.
+        verbose: Whether to print progress information.
 
     Examples:
-        Basic usage with context manager (recommended):
+        Basic usage with an OpenAI client:
 
-        >>> from llm_annotator import Annotator
-        >>>
-        >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct", max_model_len=4096) as anno:
-        ...     ds = anno.annotate_dataset(
-        ...         output_dir="outputs/sentiment",
-        ...         prompt_template="Classify sentiment: {text}",
-        ...         dataset_name="stanfordnlp/imdb",
-        ...         dataset_split="test",
-        ...         max_num_samples=100,
-        ...     )
-
-        Advanced configuration with multiple GPUs:
-
-        >>> with Annotator(
-        ...     model="meta-llama/Llama-3.1-70B-Instruct",
-        ...     tensor_parallel_size=4,  # Use 4 GPUs
-        ...     max_num_seqs=128,
-        ...     gpu_memory_utilization=0.9,
-        ...     quantization="fp8",
-        ...     verbose=True,
-        ... ) as anno:
-        ...     ds = anno.annotate_dataset(
-        ...         output_dir="outputs/annotations",
-        ...         prompt_template="Analyze: {text}",
-        ...         dataset_name="my-dataset",
-        ...     )
-
-        Manual resource management (if not using context manager):
-
-        >>> anno = Annotator(model="meta-llama/Llama-3.2-3B-Instruct")
-        >>> try:
+        >>> from llm_annotator import Annotator, OpenAIClient
+        >>> client = OpenAIClient(model="gpt-4o-mini")  # doctest: +SKIP
+        >>> with Annotator(client=client) as anno:  # doctest: +SKIP
         ...     ds = anno.annotate_dataset(
         ...         output_dir="outputs/data",
         ...         prompt_template="Process: {text}",
         ...         dataset_name="my-dataset",
         ...     )
+
+        Usage with vLLM offline client:
+
+        >>> from llm_annotator import Annotator, VLLMOfflineClient
+        >>> client = VLLMOfflineClient(  # doctest: +SKIP
+        ...     model="meta-llama/Llama-3.2-3B-Instruct",
+        ...     max_model_len=4096,
+        ... )
+        >>> try:  # doctest: +SKIP
+        ...     ds = Annotator(client=client).annotate_dataset(
+        ...         output_dir="outputs/data",
+        ...         prompt_template="Process: {text}",
+        ...         dataset_name="my-dataset",
+        ...     )
         ... finally:
-        ...     anno.destroy_model()  # Clean up GPU resources
+        ...     client.destroy()
     """
 
-    model: str
+    client: Client
+    batch_size: int = 256
     num_proc: int | None = None
-    tensor_parallel_size: int = 1
-    max_num_seqs: int = 256
-    gpu_memory_utilization: float = 0.95
-    enforce_eager: bool = False
-    quantization: str | None = None
-    # Add new args for vLLM init kwargs ALSO in `VLLM_ARGS` above!
-    max_model_len: int | None = None
-    max_num_batched_tokens: int | None = None
-    enable_thinking: bool = False
-    # Extra kwargs to pass to vLLM LLM init. In case of conflict, these
-    # take lower precedence than the explicitly defined args above.
-    extra_vllm_init_kwargs: dict[str, Any] = field(default_factory=dict)
     verbose: bool = False
 
-    pipe: LLM | None = field(default=None, init=False)
-
     def __enter__(self):
-        # You can use the annotator in a "with" block to ensure proper cleanup
+        """Enter the context manager, returning the annotator instance."""
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        self.destroy_model()
+        """Exit the context manager and free all client resources."""
+        self.destroy()
+
+    def destroy(self) -> None:
+        """Clean up all resources used by the underlying client."""
+        self.client.destroy()
 
     def _get_skip_idxs(
-        self, *, pdout: Path, idx_column: str, dataset_split: str | None = None, dataset_config: str | None = None
+        self,
+        *,
+        pdout: Path,
+        idx_column: str,
+        dataset_split: str | None = None,
+        dataset_config: str | None = None,
     ) -> set[int]:
         """Get indices of samples that have already been processed.
 
@@ -181,10 +156,14 @@ class Annotator:
                 ds = Dataset.from_json(str(pfin))
 
                 if dataset_split and "dataset_split" in ds.column_names:
-                    ds = ds.filter(lambda s: s["dataset_split"] == dataset_split)
+                    ds = ds.filter(
+                        lambda s: s["dataset_split"] == dataset_split
+                    )
 
                 if dataset_config and "dataset_config" in ds.column_names:
-                    ds = ds.filter(lambda s: s["dataset_config"] == dataset_config)
+                    ds = ds.filter(
+                        lambda s: s["dataset_config"] == dataset_config
+                    )
 
                 ids_done.update(ds.unique(idx_column))
 
@@ -198,17 +177,17 @@ class Annotator:
         idx_column: str,
         dataset_name: str | None = None,
         dataset: Dataset | None = None,
-        dataset_config: str = None,
+        dataset_config: str | None = None,
         data_dir: str | None = None,
         dataset_split: str | None = None,
-        streaming: bool = False,
         max_num_samples: int | None = None,
         shuffle_seed: int | None = None,
         cache_input_dataset: bool = True,
         use_cached_input_dataset: bool = True,
         prompt_fields: Iterable[str] = (),
         task_prefix: str = "",
-        sort_by_length: bool | Literal["shortest_first", "longest_first"] = False,
+        sort_by_length: bool
+        | Literal["shortest_first", "longest_first"] = False,
         system_message: str | None = None,
     ) -> tuple[Dataset, int]:
         """Load and preprocess the dataset for annotation.
@@ -223,11 +202,9 @@ class Annotator:
             dataset_config: Dataset configuration name (optional).
             data_dir: Data directory for local datasets (optional).
             dataset_split: Specific split to load (optional).
-            streaming: Whether to use streaming mode for large datasets.
             max_num_samples: Maximum number of samples to process.
             shuffle_seed: Seed for dataset shuffling (optional).
             cache_input_dataset: Whether to cache the input dataset.
-                Especially useful if using streaming + max_num_samples.
             use_cached_input_dataset: Whether to use a cached input dataset if available.
             prompt_fields: Fields required by the prompt template.
             task_prefix: String prefix to use for internal column names and file operations.
@@ -246,22 +223,25 @@ class Annotator:
             ValueError: If configuration is invalid or required fields are missing.
         """
         if dataset is not None and dataset_name is not None:
-            raise ValueError("Provide only one of 'dataset' or 'dataset_name', not both.")
+            raise ValueError(
+                "Provide only one of 'dataset' or 'dataset_name', not both."
+            )
 
         if dataset is None and dataset_name is None:
-            raise ValueError("Either 'dataset' or 'dataset_name' must be provided.")
+            raise ValueError(
+                "Either 'dataset' or 'dataset_name' must be provided."
+            )
 
         if max_num_samples is not None and max_num_samples <= 0:
-            raise ValueError("'max_num_samples' must be a positive integer or None")
-
-        if streaming and not max_num_samples:
             raise ValueError(
-                "When 'streaming' is True, 'max_num_samples' must be set to a positive integer (otherwise might as well not use streaming)."
+                "'max_num_samples' must be a positive integer or None"
             )
 
         # Split verification and defaulting
         if dataset_name:
-            split_names = get_dataset_split_names(dataset_name, config_name=dataset_config)
+            split_names = get_dataset_split_names(
+                dataset_name, config_name=dataset_config
+            )
             if not dataset_split:
                 if len(split_names) == 1:
                     dataset_split = split_names[0]
@@ -271,64 +251,51 @@ class Annotator:
                         "Please specify a split using the 'dataset_split' argument."
                     )
             elif dataset_split not in split_names:
-                raise ValueError(f"Dataset '{dataset_name}' does not have a split named '{dataset_split}'")
+                raise ValueError(
+                    f"Dataset '{dataset_name}' does not have a split named '{dataset_split}'"
+                )
 
         pdout = Path(pdout)
         p_cached_input_ds = pdout / f"{task_prefix}cached_input_dataset"
 
-        # If exists and not empty, try to load from cache. If loading the
-        # cached dataset fails (corrupted cache), fall back to loading from
-        # the original source.
+        # If exists and not empty, try to load from cache.
         loaded_ds = None
-        if use_cached_input_dataset and p_cached_input_ds.exists() and p_cached_input_ds.stat().st_size > 0:
+        if (
+            use_cached_input_dataset
+            and p_cached_input_ds.exists()
+            and p_cached_input_ds.stat().st_size > 0
+        ):
             loaded_ds = Dataset.load_from_disk(p_cached_input_ds)
 
         # Always prefer a locally cached dataset if available
         if loaded_ds is not None:
             dataset = loaded_ds
         else:
-            # No dataset provided, so got to load it from dataset_name
-            if streaming:
-                ds_iter = dataset
-                if ds_iter is None:
-                    ds_iter: IterableDataset = load_dataset(
-                        dataset_name, name=dataset_config, data_dir=data_dir, split=dataset_split, streaming=True
-                    )
+            if dataset is None:
+                dataset = load_dataset(
+                    dataset_name,
+                    name=dataset_config,
+                    data_dir=data_dir,
+                    split=dataset_split,
+                )
 
-                if shuffle_seed is not None:
-                    # IterableDataset.shuffle does not accept buffer_size in some
-                    # versions; call with only seed to be compatible.
-                    try:
-                        ds_iter = ds_iter.shuffle(seed=shuffle_seed, buffer_size=10_000)
-                    except TypeError:
-                        ds_iter = ds_iter.shuffle(seed=shuffle_seed)
+            if shuffle_seed is not None:
+                dataset = dataset.shuffle(seed=shuffle_seed)
 
-                def yield_fn():
-                    num_samples = 0
-                    for sample in ds_iter:
-                        yield sample
-                        num_samples += 1
-                        if max_num_samples and num_samples >= max_num_samples:
-                            break
-
-                # Convert to Dataset
-                dataset = Dataset.from_generator(yield_fn)
-            else:
-                # Use the provided dataset if available
-                if dataset is None:
-                    dataset = load_dataset(dataset_name, name=dataset_config, data_dir=data_dir, split=dataset_split)
-
-                if shuffle_seed is not None:
-                    dataset = dataset.shuffle(seed=shuffle_seed)
-
-                if max_num_samples:
-                    dataset = dataset.select(range(min(max_num_samples, len(dataset))))
+            if max_num_samples:
+                dataset = dataset.select(
+                    range(min(max_num_samples, len(dataset)))
+                )
 
             # Validate that the dataset contains all fields required by the
             # prompt template. Tests expect a ValueError when a required
             # field is missing.
             if dataset is not None and prompt_fields:
-                missing = [fld for fld in prompt_fields if fld not in dataset.column_names]
+                missing = [
+                    fld
+                    for fld in prompt_fields
+                    if fld not in dataset.column_names
+                ]
                 if missing:
                     raise ValueError(
                         f"Template contains field '{missing[0]}' not present in dataset."
@@ -353,7 +320,9 @@ class Annotator:
 
             if sort_by_length:
                 if self.verbose:
-                    print("Sorting dataset roughly by prompt length for more efficient batching (longest first)...")
+                    print(
+                        "Sorting dataset roughly by prompt length for more efficient batching (longest first)..."
+                    )
                 dataset = dataset.map(
                     lambda prompt: {f"{task_prefix}_length": len(prompt)},
                     num_proc=self.num_proc,
@@ -365,9 +334,9 @@ class Annotator:
                 else:
                     do_reverse = True
 
-                dataset = dataset.sort(f"{task_prefix}_length", reverse=do_reverse).remove_columns(
-                    [f"{task_prefix}_length"]
-                )
+                dataset = dataset.sort(
+                    f"{task_prefix}_length", reverse=do_reverse
+                ).remove_columns([f"{task_prefix}_length"])
 
             if cache_input_dataset:
                 dataset.save_to_disk(p_cached_input_ds)
@@ -401,7 +370,7 @@ class Annotator:
         idx_column: str,
         task_prefix: str,
         system_message: str | None = None,
-    ) -> dict[str, str | int]:
+    ) -> dict[str, list[dict[str, str]]]:
         """Restructure the sample into a "messages" format. Fills in the prompt template with values from the sample,
         based on the prompt_fields.
 
@@ -423,7 +392,9 @@ class Annotator:
                     {"role": "system", "content": system_message},
                     {
                         "role": "user",
-                        "content": prompt_template.format(**{fld: sample[fld] for fld in prompt_fields}),
+                        "content": prompt_template.format(
+                            **{fld: sample[fld] for fld in prompt_fields}
+                        ),
                     },
                 ],
                 idx_column: idx,
@@ -433,7 +404,9 @@ class Annotator:
                 f"{task_prefix}prompted": [
                     {
                         "role": "user",
-                        "content": prompt_template.format(**{fld: sample[fld] for fld in prompt_fields}),
+                        "content": prompt_template.format(
+                            **{fld: sample[fld] for fld in prompt_fields}
+                        ),
                     }
                 ],
                 idx_column: idx,
@@ -467,29 +440,22 @@ class Annotator:
         """
         return dataset
 
-    def _load_pipeline(self) -> None:
-        """Load and initialize the vLLM pipeline for inference.
-
-        Configures the LLM with the specified parameters in class init. When `extra_vllm_init_kwargs`
-        are provided, they are merged with the explicitly defined args, with the explicitly defined
-        args taking precedence.
-        """
-        defaults = self.extra_vllm_init_kwargs.copy()
-        kwargs = {k: getattr(self, k) for k in VLLM_ARGS if getattr(self, k) is not None}
-        defaults.update(kwargs)
-        self.pipe: LLM = LLM(**defaults)
-
     def _process_output(
-        self, *, output: RequestOutput, output_schema: dict | None = None, task_prefix: str = ""
+        self,
+        *,
+        response: Response,
+        output_schema: dict | None = None,
+        task_prefix: str = "",
     ) -> dict[str, Any]:
-        """Process a single model output into the desired annotation format.
+        """Process a single model response into the desired annotation format.
 
         Override this method to implement custom output parsing and validation.
 
         Args:
-            output: The raw output from the model for a single input.
-            output_schema: Optional JSON schema for guided decoding.
+            response: The structured response from the client.
+            output_schema: Optional JSON schema for structured output.
             task_prefix: String prefix to use for internal column names.
+
         Returns:
             - A key '{prefix}response' containing the raw model output text.
             - A key '{prefix}finish_reason' indicating why generation stopped.
@@ -499,12 +465,10 @@ class Annotator:
                 - Keys from the output_schema with their parsed values (or None if parsing failed).
                 - A key '{prefix}valid_fields' indicating if all required fields were valid.
         """
-        raw_response = output.outputs[0].text
-
-        data = {
-            f"{task_prefix}response": raw_response,
-            f"{task_prefix}finish_reason": output.outputs[0].finish_reason if output.outputs else "unknown",
-            f"{task_prefix}num_tokens": len(output.outputs[0].token_ids) if output.outputs else 0,
+        data: dict[str, Any] = {
+            f"{task_prefix}response": response.text,
+            f"{task_prefix}finish_reason": response.stop_reason,
+            f"{task_prefix}num_tokens": response.num_output_tokens,
         }
         if not output_schema:
             return data
@@ -512,7 +476,7 @@ class Annotator:
         valid_fields = None
         result = dict.fromkeys(output_schema.get("properties", {}).keys())
         try:
-            parsed_response = json.loads(raw_response)
+            parsed_response = json.loads(response.text)
         except json.JSONDecodeError:
             valid_fields = False
         else:
@@ -528,74 +492,54 @@ class Annotator:
             **result,
         }
 
-    def destroy_model(self) -> None:
-        """Clean up model resources to free memory.
-
-        Destroys the distributed environment, clears GPU cache, and resets internal state.
-        """
-        if isinstance(self.pipe, LLM):
-            destroy_model_parallel()
-            destroy_distributed_environment()
-
-            try:
-                self.pipe.llm_engine.model_executor.shutdown()
-                del self.pipe.llm_engine.model_executor
-            except Exception:
-                pass
-            try:
-                self.pipe.llm_engine.engine_core.shutdown()
-                del self.pipe.llm_engine.engine_core
-            except Exception:
-                pass
-            del self.pipe.llm_engine
-            del self.pipe
-            cuda.empty_cache()
-            gc.collect()
-
-            self.pipe = None
-
     def _process_batch(
         self,
         *,
         batch: dict[str, list[Any]],
-        sampling_params: SamplingParams,
+        options: ProviderRuntimeOptions | None,
         task_prefix: str = "",
         validate_fn: Callable | None = None,
         postprocess_fn: Callable | None = None,
     ) -> list[dict[str, Any]]:
-        """Process a batch of samples through the model.
+        """Process a batch of samples through the client.
 
         Takes a batch of prompted samples, runs inference, and processes
-        the outputs using the `_process_output` method.
+        the outputs using the :meth:`_process_output` method.
 
         Args:
             batch: Dictionary containing batch data with prompted samples.
-            sampling_params: Sampling parameters for model generation.
+            options: Runtime options passed to the client.
             task_prefix: String prefix to use for internal column names.
             validate_fn: Optional custom validation function that takes a processed
                 output dictionary and must return a boolean indicating validity. If a JSON schema
                 was passed, and the fields were invalid, this function will not be called
-                and `valid` will be set to False directly. The function will receive a single dictionary
-                with keys as produced by `_process_output`: 1. the raw response ("{prefix}response"),
-                2. the finish reason ("{prefix}finish_reason"), 3. the number of tokens ("{prefix}num_tokens").
-                When an output schema was provided, also the parsed JSON fields and the "{prefix}valid_fields" key.
-            postprocess_fn: Optional function to postprocess each sample after annotation. Must return a modified
-                sample dictionary.
+                and `valid` will be set to False directly.
+            postprocess_fn: Optional function to postprocess each sample after annotation.
 
         Returns:
             List of processed output dictionaries for each sample in the batch.
         """
-        output_schema = sampling_params.structured_outputs.json if sampling_params.structured_outputs else None
-        outputs = self.pipe.chat(batch[f"{task_prefix}prompted"], sampling_params, use_tqdm=False)
+        output_schema = options.json_schema if options is not None else None
+        responses = self.client.batch_generate(
+            messages=batch[f"{task_prefix}prompted"],
+            options=options,
+        )
 
         results = []
-        for outp in outputs:
-            res = self._process_output(output=outp, output_schema=output_schema, task_prefix=task_prefix)
+        for response in responses:
+            res = self._process_output(
+                response=response,
+                output_schema=output_schema,
+                task_prefix=task_prefix,
+            )
             if postprocess_fn:
                 res = ensure_returns_dict(postprocess_fn, res)
 
             if validate_fn:
-                if f"{task_prefix}valid_fields" in res and res[f"{task_prefix}valid_fields"] is False:
+                if (
+                    f"{task_prefix}valid_fields" in res
+                    and res[f"{task_prefix}valid_fields"] is False
+                ):
                     is_valid = False
                 else:
                     is_valid = ensure_returns_bool(validate_fn, res)
@@ -603,58 +547,30 @@ class Annotator:
             results.append(res)
 
         if f"{task_prefix}valid_fields" in results[0]:
-            n_invalid = sum([1 for res in results if not res[f"{task_prefix}valid_fields"]])
+            n_invalid = sum(
+                1 for res in results if not res[f"{task_prefix}valid_fields"]
+            )
             if n_invalid == len(results) and self.verbose:
                 print(
                     "Warning: All samples in the batch failed to produce valid JSON fields."
-                    " This might be exceptional (esp. for smaller batches) "
-                    " but if it happens often it suggest a deeper issue,"
-                    " such as too few 'max_tokens' in sampling_params or limited 'model_len' in init."
+                    " This might be exceptional (esp. for smaller batches)"
+                    " but if it happens often it suggests a deeper issue,"
+                    " such as too few 'max_tokens' in options."
                 )
 
         if f"{task_prefix}valid" in results[0]:
-            n_invalid = sum([1 for res in results if not res[f"{task_prefix}valid"]])
+            n_invalid = sum(
+                1 for res in results if not res[f"{task_prefix}valid"]
+            )
             if n_invalid == len(results) and self.verbose:
                 print(
                     "Warning: All samples in the batch failed to produce valid outputs after"
-                    " running the custom validation function. This might be exceptional (esp. for smaller batches) "
-                    " but if it happens often it suggest a deeper issue,"
-                    " such as too few 'max_tokens' in sampling_params or limited 'model_len' in init."
+                    " running the custom validation function."
                 )
 
         return results
 
-    def do_cache_run(
-        self, prompt_prefix: str | None, system_message: str | None, sampling_params: SamplingParams | None = None
-    ):
-        """Run a dummy inference to initialize Automatic Prefix Caching with vLLM.
-        We could *not* do this but for large batch sizes this is beneficial: instead
-        of caching after the first batch has completed (might take longer),
-        we do a quick dummy run to initialize the cache right after model loading with
-        minimal overhead.
-
-        Args:
-            prompt_prefix: Optional prompt prefix to use as user message.
-            system_message: Optional system message to use as system role.
-            sampling_params: Optional sampling parameters to use for the dummy run.
-        """
-        if not prompt_prefix and not system_message:
-            return
-
-        messages = []
-        if system_message is not None:
-            messages.append({"role": "system", "content": system_message})
-        if prompt_prefix is not None:
-            messages.append({"role": "user", "content": prompt_prefix})
-
-        if sampling_params:
-            sampling_params = deepcopy(sampling_params)
-            sampling_params.max_tokens = 1
-        else:
-            sampling_params = SamplingParams(max_tokens=1)
-        self.pipe.chat([messages], sampling_params, use_tqdm=False)
-
-    @destroy_model_on_error
+    @destroy_on_error
     def annotate_dataset(
         self,
         output_dir: str | Path,
@@ -669,36 +585,33 @@ class Annotator:
         dataset_split: str | None = None,
         keep_columns: str | Iterable[str] | bool | None = None,
         shuffle_seed: int | None = None,
-        streaming: bool = False,
-        sampling_params: dict[str, Any] | None = None,
+        options: ProviderRuntimeOptions | None = None,
         max_num_samples: int | None = None,
         cache_input_dataset: bool = True,
         use_cached_input_dataset: bool = True,
         prompt_field_swapper: dict[str, str] | None = None,
         output_schema: str | dict[str, Any] | None = None,
-        whitespace_pattern: str | None = r"[ ]?",
         idx_column: str = "idx",
         upload_every_n_samples: int | None = 0,
         max_samples_per_output_file: int = 0,
         task_prefix: str = "",
-        sort_by_length: bool | Literal["shortest_first", "longest_first"] = False,
+        sort_by_length: bool
+        | Literal["shortest_first", "longest_first"] = False,
         validate_fn: Callable | None = None,
         postprocess_fn: Callable | None = None,
         num_retries_invalid: int = 5,
         system_message: str | None = None,
         keep_idx_column: bool = False,
     ) -> Dataset:
-        """Annotate an entire dataset using the configured model and prompt.
+        """Annotate an entire dataset using the configured client and prompt.
 
         Main entry point for dataset annotation. Handles the complete pipeline
         from dataset loading through model inference to output generation.
 
         Args:
             output_dir: Directory to save annotation results.
-            prompt_template: Prompt template string. Can contain fields in `{}`
-              that match dataset column names, e.g. "Analyze the following text: {text}".
-              A prefix will be automatically extracted for more efficient caching so
-              we can use Automatic Prefix Caching in vLLM.
+            prompt_template: Prompt template string. Can contain fields in ``{}``
+              that match dataset column names, e.g. ``"Analyse the following text: {text}"``.
             dataset_name: Name or path of the dataset to annotate.
             dataset: Pre-loaded dataset to use instead of loading from name/path.
             new_hub_id: Optional Hugging Face dataset ID for uploads.
@@ -706,45 +619,28 @@ class Annotator:
             dataset_config: Dataset configuration name (optional).
             data_dir: Data directory for local datasets (optional).
             dataset_split: Specific split to annotate (optional).
-            keep_columns: Columns to keep in output. True for all, None/false-y for none. Available default columns are
-                {prefix}prompted (filled-in prompt), {prefix}response (raw model output).
-                If a JSON schema is given, also {prefix}valid_fields (boolean if all required fields were valid
-                according to output_schema) and output columns according to the JSON schema if given.
-                During processing, the idx_column is always kept to ensure proper mapping, but it is
-                removed again in the final output dataset.
+            keep_columns: Columns to keep in output. ``True`` for all, ``None``/falsy for none.
             shuffle_seed: Seed for dataset shuffling (optional).
-            streaming: Whether to use streaming mode for large datasets.
-            sampling_params: Parameters for model generation (optional).
+            options: Runtime options passed to the client for generation.
             max_num_samples: Maximum number of samples to annotate.
-            cache_input_dataset: Whether to cache the input dataset. Especially useful if
-                using streaming + max_num_samples.
+            cache_input_dataset: Whether to cache the input dataset.
             use_cached_input_dataset: Whether to use a cached input dataset if available.
-            prompt_field_swapper: Optional mapping to replace template fields. Useful if you want to use
-                the same template with different datasets that use different field names.
-            output_schema: JSON schema as a dictionary or string (optional).
-            whitespace_pattern: Regex pattern for whitespace handling in guided decoding.
+            prompt_field_swapper: Optional mapping to replace template fields.
+            output_schema: Convenience parameter: JSON schema dict or JSON string. When
+                provided, it is injected into ``options.json_schema`` (creating a new
+                :class:`~llm_annotator.clients.base.ProviderRuntimeOptions` if ``options``
+                is ``None``). Raises ``ValueError`` if both ``output_schema`` and
+                ``options.json_schema`` are set.
             idx_column: Column name to use as unique identifier.
             upload_every_n_samples: Upload to hub every N samples (0 or None to disable).
             max_samples_per_output_file: Maximum samples per output file (0 for unlimited).
             task_prefix: String prefix to use for internal column names and file operations.
             sort_by_length: Whether to sort the dataset by prompt length for more efficient batching.
-                If set to "shortest_first", sort by shortest first, "longest_first" for longest first.
-                If set to True, defaults to longest first as that makes most sense to avoid OOM errors
-                down the line.
-            validate_fn: Optional custom validation function that takes a processed
-                output dictionary and must return a boolean indicating validity. If a JSON schema
-                was passed, and the fields were invalid, this function will not be called
-                and `valid` will be set to False directly. The function will receive a single dictionary
-                with keys as produced by `_process_output`: 1. the raw response ("{prefix}response"),
-                2. the finish reason ("{prefix}finish_reason"), 3. the number of tokens ("{prefix}num_tokens").
-                When an output schema was provided, also the parsed JSON fields and the "{prefix}valid_fields" key.
-            postprocess_fn: Optional function to postprocess each sample after annotation. Must return a modified
-                sample dictionary.
-            num_retries_invalid: Number of retries for samples that produce invalid outputs (when
-                a JSON schema is given and {prefix}valid_fields is False, or when a validate_fn is given
-                and it {prefix}valid is False).
+            validate_fn: Optional custom validation function.
+            postprocess_fn: Optional function to postprocess each sample after annotation.
+            num_retries_invalid: Number of retries for samples that produce invalid outputs.
             system_message: Optional system message to add as "system" role in chat prompts.
-            keep_idx_column: Whether to keep the idx_column in the final dataset before uploading and returning.
+            keep_idx_column: Whether to keep the idx_column in the final dataset.
 
         Returns:
             The concatenated dataset of all annotation results (JSON-invalid samples are NOT removed)
@@ -752,22 +648,20 @@ class Annotator:
         Examples:
             Basic sentiment classification with structured output:
 
-            >>> from llm_annotator import Annotator
+            >>> from llm_annotator import Annotator, OpenAIClient
             >>>
             >>> # Define prompt template and output schema
-            >>> prompt_prefix = "Analyze the sentiment of the following movie review.\\n\\nReview: "
-            >>> prompt_template = prompt_prefix + "{text}\\n\\nClassification:"
             >>> output_schema = {
             ...     "type": "object",
-            ...     "properties": {"sentiment": {"type": "string", "enum": ["positive", "negative"]}},
-            ...     "required": ["sentiment"],
-            ... }
-            >>>
-            >>> # Create annotator and process dataset
-            >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct", max_model_len=4096) as anno:
+            ...     "properties": {"sentiment": {"type": "string"}},
+            ... }  # doctest: +SKIP
+            >>> with Annotator(
+            ...     model="meta-llama/Llama-3.2-3B-Instruct",
+            ...     max_model_len=4096,
+            ... ) as anno:  # doctest: +SKIP
             ...     ds = anno.annotate_dataset(
             ...         output_dir="outputs/sentiment-imdb",
-            ...         prompt_template=prompt_template,
+            ...         prompt_template="Classify: {text}",
             ...         dataset_name="stanfordnlp/imdb",
             ...         dataset_split="test",
             ...         max_num_samples=100,
@@ -778,33 +672,35 @@ class Annotator:
 
             Advanced usage with streaming and Hub uploads:
 
-            >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct", verbose=True) as anno:
+            >>> with Annotator(
+            ...     model="meta-llama/Llama-3.2-3B-Instruct", verbose=True
+            ... ) as anno:  # doctest: +SKIP
             ...     ds = anno.annotate_dataset(
             ...         output_dir="outputs/large-dataset",
             ...         prompt_template="Translate to French: {text}",
             ...         dataset_name="wmt14",
             ...         dataset_config="fr-en",
             ...         dataset_split="train",
-            ...         streaming=True,  # Enable streaming for large datasets
+            ...         streaming=True,
             ...         max_num_samples=10000,
             ...         new_hub_id="username/translated-dataset",
-            ...         upload_every_n_samples=1000,  # Backup every 1000 samples
+            ...         upload_every_n_samples=1000,
             ...         cache_input_dataset=True,
             ...     )
 
             Using custom validation and postprocessing:
 
-            >>> def validate_translation(sample):
+            >>> def validate_translation(sample):  # doctest: +SKIP
             ...     # Custom validation: check if translation is not empty
             ...     return bool(sample.get("response", "").strip())
-            >>>
-            >>> def postprocess_sample(sample):
+            >>> def postprocess_sample(sample):  # doctest: +SKIP
             ...     # Strip whitespace from response
             ...     if "response" in sample:
             ...         sample["response"] = sample["response"].strip()
             ...     return sample
-            >>>
-            >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct") as anno:
+            >>> with Annotator(
+            ...     model="meta-llama/Llama-3.2-3B-Instruct"
+            ... ) as anno:  # doctest: +SKIP
             ...     ds = anno.annotate_dataset(
             ...         output_dir="outputs/validated",
             ...         prompt_template="Translate: {text}",
@@ -815,16 +711,15 @@ class Annotator:
             ...         num_retries_invalid=3,
             ...     )
         """
-        if dataset is not None and isinstance(dataset, IterableDataset):
-            streaming = True
+        if self.num_proc is not None and hasattr(self.client, "_pipe"):
+            raise ValueError(
+                "num_proc cannot be used with VLLMOfflineClient because the loaded model "
+                "cannot be pickled for multiprocessing. Set num_proc=None."
+            )
 
         upload_every_n_samples = upload_every_n_samples or 0
 
         prompt_template_prefix = extract_prompt_prefix(prompt_template)
-
-        # We ALWAYS enable chunked prefill and prefix caching for efficiency
-        self.extra_vllm_init_kwargs["enable_chunked_prefill"] = True
-        self.extra_vllm_init_kwargs["enable_prefix_caching"] = True
 
         # If shuffle_seed and sorting by length, warn that shuffling will be
         # effectively disabled
@@ -836,15 +731,26 @@ class Annotator:
             )
 
         # Verify 'max_samples_per_output_file'
-        if max_samples_per_output_file is not None and max_samples_per_output_file < 0:
-            raise ValueError("'max_samples_per_output_file' must be None or 0 or a positive integer")
+        if (
+            max_samples_per_output_file is not None
+            and max_samples_per_output_file < 0
+        ):
+            raise ValueError(
+                "'max_samples_per_output_file' must be None or 0 or a positive integer"
+            )
         max_samples_per_output_file = max_samples_per_output_file or 0
 
         # Verify 'upload_every_n_samples' and 'new_hub_id'
-        if upload_every_n_samples < 0 or not isinstance(upload_every_n_samples, int):
-            raise ValueError("upload_every_n_samples must be a positive integer or 0")
+        if upload_every_n_samples < 0 or not isinstance(
+            upload_every_n_samples, int
+        ):
+            raise ValueError(
+                "upload_every_n_samples must be a positive integer or 0"
+            )
         elif upload_every_n_samples > 0 and not new_hub_id:
-            raise ValueError("If upload_every_n_samples is set, new_hub_id must be provided")
+            raise ValueError(
+                "If upload_every_n_samples is set, new_hub_id must be provided"
+            )
 
         # Verify and normalize 'keep_columns'
         if not keep_columns:
@@ -858,7 +764,9 @@ class Annotator:
             try:
                 keep_columns = set(keep_columns)
             except TypeError as exc:
-                raise TypeError("keep_columns must be None, True, a string, or a collection of strings") from exc
+                raise TypeError(
+                    "keep_columns must be None, True, a string, or a collection of strings"
+                ) from exc
 
         # Always keep idx_column
         if isinstance(keep_columns, set):
@@ -871,7 +779,11 @@ class Annotator:
 
         _str_formatter = string.Formatter()
         prompt_fields = tuple(
-            [fld[1] for fld in _str_formatter.parse(prompt_template) if fld[1] is not None and not fld[2]]
+            [
+                fld[1]
+                for fld in _str_formatter.parse(prompt_template)
+                if fld[1] is not None and not fld[2]
+            ]
         )
 
         # Set up output directory
@@ -880,16 +792,26 @@ class Annotator:
             shutil.rmtree(pdout)
         pdout.mkdir(exist_ok=True, parents=True)
 
-        pdout.joinpath("_version.json").write_text(json.dumps(get_lib_versions(), indent=4), encoding="utf-8")
+        pdout.joinpath("_version.json").write_text(
+            json.dumps(get_lib_versions(), indent=4), encoding="utf-8"
+        )
 
         # Push initial empty dir with versions file to hub
         if new_hub_id:
             self.push_dir_to_hub(pdout, new_hub_id=new_hub_id)
 
-        # We need to clear the model before doing self._load_dataset because the model
-        # cannot be be pickled (which is needed for multiprocessing in dataset.map)
-        if self.pipe is not None and self.num_proc is not None:
-            self.destroy_model()
+        # Inject output_schema into options if provided
+        if output_schema is not None:
+            if isinstance(output_schema, str):
+                output_schema = json.loads(output_schema)
+            if options is not None and options.json_schema is not None:
+                raise ValueError(
+                    "Provide 'output_schema' OR set 'options.json_schema', not both."
+                )
+            options = dataclasses.replace(
+                options or ProviderRuntimeOptions(),
+                json_schema=output_schema,
+            )
 
         dataset, processed_n_samples = self._load_dataset(
             prompt_template=prompt_template,
@@ -900,7 +822,6 @@ class Annotator:
             dataset_config=dataset_config,
             data_dir=data_dir,
             dataset_split=dataset_split,
-            streaming=streaming,
             max_num_samples=max_num_samples,
             shuffle_seed=shuffle_seed,
             cache_input_dataset=cache_input_dataset,
@@ -918,37 +839,22 @@ class Annotator:
             )
             fhout = pfout.open("a", encoding="utf-8")
 
-            self._load_pipeline()
+            self.client.warm_up(
+                system_message=system_message,
+                prompt_prefix=prompt_template_prefix,
+                options=options,
+            )
 
-            sampling_params = sampling_params or {}
-            if output_schema:
-                if "structured_outputs" in sampling_params:
-                    raise ValueError(
-                        "If 'output_schema' is provided, do not set 'structured_outputs' in sampling_params yourself"
-                    )
-                sampling_params["structured_outputs"] = StructuredOutputsParams(
-                    json=output_schema,
-                    whitespace_pattern=whitespace_pattern,
-                )
-            sampling_params = SamplingParams(**sampling_params)
-
-            if system_message is not None or prompt_template_prefix is not None:
-                self.do_cache_run(
-                    prompt_prefix=prompt_template_prefix,
-                    system_message=system_message,
-                    sampling_params=sampling_params,
-                )
-
-            total_num_batches = ceil(len(dataset) / self.max_num_seqs)
+            total_num_batches = ceil(len(dataset) / self.batch_size)
             for batch in tqdm(
-                dataset.iter(self.max_num_seqs),
+                dataset.iter(self.batch_size),
                 total=total_num_batches,
-                desc=f"Annotating (max_bs={self.max_num_seqs})",
+                desc=f"Annotating (max_bs={self.batch_size})",
                 unit="batch",
             ):
                 results = self._process_batch(
                     batch=batch,
-                    sampling_params=sampling_params,
+                    options=options,
                     task_prefix=task_prefix,
                     validate_fn=validate_fn,
                     postprocess_fn=postprocess_fn,
@@ -960,8 +866,14 @@ class Annotator:
                         idx
                         for idx, res in enumerate(results)
                         if (
-                            (f"{task_prefix}valid" in res and not res[f"{task_prefix}valid"])
-                            or (f"{task_prefix}valid_fields" in res and not res[f"{task_prefix}valid_fields"])
+                            (
+                                f"{task_prefix}valid" in res
+                                and not res[f"{task_prefix}valid"]
+                            )
+                            or (
+                                f"{task_prefix}valid_fields" in res
+                                and not res[f"{task_prefix}valid_fields"]
+                            )
                         )
                     ]
 
@@ -973,16 +885,21 @@ class Annotator:
                                 f"Retrying {len(invalid_indices):,} invalid samples (attempt {n_retries}/{num_retries_invalid})..."
                             )
 
-                        retry_batch = {k: [v[i] for i in invalid_indices] for k, v in batch.items()}
+                        retry_batch = {
+                            k: [v[i] for i in invalid_indices]
+                            for k, v in batch.items()
+                        }
                         retry_results = self._process_batch(
                             batch=retry_batch,
-                            sampling_params=sampling_params,
+                            options=options,
                             task_prefix=task_prefix,
                             validate_fn=validate_fn,
                         )
 
                         # Update results with retried outputs
-                        for local_idx, global_idx in enumerate(invalid_indices):
+                        for local_idx, global_idx in enumerate(
+                            invalid_indices
+                        ):
                             results[global_idx] = retry_results[local_idx]
 
                         # Identify remaining invalid samples
@@ -990,13 +907,22 @@ class Annotator:
                             idx
                             for idx, res in enumerate(results)
                             if (
-                                (f"{task_prefix}valid" in res and not res[f"{task_prefix}valid"])
-                                or (f"{task_prefix}valid_fields" in res and not res[f"{task_prefix}valid_fields"])
+                                (
+                                    f"{task_prefix}valid" in res
+                                    and not res[f"{task_prefix}valid"]
+                                )
+                                or (
+                                    f"{task_prefix}valid_fields" in res
+                                    and not res[f"{task_prefix}valid_fields"]
+                                )
                             )
                         ]
 
                         if self.verbose:
-                            if invalid_indices and n_retries == num_retries_invalid:
+                            if (
+                                invalid_indices
+                                and n_retries == num_retries_invalid
+                            ):
                                 print(
                                     f"After {n_retries}/{num_retries_invalid} attempts, {len(invalid_indices):,} samples are still invalid. Skipping..."
                                 )
@@ -1004,9 +930,19 @@ class Annotator:
                 batch_size = len(batch[idx_column])
                 if keep_columns is True:
                     # Keep all columns
-                    inputs = [{k: v[i] for k, v in batch.items()} for i in range(batch_size)]
+                    inputs = [
+                        {k: v[i] for k, v in batch.items()}
+                        for i in range(batch_size)
+                    ]
                 else:
-                    inputs = [{k: v[i] for k, v in batch.items() if k in keep_columns} for i in range(batch_size)]
+                    inputs = [
+                        {
+                            k: v[i]
+                            for k, v in batch.items()
+                            if k in keep_columns  # type: ignore[operator]
+                        }
+                        for i in range(batch_size)
+                    ]
 
                 # Iterate over results and write them out in order
                 for result_idx, res in enumerate(results):
@@ -1017,7 +953,10 @@ class Annotator:
                     processed_n_samples += 1
 
                     # Handle hub upload checkpointing and output file rotation
-                    if upload_every_n_samples > 0 and processed_n_samples % upload_every_n_samples == 0:
+                    if (
+                        upload_every_n_samples > 0
+                        and processed_n_samples % upload_every_n_samples == 0
+                    ):
                         fhout.close()
                         remove_empty_jsonl_files(pdout)
                         if new_hub_id:
@@ -1035,7 +974,10 @@ class Annotator:
                 self.push_dir_to_hub(pdout, new_hub_id=new_hub_id)
 
         return self._post_annotate(
-            pdout=pdout, idx_column=idx_column, new_hub_id=new_hub_id, keep_idx_column=keep_idx_column
+            pdout=pdout,
+            idx_column=idx_column,
+            new_hub_id=new_hub_id,
+            keep_idx_column=keep_idx_column,
         )
 
     def generate_dataset(
@@ -1045,10 +987,9 @@ class Annotator:
         *,
         new_hub_id: str | None = None,
         overwrite: bool = False,
-        sampling_params: dict[str, Any] | None = None,
+        options: ProviderRuntimeOptions | None = None,
         max_num_samples: int | None = None,
         output_schema: str | dict[str, Any] | None = None,
-        whitespace_pattern: str | None = r"[ ]?",
         idx_column: str = "idx",
         upload_every_n_samples: int | None = 0,
         max_samples_per_output_file: int = 0,
@@ -1071,27 +1012,17 @@ class Annotator:
                 `max_num_samples` will be ignored.
             new_hub_id: Optional Hugging Face dataset ID for uploads.
             overwrite: Whether to overwrite existing output directory.
-            sampling_params: Parameters for model generation (optional).
+            options: Runtime options passed to the client for generation.
             max_num_samples: Maximum number of samples to annotate. If 'prompts' is a sequence,
                 'max_num_samples' will be ignored.
             output_schema: JSON schema as a dictionary or string (optional).
-            whitespace_pattern: Regex pattern for whitespace handling in guided decoding.
             idx_column: Column name to use as unique identifier.
             upload_every_n_samples: Upload to hub every N samples (0 or None to disable).
             max_samples_per_output_file: Maximum samples per output file (0 for unlimited).
             task_prefix: String prefix to use for internal column names and file operations.
-            validate_fn: Optional custom validation function that takes a processed
-                output dictionary and must return a boolean indicating validity. If a JSON schema
-                was passed, and the fields were invalid, this function will not be called
-                and `valid` will be set to False directly. The function will receive a single dictionary
-                with keys as produced by `_process_output`: 1. the raw response ("{prefix}response"),
-                2. the finish reason ("{prefix}finish_reason"), 3. the number of tokens ("{prefix}num_tokens").
-                When an output schema was provided, also the parsed JSON fields and the "{prefix}valid_fields" key.
-            postprocess_fn: Optional function to postprocess each sample after annotation. Must return a modified
-                sample dictionary.
-            num_retries_invalid: Number of retries for samples that produce invalid outputs (when
-                a JSON schema is given and {prefix}valid_fields is False, or when a validate_fn is given
-                and it {prefix}valid is False).
+            validate_fn: Optional custom validation function.
+            postprocess_fn: Optional function to postprocess each sample after annotation.
+            num_retries_invalid: Number of retries for samples that produce invalid outputs.
             system_message: Optional system message to add as "system" role in chat prompts.
 
         Returns:
@@ -1102,76 +1033,45 @@ class Annotator:
 
             >>> from llm_annotator import Annotator
             >>>
-            >>> prompt = "Generate a creative short story about a robot learning to paint."
-            >>> sampling_params = {
-            ...     "temperature": 1.0,
-            ...     "top_p": 0.95,
-            ...     "max_tokens": 512,
-            ... }
-            >>>
-            >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct", max_model_len=2048) as anno:
+            >>> with Annotator(
+            ...     model="meta-llama/Llama-3.2-3B-Instruct",
+            ...     max_model_len=2048,
+            ... ) as anno:  # doctest: +SKIP
             ...     ds = anno.generate_dataset(
             ...         output_dir="outputs/creative-stories",
-            ...         prompts=prompt,
+            ...         prompts="Generate a short story about a robot learning to paint.",
             ...         max_num_samples=100,
-            ...         sampling_params=sampling_params,
+            ...         sampling_params={
+            ...             "temperature": 1.0,
+            ...             "top_p": 0.95,
+            ...             "max_tokens": 512,
+            ...         },
             ...     )
 
             Generate from a list of different prompts:
 
-            >>> prompts = [
-            ...     "Write a haiku about spring.",
-            ...     "Write a haiku about summer.",
-            ...     "Write a haiku about autumn.",
-            ...     "Write a haiku about winter.",
-            ... ]
-            >>>
-            >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct") as anno:
+            >>> from llm_annotator import Annotator, OpenAIClient
+            >>> client = OpenAIClient(model="gpt-4o-mini")  # doctest: +SKIP
+            >>> with Annotator(client=client) as anno:  # doctest: +SKIP
             ...     ds = anno.generate_dataset(
             ...         output_dir="outputs/seasonal-haikus",
-            ...         prompts=prompts,
-            ...     )
-
-            Using a shared prompt prefix for efficiency:
-
-            >>> prompt_prefix = "You are a creative writer. Your task is to generate NER training data.\\n\\n"
-            >>> prompt = prompt_prefix + "Generate a sentence with person names and locations."
-            >>>
-            >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct", verbose=True) as anno:
-            ...     ds = anno.generate_dataset(
-            ...         output_dir="outputs/ner-data",
-            ...         prompts=prompt,
-            ...         max_num_samples=1000,
-            ...         sampling_params={"temperature": 0.9, "top_k": 64},
+            ...         prompts=[
+            ...             "Write a haiku about spring.",
+            ...             "Write a haiku about summer.",
+            ...         ],
             ...     )
 
             Generate with structured output schema:
 
-            >>> output_schema = {
-            ...     "type": "object",
-            ...     "properties": {
-            ...         "sentence": {"type": "string"},
-            ...         "entities": {
-            ...             "type": "array",
-            ...             "items": {
-            ...                 "type": "object",
-            ...                 "properties": {
-            ...                     "text": {"type": "string"},
-            ...                     "label": {"type": "string", "enum": ["PER", "LOC", "ORG"]},
-            ...                 },
-            ...                 "required": ["text", "label"],
-            ...             },
-            ...         },
-            ...     },
-            ...     "required": ["sentence", "entities"],
-            ... }
-            >>>
-            >>> with Annotator(model="meta-llama/Llama-3.2-3B-Instruct") as anno:
+            >>> with Annotator(client=client) as anno:  # doctest: +SKIP
             ...     ds = anno.generate_dataset(
             ...         output_dir="outputs/ner-structured",
             ...         prompts="Generate a sentence with named entities.",
             ...         max_num_samples=500,
-            ...         output_schema=output_schema,
+            ...         output_schema={
+            ...             "type": "object",
+            ...             "properties": {"sentence": {"type": "string"}},
+            ...         },
             ...     )
         """
 
@@ -1180,7 +1080,9 @@ class Annotator:
 
         max_num_samples = len(prompts)
 
-        dataset = Dataset.from_dict({idx_column: list(range(max_num_samples)), "prompt": prompts})
+        dataset = Dataset.from_dict(
+            {idx_column: list(range(max_num_samples)), "prompt": prompts}
+        )
 
         return self.annotate_dataset(
             output_dir=output_dir,
@@ -1188,10 +1090,9 @@ class Annotator:
             dataset=dataset,
             new_hub_id=new_hub_id,
             overwrite=overwrite,
-            sampling_params=sampling_params,
+            options=options,
             max_num_samples=max_num_samples,
             output_schema=output_schema,
-            whitespace_pattern=whitespace_pattern,
             idx_column=idx_column,
             upload_every_n_samples=upload_every_n_samples,
             max_samples_per_output_file=max_samples_per_output_file,
@@ -1203,7 +1104,12 @@ class Annotator:
         )
 
     def _post_annotate(
-        self, *, pdout: Path, idx_column: str, new_hub_id: str | None = None, keep_idx_column: bool = False
+        self,
+        *,
+        pdout: Path,
+        idx_column: str,
+        new_hub_id: str | None = None,
+        keep_idx_column: bool = False,
     ) -> Dataset:
         """Clean up after annotation is complete.
 
@@ -1219,7 +1125,11 @@ class Annotator:
             The concatenated dataset of all annotation results (JSON-invalid samples are NOT removed)
         """
         ds: Dataset = concatenate_datasets(
-            [Dataset.from_json(str(pfin)) for pfin in pdout.glob("*.jsonl") if pfin.stat().st_size > 0]
+            [
+                Dataset.from_json(str(pfin))
+                for pfin in pdout.glob("*.jsonl")
+                if pfin.stat().st_size > 0
+            ]
         ).sort(idx_column)
         if not keep_idx_column:
             ds = ds.remove_columns([idx_column])
@@ -1229,7 +1139,9 @@ class Annotator:
         if new_hub_id:
             ds.push_to_hub(new_hub_id, private=True)
             if self.verbose:
-                print(f"Uploaded final dataset to the HF Hub: https://huggingface.co/datasets/{new_hub_id}!")
+                print(
+                    f"Uploaded final dataset to the HF Hub: https://huggingface.co/datasets/{new_hub_id}!"
+                )
 
         ds.cleanup_cache_files()
 
@@ -1240,7 +1152,11 @@ class Annotator:
         return ds
 
     def get_pfout_name(
-        self, *, pdout: Path | str, max_samples_per_output_file: int, processed_n_samples: int | None = None
+        self,
+        *,
+        pdout: Path | str,
+        max_samples_per_output_file: int,
+        processed_n_samples: int | None = None,
     ) -> Path:
         """Generate the output file name based on configuration.
 
@@ -1265,7 +1181,13 @@ class Annotator:
             return pdout.joinpath(f"{stem}_{count_idx}.jsonl")
 
     @retry()
-    def push_dir_to_hub(self, dir_path: Path | str, new_hub_id: str | None = None, *, task_prefix: str = "") -> None:
+    def push_dir_to_hub(
+        self,
+        dir_path: Path | str,
+        new_hub_id: str | None = None,
+        *,
+        task_prefix: str = "",
+    ) -> None:
         """Upload the output directory to Hugging Face Hub.
 
         Creates a dataset repository and uploads all annotation files,
@@ -1280,17 +1202,32 @@ class Annotator:
             Exception: If upload fails after retries (handled by @retry decorator).
         """
         if not new_hub_id:
-            raise ValueError("'new_hub_id' must be set to push data to the HuggingFace Hub")
+            raise ValueError(
+                "'new_hub_id' must be set to push data to the HuggingFace Hub"
+            )
 
-        create_repo(new_hub_id, repo_type="dataset", exist_ok=True, private=True)
-        create_branch(new_hub_id, repo_type="dataset", branch=f"{task_prefix}jsonl_upload", exist_ok=True)
+        create_repo(
+            new_hub_id, repo_type="dataset", exist_ok=True, private=True
+        )
+        create_branch(
+            new_hub_id,
+            repo_type="dataset",
+            branch=f"{task_prefix}jsonl_upload",
+            exist_ok=True,
+        )
 
         upload_large_folder(
             repo_id=new_hub_id,
             repo_type="dataset",
             folder_path=str(dir_path),
-            allow_patterns=["*.jsonl", "*.json"],  # Include data files (jsonl) and config files (json)
-            ignore_patterns=[f"{task_prefix}cached_input_dataset/*", ".cache/*"],  # Ignore cached input dataset
+            allow_patterns=[
+                "*.jsonl",
+                "*.json",
+            ],  # Include data files (jsonl) and config files (json)
+            ignore_patterns=[
+                f"{task_prefix}cached_input_dataset/*",
+                ".cache/*",
+            ],  # Ignore cached input dataset
             private=True,
             revision=f"{task_prefix}jsonl_upload",
             print_report=False,

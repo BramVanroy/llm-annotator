@@ -6,13 +6,13 @@ import secrets
 import time
 from typing import Any
 
-from llm_annotator.client.base import (
+from llm_annotator.clients.base import (
     Provider,
     ProviderRuntimeOptions,
     Response,
 )
-from llm_annotator.client.exceptions import ProviderError
-from llm_annotator.client.openai_client import OpenAIClient
+from llm_annotator.clients.exceptions import ProviderError
+from llm_annotator.clients.openai_client import OpenAIClient
 
 
 # TODO: add custom options for each provider
@@ -72,6 +72,15 @@ class VLLMClient(OpenAIClient):
                 "messages": messages,
                 "max_completion_tokens": options.max_tokens,
             }
+            if options.json_schema is not None:
+                request_payload["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "response",
+                        "schema": options.json_schema,
+                        "strict": True,
+                    },
+                }
             # The batch endpoint is at /v1/chat/completions/batch
             batch_url = f"{self._base_url}/chat/completions/batch"
             # Re-use the underlying httpx client
