@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 class GeminiClient(Client[GenerateContentResponse]):
     """Client wrapper for Gemini APIs."""
-
+    provider_type = Provider.GEMINI
     def __init__(self, model: str, api_key: str | None = None) -> None:
         """Initialize the Gemini client.
 
@@ -28,8 +28,12 @@ class GeminiClient(Client[GenerateContentResponse]):
             api_key: Gemini API key. If omitted, the SDK will use
                 ``GEMINI_API_KEY`` from the environment.
         """
+
+        from google import genai
+
         super().__init__(model=model)
         self._api_key = api_key
+        self._client = genai.Client(api_key=self._api_key)
 
     def _process_response(self, response: GenerateContentResponse) -> Response:
         """Process Gemini response and handle stop reasons.
@@ -53,7 +57,7 @@ class GeminiClient(Client[GenerateContentResponse]):
             text=(response.text or "").strip(),
             stop_reason=finish_reason,
             model=response.model_version,
-            provider=Provider.GEMINI,
+            provider=self.provider_type,
             num_output_tokens=num_output_tokens,
         )
 
@@ -75,18 +79,17 @@ class GeminiClient(Client[GenerateContentResponse]):
         Raises:
             ProviderError: If the provider call fails.
         """
+        from google.genai import types
+
         options = options or ProviderRuntimeOptions()
         system_instruction, prompt_text = _messages_to_prompt(messages)
-        try:
-            from google import genai
-            from google.genai import types
 
-            client = genai.Client(api_key=self._api_key)
-            config = types.GenerateContentConfig(
-                max_output_tokens=options.max_tokens,
-                system_instruction=system_instruction or None,
-            )
-            response = client.models.generate_content(
+        config = types.GenerateContentConfig(
+            max_output_tokens=options.max_tokens,
+            system_instruction=system_instruction or None,
+        )
+        try:
+            response = self._client.models.generate_content(
                 model=self.model,
                 contents=prompt_text,
                 config=config,

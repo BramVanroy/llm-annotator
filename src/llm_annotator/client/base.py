@@ -4,17 +4,19 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from enum import StrEnum
-from typing import Generic, TypeVar
+from enum import StrEnum, auto
+from typing import ClassVar, Generic, TypeVar
 
 
 T_Response = TypeVar("T_Response")
 
 
 class Provider(StrEnum):
-    OPENAI = "openai"
-    CLAUDE = "claude"
-    GEMINI = "gemini"
+    OPENAI = auto()
+    CLAUDE = auto()
+    GEMINI = auto()
+    VLLM = auto()
+    VLLM_OFFLINE = auto()
 
 
 @dataclass(slots=True, frozen=True)
@@ -42,6 +44,8 @@ class Response:
 
 class Client(ABC, Generic[T_Response]):
     """Base client interface used by all provider adapters."""
+
+    provider_type: ClassVar[Provider]
 
     def __init__(self, model: str) -> None:
         """Initialize a provider client.

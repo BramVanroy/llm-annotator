@@ -20,16 +20,23 @@ if TYPE_CHECKING:
 class OpenAIClient(Client[ChatCompletion]):
     """Client wrapper for OpenAI APIs."""
 
-    def __init__(self, model: str, api_key: str | None = None) -> None:
+    provider_type = Provider.OPENAI
+
+    def __init__(self, model: str, base_url: str | None = None, api_key: str | None = None) -> None:
         """Initialize the OpenAI client.
 
         Args:
             model: OpenAI model identifier.
+            base_url: Base URL for the OpenAI API endpoint.
             api_key: OpenAI API key. If omitted, the SDK will use
                 ``OPENAI_API_KEY`` from the environment.
         """
+        from openai import OpenAI
+
         super().__init__(model=model)
         self._api_key = api_key
+        self._base_url = base_url
+        self._client = OpenAI(api_key=self._api_key, base_url=base_url)
 
     def _process_response(self, response: ChatCompletion) -> Response:
         """Process OpenAI response and handle stop reasons.
@@ -59,7 +66,7 @@ class OpenAIClient(Client[ChatCompletion]):
             text=text,
             stop_reason=finish_reason,
             model=response.model,
-            provider=Provider.OPENAI,
+            provider=self.provider_type,
             num_output_tokens=num_output_tokens,
         )
 
@@ -83,16 +90,12 @@ class OpenAIClient(Client[ChatCompletion]):
         """
         options = options or ProviderRuntimeOptions()
         try:
-            from openai import OpenAI
-
-            client = OpenAI(api_key=self._api_key)
-
             request_payload: dict[str, Any] = {
                 "model": self.model,
                 "messages": messages,
                 "max_completion_tokens": options.max_tokens,
             }
-            response = client.chat.completions.create(**request_payload)
+            response = self._client.chat.completions.create(**request_payload)
         except Exception as exc:
             raise ProviderError(f"OpenAI request failed: {exc}") from exc
         else:
@@ -124,27 +127,27 @@ class OpenAIClient(Client[ChatCompletion]):
 
         if stop_reason is None:
             raise ProviderError(
-                f"OpenAI response is missing finish reason{token_suffix}."
+                f"Response is missing finish reason{token_suffix}."
             )
         elif stop_reason == "stop":
             return  # Normal completion, no error
         elif stop_reason == "length":
             raise ProviderError(
-                f"OpenAI response stopped due to max token limit{token_suffix}."
+                f"Response stopped due to max token limit{token_suffix}."
             )
         elif stop_reason == "content_filter":
             raise ProviderError(
-                f"OpenAI response was filtered due to content{token_suffix}."
+                f"Response was filtered due to content{token_suffix}."
             )
         elif stop_reason == "tool_calls":
             raise ProviderError(
-                f"OpenAI response stopped after calling a tool{token_suffix}."
+                f"Response stopped after calling a tool{token_suffix}."
             )
         elif stop_reason == "function_call":
             raise ProviderError(
-                f"OpenAI response stopped after calling a function{token_suffix}."
+                f"Response stopped after calling a function{token_suffix}."
             )
         else:
             raise ProviderError(
-                f"OpenAI response stopped for unknown reason '{stop_reason}'{token_suffix}."
+                f"Response stopped for unknown reason '{stop_reason}'{token_suffix}."
             )

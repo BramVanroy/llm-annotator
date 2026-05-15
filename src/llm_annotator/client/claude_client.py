@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 class ClaudeClient(Client[ClaudeMessage]):
     """Client wrapper for Anthropic Claude APIs."""
-
+    provider_type = Provider.CLAUDE
     def __init__(self, model: str, api_key: str | None = None) -> None:
         """Initialize the Claude client.
 
@@ -27,9 +27,13 @@ class ClaudeClient(Client[ClaudeMessage]):
             model: Claude model identifier.
             api_key: Anthropic API key. If not provided, the client will attempt to read from the environment variable `ANTHROPIC_API_KEY`.
         """
+        from anthropic import Anthropic
+
         super().__init__(model=model)
 
         self._api_key = api_key
+        self._client = Anthropic(api_key=self._api_key)
+
         self._running_batch_ids: set[str] = set()
 
     def _process_response(self, response: ClaudeMessage) -> Response:
@@ -52,7 +56,7 @@ class ClaudeClient(Client[ClaudeMessage]):
             text=content,
             stop_reason=response.stop_reason,
             model=response.model,
-            provider=Provider.CLAUDE,
+            provider=self.provider_type,
             num_output_tokens=num_output_tokens,
         )
 
@@ -77,17 +81,13 @@ class ClaudeClient(Client[ClaudeMessage]):
         """
         options = options or ProviderRuntimeOptions()
         try:
-            from anthropic import Anthropic
-
-            client = Anthropic(api_key=self._api_key)
-
             request_payload: dict[str, Any] = {
                 "model": self.model,
                 "max_tokens": options.max_tokens,
                 "messages": messages,
             }
 
-            response = client.messages.create(**request_payload)
+            response = self._client.messages.create(**request_payload)
         except Exception as exc:
             raise ProviderError(f"Claude request failed: {exc}") from exc
         else:
