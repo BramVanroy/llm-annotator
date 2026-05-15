@@ -19,7 +19,9 @@ if TYPE_CHECKING:
 
 class GeminiClient(Client[GenerateContentResponse]):
     """Client wrapper for Gemini APIs."""
+
     provider_type = Provider.GEMINI
+
     def __init__(self, model: str, api_key: str | None = None) -> None:
         """Initialize the Gemini client.
 

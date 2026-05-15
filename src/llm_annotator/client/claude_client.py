@@ -19,7 +19,9 @@ if TYPE_CHECKING:
 
 class ClaudeClient(Client[ClaudeMessage]):
     """Client wrapper for Anthropic Claude APIs."""
+
     provider_type = Provider.CLAUDE
+
     def __init__(self, model: str, api_key: str | None = None) -> None:
         """Initialize the Claude client.
 

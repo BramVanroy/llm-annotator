@@ -22,7 +22,12 @@ class OpenAIClient(Client[ChatCompletion]):
 
     provider_type = Provider.OPENAI
 
-    def __init__(self, model: str, base_url: str | None = None, api_key: str | None = None) -> None:
+    def __init__(
+        self,
+        model: str,
+        base_url: str | None = None,
+        api_key: str | None = None,
+    ) -> None:
         """Initialize the OpenAI client.
 
         Args:
