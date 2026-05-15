@@ -1,0 +1,14 @@
+# Shared lychee defaults for local checks and CI.
+verbose = "info"
+no_progress = true
+max_retries = 2
+retry_wait_time = 2
+timeout = 20
+max_concurrency = 8
+accept = [200, 206]
+
+# Local app/demo URLs are expected to be unavailable in CI.
+exclude = [
+  "^http://localhost",
+  "^http://127\\.0\\.0\\.1",
+]

@@ -1,0 +1,55 @@
+name: Update Interrogate Badge
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**/*.py"
+      - "pyproject.toml"
+      - ".github/workflows/interrogate-badge.yml"
+      - "!.github/interrogate_badge.svg"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-badge${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  badge:
+    name: Generate badge
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --locked --group dev
+
+      - name: Generate interrogate badge
+        continue-on-error: true
+        run: >-
+          uv run interrogate -c pyproject.toml
+          --generate-badge .github/interrogate_badge.svg
+          --badge-style flat-square-modified
+      # Workflow inspired by https://github.com/actions/checkout?tab=readme-ov-file#push-a-commit-to-a-pr-using-the-built-in-token
+      - name: Commit updated badge
+        run: |
+          if git diff --quiet -- .github/interrogate_badge.svg; then
+            echo "Badge unchanged"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/interrogate_badge.svg
+          git commit -m "chore: update interrogate badge"
+          git push

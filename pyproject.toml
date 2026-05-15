@@ -8,69 +8,124 @@ authors = [
 ]
 license = "Apache-2.0"
 license-files = ["LICEN[CS]E*"]
+
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Topic :: Software Development :: Build Tools",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "License :: OSI Approved :: Apache Software License",
+  "Framework :: MkDocs",
+  "Framework :: Pytest",
+  "Typing :: Typed",
+]
+
 requires-python = ">=3.12,<3.14"
 dependencies = [
-    "datasets>=4.1.1,<5",
-    "hf-transfer>=0.1.9,<1",
-    "hf-xet>=1.2.0,<2",
-    "mistral-common>=1.8.5",
-    "vllm>=0.11,<0.12",
+    "datasets>=4.8.5,<5",
+]
+
+[project.optional-dependencies]
+vllm = [    
+    "mistral-common>=1.11.2",
+    "vllm==0.21.0",
+]
+anthropic = [
+    "anthropic>=0.102.0,<1",
+]
+openai = [
+    "openai>=2.36.0,<3",
 ]
 
 [dependency-groups]
-dev = [
-    "pre-commit>=4.3.0",
-    "pytest>=8.4.2,<9",
-    "pytest-cov>=7.0.0,<8",
-    "ruff>=0.13.1,<0.14",
-]
 docs = [
-    "sphinx>=7.0.0",
-    "furo>=2024.0.0",
-    "sphinx-copybutton>=0.5.0",
-    "myst-parser>=2.0.0",
+    "mkdocs-material>=9.7.6,<10",
+    "mike>=2.1.3,<3",
+    "mkdocstrings[python]>=1.0.4,<2",
+    "mkdocs-autorefs>=1.4.4,<2",
+    "mkdocs-gen-files>=0.6.1,<1",
+    "mkdocs-minify-plugin>=0.8.0,<1",
 ]
 
+dev = [
+    {include-group = "docs"},
+    "interrogate>=1.7.0,<2",
+    "mypy>=1.20.1,<2",
+    "pre-commit>=4.6.0,<5",
+    "pytest>=9.0.3,<10",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.15.10,<1",
+]
+
+[project.urls]
+Homepage = "https://github.com/BramVanroy/llm-annotator"
+Documentation = "https://BramVanroy.github.io/llm-annotator"
+Repository = "https://github.com/BramVanroy/llm-annotator"
+Issues = "https://github.com/BramVanroy/llm-annotator/issues"
+
 [build-system]
-requires = ["hatchling", "uv-dynamic-versioning"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]
-source = "uv-dynamic-versioning"
+source = "vcs"
+fallback-version = "0.0.0"
 
-[tool.uv]
-cache-keys = [{ file = "pyproject.toml" }, { git = { commit = true, tags = true }}]
+[tool.hatch.build.targets.wheel]
+packages = ["src/llm_annotator"]
 
 [tool.ruff]
-line-length = 119
+target-version = "py312"
+line-length = 79
 
 [tool.ruff.lint]
 ignore = ["C901", "E501", "E741", "F402", "F823", "E402"]
 select = ["C", "E", "F", "W", "I"]
 
-# Ignore import violations in all `__init__.py` files.
-[tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["E402", "F401", "F403", "F811"]
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 [tool.ruff.lint.isort]
 lines-after-imports = 2
 known-first-party = ["llm_annotator"]
 
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D"]
+
 [tool.ruff.format]
-# Like Black, use double quotes for strings.
+docstring-code-format = true
 quote-style = "double"
-
-# Like Black, indent with spaces, rather than tabs.
 indent-style = "space"
-
-# Like Black, respect magic trailing commas.
 skip-magic-trailing-comma = false
-
-# Like Black, automatically detect the appropriate line ending.
 line-ending = "auto"
 
+[tool.interrogate]
+style = "google"
+exclude = ["tests", "scratches"]
+ignore-private = true
+ignore-semiprivate = true
+color = true
+
+[tool.mypy]
+python_version = "3.12"
+files = ["scripts", "src", "tests"]
+pretty = true
+show_error_codes = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_return_any = true
+no_implicit_optional = true
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
 [tool.pytest.ini_options]
-minversion = "6.0"
+testpaths = ["tests", "src"]
 addopts = [
     "-ra",
     "--strict-markers",
@@ -78,12 +133,13 @@ addopts = [
     "--cov=llm_annotator",
     "--cov-report=term-missing",
     "--cov-report=html",
-    "-v"
+    "-v",
+    "--doctest-modules",
+    "--import-mode=importlib",
+    "--cov=llm_annotator",
+    "--cov-report=term-missing",
+    "--cov-report=xml",
 ]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
 markers = [
     "slow: marks tests as slow (may require model loading or longer runtime)",
     "integration: marks tests that interact with external systems (Hugging Face Hub, network, or real-model runtimes). These tests require an authenticated Hugging Face account (for example via `hf auth login` or a `HUGGINGFACE_HUB_TOKEN`/`HF_TOKEN` in CI) and may perform uploads/deletions; tests attempt to clean up after themselves.",

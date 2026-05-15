@@ -1,57 +1,91 @@
-name: Documentation
+name: Publish docs to GitHub Pages
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Git tag to publish docs for, for example v0.3.0
+        required: true
+        type: string
+
+# Cancel any in-progress docs deploy for the same branch when a new push arrives.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-# Allow only one concurrent deployment
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
+  contents: write
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      
-      - name: "Set up Python"
-        uses: actions/setup-python@v6
-        with:
-          python-version-file: "pyproject.toml"
-      
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          version: "0.9.7"
-          
-      - name: Install dependencies
-        run: uv sync --dev --group docs
-      
-      - name: Build documentation
-        run: uv run make docs
-      
-      - name: Upload artifact
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/upload-pages-artifact@v4
-        with:
-          path: docs/_build/html
-
   deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
-    needs: build
     steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve docs tag and version
+        id: docs_ref
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            DOCS_GIT_TAG="${{ github.event.release.tag_name }}"
+          else
+            DOCS_GIT_TAG="${{ inputs.release_tag }}"
+          fi
+
+          if [ -z "${DOCS_GIT_TAG}" ]; then
+            echo "A release tag is required to publish docs." >&2
+            exit 1
+          fi
+
+          if ! git rev-parse --verify "refs/tags/${DOCS_GIT_TAG}" >/dev/null 2>&1; then
+            echo "Git tag '${DOCS_GIT_TAG}' does not exist." >&2
+            exit 1
+          fi
+
+          DOCS_VERSION="${DOCS_GIT_TAG#v}"
+          if [ -z "${DOCS_VERSION}" ] || [ "${DOCS_VERSION}" = "${DOCS_GIT_TAG}" ]; then
+            echo "Release tag must start with 'v'; got '${DOCS_GIT_TAG}'." >&2
+            exit 1
+          fi
+
+          echo "docs_git_tag=${DOCS_GIT_TAG}" >> "$GITHUB_OUTPUT"
+          echo "docs_version=${DOCS_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "DOCS_SOURCE_REF=${DOCS_GIT_TAG}" >> "$GITHUB_ENV"
+
+      - name: Check out docs tag
+        run: git checkout "${{ steps.docs_ref.outputs.docs_git_tag }}"
+
+      - name: Restore current docs build tooling for manual reruns
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git checkout "${GITHUB_SHA}" -- pyproject.toml
+          git checkout "${GITHUB_SHA}" -- uv.lock
+          git checkout "${GITHUB_SHA}" -- mkdocs.yml
+          git checkout "${GITHUB_SHA}" -- docs/hooks.py
+          git checkout "${GITHUB_SHA}" -- docs/overrides/python/material/class.html.jinja
+          git checkout "${GITHUB_SHA}" -- docs/overrides/python/material/function.html.jinja
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install docs dependencies
+        run: uv sync --locked --group docs
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch gh-pages branch for mike
+        run: git fetch origin gh-pages --depth=1 || true
+
+      - name: Deploy release docs (tag -> version + set as latest)
+        run: |
+          VERSION="${{ steps.docs_ref.outputs.docs_version }}"
+          uv run mike deploy --push --update-aliases "${VERSION}" latest
+          uv run mike set-default --push latest

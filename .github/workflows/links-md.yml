@@ -1,0 +1,54 @@
+name: Docs links (Markdown)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "README.md"
+      - "docs/**"
+      - ".lychee.toml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "README.md"
+      - "docs/**"
+      - ".lychee.toml"
+
+concurrency:
+  group: ${{ github.workflow }}-md${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  links:
+    name: Check Markdown links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore lychee cache
+        id: restore-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .lycheecache
+          key: cache-lychee-md-${{ github.sha }}
+          restore-keys: cache-lychee-md-
+
+      - name: Check links with lychee
+        uses: lycheeverse/lychee-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          fail: true
+          args: >-
+            --config .lychee.toml
+            --cache
+            --no-progress
+            README.md
+            'docs/**/*.md'
+
+      - name: Save lychee cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .lycheecache
+          key: ${{ steps.restore-cache.outputs.cache-primary-key || format('cache-lychee-md-{0}', github.sha) }}

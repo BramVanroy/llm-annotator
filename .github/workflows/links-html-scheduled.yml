@@ -1,0 +1,52 @@
+name: Docs links (HTML Scheduled)
+
+on:
+  schedule:
+    - cron: "20 4 * * 1"
+  workflow_dispatch: # Allows you to run it manually from the Actions tab
+
+jobs:
+  links:
+    name: Check Live HTML links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+
+      - name: Restore lychee cache
+        id: restore-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .lycheecache
+          key: cache-lychee-html-${{ github.sha }}
+          restore-keys: cache-lychee-html-
+
+      - name: Check links with lychee
+        uses: lycheeverse/lychee-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          fail: true
+          # We don't use .lychee.toml here unless you also keep a copy of it on the gh-pages branch.
+          # We set base to . to resolve relative assets correctly.
+          args: >-
+            --cache
+            --no-progress
+            --base .
+            '**/*.html'
+
+      - name: Save lychee cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .lycheecache
+          key: ${{ steps.restore-cache.outputs.cache-primary-key || format('cache-lychee-html-{0}', github.sha) }}
+
+      - name: Create issue from file if failed
+        if: env.lychee_exit_code != 0
+        uses: peter-evans/create-issue-from-file@v5
+        with:
+          title: Link checker report
+          content-filepath: ./lychee/out.md
+          labels: report, automated issue
