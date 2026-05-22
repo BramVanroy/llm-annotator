@@ -53,7 +53,7 @@ def main(args=None):
         max_tokens=args.max_tokens,
     )
     extra_vllm_kwargs = {
-        "limit_mm_per_prompt": {"image": 0, "audio": 0},
+        "limit_mm_per_prompt": {"image": 0, "audio": 0, "video": 0},
     }
     client = VLLMOfflineClient(
         model=args.model,
