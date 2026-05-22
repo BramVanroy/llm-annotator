@@ -1,9 +1,9 @@
 from pathlib import Path
 
 import numpy as np
+from datasets import load_dataset
 from transformers import AutoTokenizer
 
-from llm_annotator.annotator import load_dataset
 from llm_annotator.utils import get_hf_username
 
 

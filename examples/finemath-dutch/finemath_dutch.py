@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from llm_annotator import Annotator
+from llm_annotator import Annotator, VLLMOfflineClient, VLLMRuntimeOptions
 from llm_annotator.utils import get_hf_username
 
 
@@ -14,25 +14,25 @@ def main():
     )
 
     model = "RedHatAI/gemma-3-27b-it-FP8-dynamic"
-    extra_vllm_init_kwargs = {
+    extra_vllm_kwargs = {
         "limit_mm_per_prompt": {"image": 0, "audio": 0},
     }
     # Also change "upload every_n_samples" below if you change this.
     max_num_samples = 10
-    sampling_params = {
-        "temperature": 1.0,
-        "top_p": 0.95,
-        "top_k": 64,
-        "max_tokens": 36_000,
-    }
-    with Annotator(
+    options = VLLMRuntimeOptions(
+        temperature=1.0,
+        top_p=0.95,
+        top_k=64,
+        max_tokens=36_000,
+    )
+    client = VLLMOfflineClient(
         model=model,
-        verbose=True,
         max_model_len=72_000,
         max_num_seqs=4,
         gpu_memory_utilization=0.95,
-        extra_vllm_init_kwargs=extra_vllm_init_kwargs,
-    ) as anno:
+        extra_vllm_kwargs=extra_vllm_kwargs,
+    )
+    with Annotator(client=client, verbose=True) as anno:
         anno.annotate_dataset(
             output_dir=f"outputs/finemath-dutch-{max_num_samples}",
             prompt_template=prompt_template,
@@ -42,7 +42,7 @@ def main():
             max_num_samples=max_num_samples,
             keep_columns=True,
             upload_every_n_samples=None,
-            sampling_params=sampling_params,
+            options=options,
         )
 
 

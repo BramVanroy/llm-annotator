@@ -29,6 +29,7 @@ test-all:
 typecheck:
 	uv run mypy $(PACKAGE) tests/ examples/
 
+# Only used for doc-testing, not for remote doc deployment
 DOCS_BRANCH ?= tmp-gh-pages
 DOCS_VERSION ?= 0.0.0
 DOCS_ALIAS ?= latest

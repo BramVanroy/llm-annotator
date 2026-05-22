@@ -1,7 +1,7 @@
 import random
 import shutil
 
-from llm_annotator import Annotator
+from llm_annotator import Annotator, VLLMOfflineClient
 from llm_annotator.utils import get_hf_username
 
 
@@ -36,30 +36,28 @@ Classification:"""
         return sample
 
     model = "RedHatAI/Mistral-Small-3.2-24B-Instruct-2506-FP8"
-    extra_vllm_init_kwargs = {
+    extra_vllm_kwargs = {
         "tokenizer_mode": "mistral",
         "config_format": "mistral",
         "load_format": "mistral",
     }
 
     model = "RedHatAI/gemma-3-27b-it-FP8-dynamic"
-    extra_vllm_init_kwargs = {}
-    with Annotator(
+    extra_vllm_kwargs = {}
+    client = VLLMOfflineClient(
         model=model,
         max_model_len=4096,
-        verbose=True,
-        extra_vllm_init_kwargs=extra_vllm_init_kwargs,
-    ) as anno:
+        extra_vllm_kwargs=extra_vllm_kwargs,
+    )
+    with Annotator(client=client, verbose=True) as anno:
         ds = anno.annotate_dataset(
             output_dir="outputs/sentiment-imdb-qwen",
             prompt_template=prompt_template,
             dataset_name="stanfordnlp/imdb",
             dataset_split="test",
             new_hub_id=f"{hf_user}/sentiment-imdb",
-            streaming=True,
             max_num_samples=200,
             cache_input_dataset=False,  # `True` is generally useful, not for demo purposes
-            prompt_template_prefix=prompt_prefix,
             output_schema=output_schema,
             keep_columns=["text", "label"],  # Keep all original columns
             # Backup to HF every 100 samples (in separate backup branch).

@@ -56,6 +56,6 @@ def test_example_imports(script: Path) -> None:
     # Register so relative imports inside the script (if any) can resolve.
     sys.modules[module_name] = module
     try:
-        spec.loader.exec_module(module)  # type: ignore[union-attr]
+        spec.loader.exec_module(module)
     finally:
         sys.modules.pop(module_name, None)

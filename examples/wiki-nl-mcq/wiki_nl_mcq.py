@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from llm_annotator import Annotator
+from llm_annotator import Annotator, VLLMOfflineClient, VLLMRuntimeOptions
 from llm_annotator.utils import get_hf_username
 
 
@@ -24,24 +24,24 @@ def main():
     model = "RedHatAI/Mistral-Small-3.2-24B-Instruct-2506-FP8"
     dataset = "BramVanroy/finewiki-nl-30-to-24k-tokens"
 
-    sampling_params = {
-        "temperature": 0.15,
-        "max_tokens": 12000,
-    }
-    extra_vllm_init_kwargs = {
+    options = VLLMRuntimeOptions(
+        temperature=0.15,
+        max_tokens=12_000,
+    )
+    extra_vllm_kwargs = {
         "load_format": "mistral",
         "tokenizer_mode": "mistral",
         "config_format": "mistral",
         "limit_mm_per_prompt": {"image": 0},
     }
-    with Annotator(
+    client = VLLMOfflineClient(
         model=model,
-        verbose=True,
         max_model_len=48000,
         max_num_seqs=32,
         gpu_memory_utilization=0.95,
-        extra_vllm_init_kwargs=extra_vllm_init_kwargs,
-    ) as anno:
+        extra_vllm_kwargs=extra_vllm_kwargs,
+    )
+    with Annotator(client=client, verbose=True) as anno:
         anno.annotate_dataset(
             output_dir=OUTPUT_ROOT_DIR / "wiki-nl-mcq",
             prompt_template=prompt_template,
@@ -50,7 +50,7 @@ def main():
             new_hub_id=f"{hf_user}/wiki-nl-mcq",
             keep_columns=["text", "title", "url"],
             upload_every_n_samples=None,
-            sampling_params=sampling_params,
+            options=options,
             system_message=system_message,
             sort_by_length=True,
             output_schema=json_schema,
