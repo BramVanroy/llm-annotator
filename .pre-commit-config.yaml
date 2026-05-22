@@ -1,27 +1,34 @@
-fail_fast: true
-
 repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+        # Needed to allow the mkdocs.yml config file to be linted by pre-commit
+        args: [--unsafe]
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
   - repo: local
     hooks:
-      - id: make-quality
-        name: Run make quality
-        entry: make quality
+      - id: ruff-lint
+        name: ruff lint
+        entry: uv run ruff check --fix --exit-non-zero-on-fix
         language: system
+        types: [python]
         pass_filenames: false
-        stages: [pre-commit, pre-push]
-
-      - id: check-docs-build
-        name: Check documentation builds
-        entry: bash -c 'cd docs && python -m sphinx -b html . _build/html'
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
         language: system
+        types: [python]
         pass_filenames: false
-        stages: [pre-push]
-        files: ^(docs/|src/llm_annotator/.*\.py$)
-
-      # - id: pytest
-      #   name: Run pytest
-      #   entry: pytest -q
-      #   language: system
-      #   pass_filenames: false
-      #   stages: [pre-push]
-      #   types: [python]
+      - id: mypy
+        name: mypy
+        entry: uv run mypy
+        language: system
+        types: [python]
+        pass_filenames: false
