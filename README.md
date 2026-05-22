@@ -1,7 +1,14 @@
 # A simple, extensible LLM-based dataset generator and annotator
 
-This repository provides a small, resumable framework for annotating datasets with
-LLMs (via `vllm`).
+[![CI](https://github.com/BramVanroy/llm-annotator/actions/workflows/ci.yml/badge.svg)](https://github.com/BramVanroy/llm-annotator/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/BramVanroy/llm-annotator/branch/main/graph/badge.svg)](https://codecov.io/gh/BramVanroy/llm-annotator)
+[![PyPI version](https://badge.fury.io/py/llm-annotator.svg)](https://badge.fury.io/py/llm-annotator)
+[![Python versions](https://img.shields.io/pypi/pyversions/llm-annotator.svg)](https://pypi.org/project/llm-annotator/)
+[![License](https://img.shields.io/github/license/BramVanroy/llm-annotator)](LICENSE)
+![GitHub tag](https://img.shields.io/github/v/tag/BramVanroy/llm-annotator)
+
+
+This repository provides a small, resumable framework for annotating datasets with LLMs (via `vllm`).
 
 ## Documentation
 
