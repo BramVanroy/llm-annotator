@@ -9,7 +9,18 @@ def is_stub(wikitext: str):
     return r"{{beginnetje" in wikitext.lower()
 
 
-def main(num_workers: int | None = None):
+def main(args=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Filter finewiki-nl for quality."
+    )
+    parser.add_argument("-j", "--num-workers", type=int, default=None)
+    parser.add_argument(
+        "--hub-id", default=None, help="HF Hub dataset ID to push to."
+    )
+    args = parser.parse_args(args)
+
     hf_user = get_hf_username()
 
     ds = load_dataset("HuggingFaceFW/finewiki", "nl")
@@ -25,17 +36,16 @@ def main(num_workers: int | None = None):
             and not is_stub(wikitext)
         ),
         input_columns=["text", "wikitext"],
-        num_proc=num_workers,
+        num_proc=args.num_workers,
     )
     print(ds)
 
-    ds.push_to_hub(f"{hf_user}/finewiki-nl-30-to-24k-tokens")
+    hub_id = args.hub_id or (
+        f"{hf_user}/finewiki-nl-30-to-24k-tokens" if hf_user else None
+    )
+    if hub_id:
+        ds.push_to_hub(hub_id)
 
 
 if __name__ == "__main__":
-    import argparse
-
-    cparser = argparse.ArgumentParser()
-    cparser.add_argument("-j", "--num-workers", type=int, default=None)
-    cargs = cparser.parse_args()
-    main(num_workers=cargs.num_workers)
+    main()

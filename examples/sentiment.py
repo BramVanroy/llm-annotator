@@ -5,7 +5,23 @@ from llm_annotator import Annotator, VLLMOfflineClient
 from llm_annotator.utils import get_hf_username
 
 
-def main():
+def main(args=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Sentiment annotation on IMDB."
+    )
+    parser.add_argument(
+        "--model", default="RedHatAI/gemma-3-27b-it-FP8-dynamic"
+    )
+    parser.add_argument("--max-model-len", type=int, default=4096)
+    parser.add_argument("--max-num-samples", type=int, default=200)
+    parser.add_argument("--output-dir", default="outputs/sentiment-imdb-qwen")
+    parser.add_argument(
+        "--hub-id", default=None, help="HF Hub dataset ID to push to."
+    )
+    args = parser.parse_args(args)
+
     hf_user = get_hf_username()
     prompt_prefix = """Analyze the sentiment of the following movie review and classify it as positive or negative.
 
@@ -35,28 +51,19 @@ Classification:"""
             sample["sentiment"] = sample["sentiment"].strip()
         return sample
 
-    model = "RedHatAI/Mistral-Small-3.2-24B-Instruct-2506-FP8"
-    extra_vllm_kwargs = {
-        "tokenizer_mode": "mistral",
-        "config_format": "mistral",
-        "load_format": "mistral",
-    }
-
-    model = "RedHatAI/gemma-3-27b-it-FP8-dynamic"
-    extra_vllm_kwargs = {}
     client = VLLMOfflineClient(
-        model=model,
-        max_model_len=4096,
-        extra_vllm_kwargs=extra_vllm_kwargs,
+        model=args.model,
+        max_model_len=args.max_model_len,
     )
+    hub_id = args.hub_id or (f"{hf_user}/sentiment-imdb" if hf_user else None)
     with Annotator(client=client, verbose=True) as anno:
         ds = anno.annotate_dataset(
-            output_dir="outputs/sentiment-imdb-qwen",
+            output_dir=args.output_dir,
             prompt_template=prompt_template,
             dataset_name="stanfordnlp/imdb",
             dataset_split="test",
-            new_hub_id=f"{hf_user}/sentiment-imdb",
-            max_num_samples=200,
+            new_hub_id=hub_id,
+            max_num_samples=args.max_num_samples,
             cache_input_dataset=False,  # `True` is generally useful, not for demo purposes
             output_schema=output_schema,
             keep_columns=["text", "label"],  # Keep all original columns
@@ -69,7 +76,7 @@ Classification:"""
             postprocess_fn=postprocess_fn,
         )
     print(ds)
-    shutil.rmtree("outputs/sentiment-imdb-qwen")
+    shutil.rmtree(args.output_dir)
 
 
 if __name__ == "__main__":

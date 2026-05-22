@@ -9,7 +9,37 @@ CURR_DIR = Path(__file__).parent
 OUTPUT_ROOT_DIR = CURR_DIR.parent.parent.joinpath("outputs")
 
 
-def main():
+def main(args=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Generate Dutch Wikipedia MCQ dataset."
+    )
+    parser.add_argument(
+        "--model", default="RedHatAI/Mistral-Small-3.2-24B-Instruct-2506-FP8"
+    )
+    parser.add_argument("--max-model-len", type=int, default=48_000)
+    parser.add_argument("--max-num-seqs", type=int, default=32)
+    parser.add_argument(
+        "--max-num-samples",
+        type=int,
+        default=None,
+        help="Limit number of samples to process.",
+    )
+    parser.add_argument("--temperature", type=float, default=0.15)
+    parser.add_argument("--max-tokens", type=int, default=12_000)
+    parser.add_argument(
+        "--dataset", default="BramVanroy/finewiki-nl-30-to-24k-tokens"
+    )
+    parser.add_argument("--dataset-split", default="train")
+    parser.add_argument(
+        "--output-dir", default=str(OUTPUT_ROOT_DIR / "wiki-nl-mcq")
+    )
+    parser.add_argument(
+        "--hub-id", default=None, help="HF Hub dataset ID to push to."
+    )
+    args = parser.parse_args(args)
+
     hf_user = get_hf_username()
     prompt_template = CURR_DIR.joinpath("prompt_template.md").read_text(
         encoding="utf-8"
@@ -21,12 +51,10 @@ def main():
         CURR_DIR.joinpath("output.schema.json").read_text(encoding="utf-8")
     )
 
-    model = "RedHatAI/Mistral-Small-3.2-24B-Instruct-2506-FP8"
-    dataset = "BramVanroy/finewiki-nl-30-to-24k-tokens"
-
+    hub_id = args.hub_id or (f"{hf_user}/wiki-nl-mcq" if hf_user else None)
     options = VLLMRuntimeOptions(
-        temperature=0.15,
-        max_tokens=12_000,
+        temperature=args.temperature,
+        max_tokens=args.max_tokens,
     )
     extra_vllm_kwargs = {
         "load_format": "mistral",
@@ -35,19 +63,20 @@ def main():
         "limit_mm_per_prompt": {"image": 0},
     }
     client = VLLMOfflineClient(
-        model=model,
-        max_model_len=48000,
-        max_num_seqs=32,
+        model=args.model,
+        max_model_len=args.max_model_len,
+        max_num_seqs=args.max_num_seqs,
         gpu_memory_utilization=0.95,
         extra_vllm_kwargs=extra_vllm_kwargs,
     )
     with Annotator(client=client, verbose=True) as anno:
         anno.annotate_dataset(
-            output_dir=OUTPUT_ROOT_DIR / "wiki-nl-mcq",
+            output_dir=args.output_dir,
             prompt_template=prompt_template,
-            dataset_name=dataset,
-            dataset_split="train",
-            new_hub_id=f"{hf_user}/wiki-nl-mcq",
+            dataset_name=args.dataset,
+            dataset_split=args.dataset_split,
+            new_hub_id=hub_id,
+            max_num_samples=args.max_num_samples,
             keep_columns=["text", "title", "url"],
             upload_every_n_samples=None,
             options=options,

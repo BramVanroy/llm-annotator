@@ -10,31 +10,51 @@ from llm_annotator import (
 CURR_DIR = Path(__file__).parent
 
 
-def main():
+def main(args=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Generate NER dataset from scratch."
+    )
+    parser.add_argument(
+        "--model", default="RedHatAI/gemma-3-27b-it-FP8-dynamic"
+    )
+    parser.add_argument("--max-model-len", type=int, default=2048)
+    parser.add_argument("--max-num-samples", type=int, default=100)
+    parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument("--top-p", type=float, default=0.95)
+    parser.add_argument("--top-k", type=int, default=64)
+    parser.add_argument("--max-tokens", type=int, default=1024)
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Output directory. Defaults to outputs/ner-from_scratch-{n}.",
+    )
+    args = parser.parse_args(args)
+
     prompt = CURR_DIR.joinpath("prompt_template.md").read_text(
         encoding="utf-8"
     )
-    model = "RedHatAI/gemma-3-27b-it-FP8-dynamic"
+    n = args.max_num_samples
+    output_dir = args.output_dir or f"outputs/ner-from_scratch-{n}"
     extra_vllm_kwargs = {"limit_mm_per_prompt": {"image": 0, "audio": 0}}
     options = VLLMRuntimeOptions(
-        temperature=1.0,
-        top_p=0.95,
-        top_k=64,
-        max_tokens=1024,
+        temperature=args.temperature,
+        top_p=args.top_p,
+        top_k=args.top_k,
+        max_tokens=args.max_tokens,
     )
-    max_num_samples = 100
-
     client = VLLMOfflineClient(
-        model=model,
-        max_model_len=2048,
+        model=args.model,
+        max_model_len=args.max_model_len,
         gpu_memory_utilization=0.95,
         extra_vllm_kwargs=extra_vllm_kwargs,
     )
     with Annotator(client=client, verbose=True) as anno:
         anno.generate_dataset(
-            output_dir=f"outputs/ner-from_scratch-{max_num_samples}",
+            output_dir=output_dir,
             prompts=prompt,
-            max_num_samples=max_num_samples,
+            max_num_samples=n,
             upload_every_n_samples=None,
             options=options,
         )
