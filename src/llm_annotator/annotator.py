@@ -30,7 +30,7 @@ from llm_annotator.utils import (
 )
 
 
-def destroy_on_error(func):
+def destroy_on_error(func: Callable[..., Any]) -> Callable[..., Any]:
     """Decorate an ``Annotator`` method to call :meth:`~Annotator.destroy` on any exception.
 
     Catches ``BaseException`` (including ``KeyboardInterrupt`` and ``SystemExit``)
@@ -45,7 +45,7 @@ def destroy_on_error(func):
     """
 
     @wraps(func)
-    def wrapper(self, *args, **kwargs):
+    def wrapper(self: "Annotator", *args: Any, **kwargs: Any) -> Any:
         try:
             return func(self, *args, **kwargs)
         except BaseException as e:
@@ -117,11 +117,11 @@ class Annotator:
     num_proc: int | None = None
     verbose: bool = False
 
-    def __enter__(self):
+    def __enter__(self) -> "Annotator":
         """Enter the context manager, returning the annotator instance."""
         return self
 
-    def __exit__(self, exc_type, exc, tb):
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         """Exit the context manager and free all client resources."""
         self.destroy()
 
@@ -370,7 +370,7 @@ class Annotator:
         idx_column: str,
         task_prefix: str,
         system_message: str | None = None,
-    ) -> dict[str, list[dict[str, str]]]:
+    ) -> dict[str, Any]:
         """Restructure the sample into a "messages" format. Fills in the prompt template with values from the sample,
         based on the prompt_fields.
 
@@ -469,7 +469,21 @@ class Annotator:
             f"{task_prefix}response": response.text,
             f"{task_prefix}finish_reason": response.stop_reason,
             f"{task_prefix}num_tokens": response.num_output_tokens,
+            f"{task_prefix}error": response.error,
+            f"{task_prefix}error_type": response.error_type,
         }
+
+        if response.error is not None:
+            if not output_schema:
+                return data
+
+            result = dict.fromkeys(output_schema.get("properties", {}).keys())
+            return {
+                **data,
+                f"{task_prefix}valid_fields": False,
+                **result,
+            }
+
         if not output_schema:
             return data
 
@@ -532,11 +546,13 @@ class Annotator:
                 output_schema=output_schema,
                 task_prefix=task_prefix,
             )
-            if postprocess_fn:
+            if postprocess_fn and response.error is None:
                 res = ensure_returns_dict(postprocess_fn, res)
 
             if validate_fn:
-                if (
+                if response.error is not None:
+                    is_valid = False
+                elif (
                     f"{task_prefix}valid_fields" in res
                     and res[f"{task_prefix}valid_fields"] is False
                 ):
@@ -804,6 +820,8 @@ class Annotator:
         if output_schema is not None:
             if isinstance(output_schema, str):
                 output_schema = json.loads(output_schema)
+            if not isinstance(output_schema, dict):
+                raise TypeError("'output_schema' must decode to a dictionary.")
             if options is not None and options.json_schema is not None:
                 raise ValueError(
                     "Provide 'output_schema' OR set 'options.json_schema', not both."
@@ -998,7 +1016,7 @@ class Annotator:
         postprocess_fn: Callable | None = None,
         num_retries_invalid: int = 5,
         system_message: str | None = None,
-    ):
+    ) -> Dataset:
         """Generate a new dataset from scratch using LLM completions.
 
         Main entry point for from-scratch data generation. Unlike ``annotate_dataset``,
@@ -1235,3 +1253,6 @@ class Annotator:
         if self.verbose:
             url = f"https://huggingface.co/datasets/{new_hub_id}/tree/{task_prefix}jsonl_upload"
             print(f"Backed-up data to the HF Hub: {url}")
+
+
+__all__ = ["Annotator", "destroy_on_error"]

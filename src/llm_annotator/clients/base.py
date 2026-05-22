@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import StrEnum, auto
-from typing import Any, ClassVar, Generic, Self, TypeVar
+from typing import Any, ClassVar, Generic, Literal, Self, TypeVar
+
+from llm_annotator.clients.exceptions import ProviderError
+from llm_annotator.logging_utils import get_logger
 
 
-T_Response = TypeVar("T_Response")
+# So that sub-classes can extend their runtime options without breaking typing
 T_Options = TypeVar("T_Options", bound="ProviderRuntimeOptions")
+OnError = Literal["raise", "ignore", "warn"]
 
 
 class Provider(StrEnum):
@@ -35,6 +39,13 @@ class ProviderRuntimeOptions:
     max_tokens: int | None = None
     json_schema: dict[str, Any] | None = None
 
+    def dict(self, *, exclude_none: bool = False) -> dict[str, object]:
+        """Convert the options dataclass to a dict, optionally excluding None values."""
+        result = asdict(self)
+        if exclude_none:
+            result = {k: v for k, v in result.items() if v is not None}
+        return result
+
 
 @dataclass(slots=True, frozen=True)
 class Response:
@@ -45,22 +56,67 @@ class Response:
     model: str | None = None
     provider: Provider | None = None
     num_output_tokens: int | None = None
+    full_response: object | None = None
+    error: str | None = None
+    error_type: str | None = None
 
 
-class Client(ABC, Generic[T_Response, T_Options]):
+class Client(ABC, Generic[T_Options]):
     """Base client interface used by all provider adapters."""
 
     provider_type: ClassVar[Provider]
 
-    def __init__(self, model: str, max_workers: int = 4) -> None:
+    def __init__(
+        self,
+        model: str,
+        max_workers: int = 4,
+        on_error: OnError = "raise",
+    ) -> None:
         """Initialize a provider client.
 
         Args:
             model: Provider-specific model name.
             max_workers: Maximum number of concurrent worker threads for ``batch_generate``. Clients that support native batching may ignore this parameter.
+            on_error: Error behavior for provider failures.
+                - ``"raise"``: raise a :class:`ProviderError` (default).
+                - ``"ignore"``: return a :class:`Response` with ``error`` set.
+                - ``"warn"``: log a warning and return an error :class:`Response`.
         """
+        if on_error not in {"raise", "ignore", "warn"}:
+            raise ValueError(
+                "'on_error' must be one of: 'raise', 'ignore', 'warn'."
+            )
+
         self.model = model
         self.max_workers = max_workers
+        self.on_error = on_error
+        self._logger = get_logger(f"clients.{self.provider_type.value}")
+
+    def _handle_error(self, exc: Exception, *, context: str) -> Response:
+        """Handle provider errors according to ``self.on_error`` policy."""
+        message = f"{context}: {exc}"
+        provider_error = (
+            exc if isinstance(exc, ProviderError) else ProviderError(message)
+        )
+        response_error = (
+            message if isinstance(exc, ProviderError) else str(provider_error)
+        )
+
+        if self.on_error == "raise":
+            raise provider_error from exc
+
+        if self.on_error == "warn":
+            self._logger.warning(message)
+        else:
+            self._logger.debug(message)
+
+        return Response(
+            text="",
+            model=self.model,
+            provider=self.provider_type,
+            error=response_error,
+            error_type=type(provider_error).__name__,
+        )
 
     def __enter__(self) -> Self:
         """Enter the context manager, returning this client instance."""
@@ -71,7 +127,7 @@ class Client(ABC, Generic[T_Response, T_Options]):
         self.destroy()
 
     @abstractmethod
-    def _process_response(self, response: T_Response) -> Response:
+    def _process_response(self, response: Any) -> Response:
         """Process raw provider response into a structured Response object."""
         raise NotImplementedError(
             "Subclasses must implement the _process_response method."
@@ -83,12 +139,17 @@ class Client(ABC, Generic[T_Response, T_Options]):
         *,
         messages: list[dict[str, str]],
         options: T_Options | None = None,
+        gen_kwargs: dict[str, Any] | None = None,
     ) -> Response:
         """Generate a response from the provider.
 
         Args:
             messages: List of message dicts with "role" and "content" keys.
-            **kwargs: Provider-specific generation options.
+            options: Provider-specific generation options.
+                NOTE: using this over gen_kwargs is preferred and implemented to facilitate sub-classing
+                and satisfying typing and code-hinting.
+            gen_kwargs: Additional provider-specific generation kwargs that are not covered by the standard options.
+                Has precedence over ``options``.
 
         Returns:
             A Response object containing the generated response.
@@ -102,6 +163,7 @@ class Client(ABC, Generic[T_Response, T_Options]):
         *,
         messages: list[list[dict[str, str]]],
         options: T_Options | None = None,
+        gen_kwargs: dict[str, Any] | None = None,
     ) -> list[Response]:
         """Generate responses for a batch of inputs.
 
@@ -112,12 +174,19 @@ class Client(ABC, Generic[T_Response, T_Options]):
         Args:
             messages: List of message lists, where each message dict has "role" and "content" keys.
             options: Provider-specific generation options.
+            gen_kwargs: Additional provider-specific generation kwargs that are not covered by the standard options.
+                Has precedence over ``options``.
 
         Returns:
             A list of Response objects containing the generated responses.
         """
         return [
-            self.generate(messages=msgs, options=options) for msgs in messages
+            self.generate(
+                messages=msgs,
+                options=options,
+                gen_kwargs=gen_kwargs,
+            )
+            for msgs in messages
         ]
 
     def warm_up(
@@ -149,3 +218,12 @@ class Client(ABC, Generic[T_Response, T_Options]):
         raise NotImplementedError(
             "Subclasses must implement the _handle_stop_reason method."
         )
+
+
+__all__ = [
+    "Client",
+    "OnError",
+    "Provider",
+    "ProviderRuntimeOptions",
+    "Response",
+]

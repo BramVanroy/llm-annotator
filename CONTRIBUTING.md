@@ -38,8 +38,32 @@ make style    # Auto-format code
 
 4. Run tests:
 ```bash
-pytest -q
+make test
 ```
+
+The default `make test` target runs the fast suite (`-m "not slow"`).
+
+Run specific test tiers when needed:
+
+```bash
+# Fast tests (default)
+make test-fast
+
+# Slow tests only
+make test-slow
+
+# Integration tests only
+make test-integration
+
+# Entire suite
+make test-all
+```
+
+Markers:
+- `slow`: tests that may load models or run substantially longer.
+- `integration`: tests that interact with external systems or real-model runtimes.
+
+CI runs fast tests on pull requests and pushes. Slow tests run in a dedicated CI job on pushes to `main`.
 
 ### Documentation Changes
 

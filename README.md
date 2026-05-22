@@ -60,8 +60,36 @@ Or check out the [examples/](examples/) directory for complete working examples.
 ## Testing
 
 ```sh
-pytest -q
+make test
 ```
+
+`make test` runs the fast suite and skips tests marked as `slow`.
+
+Additional test targets:
+
+```sh
+# Fast tests (same as `make test`)
+make test-fast
+
+# Slow tests only
+make test-slow
+
+# Integration tests only
+make test-integration
+
+# Entire suite (fast + slow)
+make test-all
+```
+
+You can also run markers directly with pytest:
+
+```sh
+uv run pytest -m "not slow"
+uv run pytest -m "slow"
+uv run pytest -m "integration"
+```
+
+Slow and integration tests may load local models, require more runtime, or depend on optional components.
 
 ## Building documentation
 

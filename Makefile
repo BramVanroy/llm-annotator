@@ -1,4 +1,4 @@
-.PHONY: quality style test typecheck serve-docs
+.PHONY: quality style test test-fast test-slow test-integration test-all typecheck serve-docs
 
 PACKAGE = src/llm_annotator
 
@@ -12,6 +12,18 @@ style:
 	uv run ruff format $(PACKAGE) tests/ scripts/
 
 test:
+	uv run pytest -m "not slow" --cov=$(PACKAGE) --cov-report=term-missing --cov-report=xml
+
+test-fast:
+	uv run pytest -m "not slow" --cov=$(PACKAGE) --cov-report=term-missing --cov-report=xml
+
+test-slow:
+	uv run pytest -m "slow" --cov=$(PACKAGE) --cov-report=term-missing --cov-report=xml
+
+test-integration:
+	uv run pytest -m "integration" --cov=$(PACKAGE) --cov-report=term-missing --cov-report=xml
+
+test-all:
 	uv run pytest --cov=$(PACKAGE) --cov-report=term-missing --cov-report=xml
 
 typecheck:

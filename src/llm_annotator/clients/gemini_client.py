@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from llm_annotator.clients.base import (
     Client,
+    OnError,
     Provider,
     ProviderRuntimeOptions,
     Response,
@@ -17,13 +18,17 @@ if TYPE_CHECKING:
     from google.genai.types import GenerateContentResponse
 
 
-class GeminiClient(Client["GenerateContentResponse", ProviderRuntimeOptions]):
+class GeminiClient(Client[ProviderRuntimeOptions]):
     """Client wrapper for Gemini APIs."""
 
     provider_type = Provider.GEMINI
 
     def __init__(
-        self, model: str, max_workers: int = 4, api_key: str | None = None
+        self,
+        model: str,
+        max_workers: int = 4,
+        api_key: str | None = None,
+        on_error: OnError = "raise",
     ) -> None:
         """Initialize the Gemini client.
 
@@ -32,11 +37,14 @@ class GeminiClient(Client["GenerateContentResponse", ProviderRuntimeOptions]):
             max_workers: Maximum number of concurrent worker threads for ``batch_generate``.
             api_key: Gemini API key. If omitted, the SDK will use
                 ``GEMINI_API_KEY`` from the environment.
+            on_error: Error behavior when generation fails.
         """
 
         from google import genai
 
-        super().__init__(model=model, max_workers=max_workers)
+        super().__init__(
+            model=model, max_workers=max_workers, on_error=on_error
+        )
         self._api_key = api_key
         self._client = genai.Client(api_key=self._api_key)
 
@@ -64,6 +72,7 @@ class GeminiClient(Client["GenerateContentResponse", ProviderRuntimeOptions]):
             model=response.model_version,
             provider=self.provider_type,
             num_output_tokens=num_output_tokens,
+            full_response=response,
         )
 
     def generate(
@@ -71,12 +80,15 @@ class GeminiClient(Client["GenerateContentResponse", ProviderRuntimeOptions]):
         *,
         messages: list[dict[str, str]],
         options: ProviderRuntimeOptions | None = None,
+        gen_kwargs: dict[str, Any] | None = None,
     ) -> Response:
         """Generate a response using Gemini.
 
         Args:
             messages: List of message dictionaries.
             options: Optional generation configuration.
+            gen_kwargs: Additional provider-specific generation kwargs that are not covered by the standard options.
+                Has precedence over ``options``.
 
         Returns:
             A Response object containing the generated response.
@@ -87,34 +99,46 @@ class GeminiClient(Client["GenerateContentResponse", ProviderRuntimeOptions]):
         from google.genai import types
 
         options = options or ProviderRuntimeOptions()
-        system_instruction, prompt_text = _messages_to_prompt(messages)
 
-        config = types.GenerateContentConfig(
-            max_output_tokens=options.max_tokens,
-            system_instruction=system_instruction or None,
-            response_schema=options.json_schema
-            if options.json_schema is not None
-            else None,
-            response_mime_type="application/json"
-            if options.json_schema is not None
-            else None,
-        )
         try:
+            # Claude API requires separating the system prompt
+            system_instruction, prompt_text = _messages_to_prompt(messages)
+
+            config = types.GenerateContentConfig(
+                max_output_tokens=options.max_tokens,
+                system_instruction=system_instruction or None,
+                response_schema=options.json_schema
+                if options.json_schema is not None
+                else None,
+                response_mime_type="application/json"
+                if options.json_schema is not None
+                else None,
+            )
+            request_payload: dict[str, Any] = {
+                "model": self.model,
+                "contents": prompt_text,
+                "config": config,
+            }
+            request_payload.update(gen_kwargs or {})
             response = self._client.models.generate_content(
-                model=self.model,
-                contents=prompt_text,
-                config=config,
+                **request_payload,
             )
         except Exception as exc:
-            raise ProviderError(f"Gemini request failed: {exc}") from exc
+            return self._handle_error(exc, context="Gemini request failed")
         else:
-            return self._process_response(response=response)
+            try:
+                return self._process_response(response=response)
+            except Exception as exc:
+                return self._handle_error(
+                    exc, context="Gemini response processing failed"
+                )
 
     def batch_generate(
         self,
         *,
         messages: list[list[dict[str, str]]],
         options: ProviderRuntimeOptions | None = None,
+        gen_kwargs: dict[str, Any] | None = None,
     ) -> list[Response]:
         """Generate responses for a batch of inputs concurrently.
 
@@ -124,6 +148,8 @@ class GeminiClient(Client["GenerateContentResponse", ProviderRuntimeOptions]):
         Args:
             messages: List of message lists, one per request.
             options: Optional generation configuration.
+            gen_kwargs: Additional provider-specific generation kwargs that are not covered by the standard options.
+                Has precedence over ``options``.
 
         Returns:
             A list of Response objects in the same order as the input.
@@ -135,10 +161,27 @@ class GeminiClient(Client["GenerateContentResponse", ProviderRuntimeOptions]):
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = [
-                executor.submit(self.generate, messages=msgs, options=options)
+                executor.submit(
+                    self.generate,
+                    messages=msgs,
+                    options=options,
+                    gen_kwargs=gen_kwargs,
+                )
                 for msgs in messages
             ]
-        return [f.result() for f in futures]
+
+        responses: list[Response] = []
+        for idx, future in enumerate(futures):
+            try:
+                responses.append(future.result())
+            except Exception as exc:
+                responses.append(
+                    self._handle_error(
+                        exc,
+                        context=f"Gemini batch request failed at index {idx}",
+                    )
+                )
+        return responses
 
     def _handle_stop_reason(
         self,
@@ -239,3 +282,6 @@ def _messages_to_prompt(
             "A user message with role 'user' is required for Gemini generation."
         )
     return system_instruction, prompt
+
+
+__all__ = ["GeminiClient"]

@@ -13,6 +13,11 @@ from typing import Generator
 from huggingface_hub import whoami
 from tqdm import tqdm
 
+from llm_annotator.logging_utils import get_logger
+
+
+LOGGER = get_logger("utils")
+
 
 def get_hash(text: str) -> str:
     """Compute a SHA256 hash for a given text string.
@@ -92,15 +97,19 @@ def retry(num_retries: int = 3, sleep_time_s: int = 1) -> Callable:
                     return func(*args, **kwargs)
                 except Exception as exc:
                     if retries_left <= 0:
-                        print(
-                            f"Function {func.__name__} failed after {num_retries} retries.",
-                            file=sys.stderr,
+                        LOGGER.error(
+                            "Function %s failed after %d retries.",
+                            func.__name__,
+                            num_retries,
                         )
                         raise exc
 
-                    print(
-                        f"Function {func.__name__} failed with {exc}. Retrying in {current_sleep_time}s... ({retries_left} retries left)",
-                        file=sys.stderr,
+                    LOGGER.warning(
+                        "Function %s failed with %s. Retrying in %ss... (%d retries left)",
+                        func.__name__,
+                        exc,
+                        current_sleep_time,
+                        retries_left,
                     )
                     time.sleep(current_sleep_time)
                     retries_left -= 1
@@ -246,10 +255,12 @@ def get_hf_username() -> str | None:
 
     Returns:
         The Hugging Face username, or None if not logged in.
-    Raises:
-        LocalTokenNotFoundError: If no local token is found.
     """
-    whowasi = whoami()
+    try:
+        whowasi = whoami()
+    except Exception:
+        return None
+
     if whowasi and "name" in whowasi and whowasi["type"] == "user":
         return str(whowasi["name"])
     return None
@@ -280,3 +291,19 @@ def extract_prompt_prefix(prompt: str) -> str:
         'No placeholders here'
     """
     return re.split(_PLACEHOLDER_RE, prompt, maxsplit=1)[0]
+
+
+
+__all__ = [
+    "convert_int_to_annotated_str",
+    "count_lines",
+    "ensure_returns_bool",
+    "ensure_returns_dict",
+    "extract_prompt_prefix",
+    "get_hash",
+    "get_hf_username",
+    "get_lib_versions",
+    "remove_empty_jsonl_files",
+    "retry",
+    "yield_jsonl_robust",
+]

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import gc
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from llm_annotator.clients.base import (
     Client,
+    OnError,
     Provider,
     ProviderRuntimeOptions,
     Response,
@@ -95,7 +96,7 @@ class VLLMRuntimeOptions(ProviderRuntimeOptions):
         return SamplingParams(**kwargs)
 
 
-class VLLMOfflineClient(Client["RequestOutput", VLLMRuntimeOptions]):
+class VLLMOfflineClient(Client[VLLMRuntimeOptions]):
     """Offline vLLM client that runs inference in-process.
 
     Loads the model into GPU memory on construction and uses vLLM's
@@ -151,7 +152,7 @@ class VLLMOfflineClient(Client["RequestOutput", VLLMRuntimeOptions]):
         ...     "properties": {"label": {"type": "string"}},
         ...     "required": ["label"],
         ... }
-        >>> opts = VLLMRuntimeOptions(max_tokens=128, json_schema=schema)
+        >>> opts = VLLMRuntimeOptions(max_tokens=128, json_schema=schema)  # doctest: +SKIP
         >>> with VLLMOfflineClient(  # doctest: +SKIP
         ...     model="meta-llama/Llama-3.2-3B-Instruct"
         ... ) as client:
@@ -179,6 +180,7 @@ class VLLMOfflineClient(Client["RequestOutput", VLLMRuntimeOptions]):
         enable_prefix_caching: bool = True,
         enable_chunked_prefill: bool = True,
         extra_vllm_kwargs: dict[str, Any] | None = None,
+        on_error: OnError = "raise",
     ) -> None:
         """Initialize the offline vLLM client and load the model into memory.
 
@@ -199,11 +201,12 @@ class VLLMOfflineClient(Client["RequestOutput", VLLMRuntimeOptions]):
             extra_vllm_kwargs: Additional keyword arguments forwarded to
                 ``vllm.LLM``. Explicit constructor arguments take precedence
                 over any conflicting keys here.
+            on_error: Error behavior when generation fails.
 
         Raises:
             ImportError: If vLLM is not installed.
         """
-        super().__init__(model=model)
+        super().__init__(model=model, on_error=on_error)
         self._tensor_parallel_size = tensor_parallel_size
         self._max_num_seqs = max_num_seqs
         self._gpu_memory_utilization = gpu_memory_utilization
@@ -296,9 +299,11 @@ class VLLMOfflineClient(Client["RequestOutput", VLLMRuntimeOptions]):
             sampling_params = SamplingParams(max_tokens=1)
 
         try:
-            self._pipe.chat([messages], sampling_params, use_tqdm=False)
+            self._pipe.chat(
+                cast(Any, [messages]), sampling_params, use_tqdm=False
+            )
         except Exception as exc:
-            raise ProviderError(f"vLLM offline warm-up failed: {exc}") from exc
+            self._handle_error(exc, context="vLLM offline warm-up failed")
 
     def _process_response(self, response: RequestOutput) -> Response:
         """Convert a single vLLM RequestOutput to a structured Response.
@@ -328,6 +333,7 @@ class VLLMOfflineClient(Client["RequestOutput", VLLMRuntimeOptions]):
             model=self.model,
             provider=self.provider_type,
             num_output_tokens=num_output_tokens,
+            full_response=response,
         )
 
     def generate(
@@ -335,6 +341,7 @@ class VLLMOfflineClient(Client["RequestOutput", VLLMRuntimeOptions]):
         *,
         messages: list[dict[str, str]],
         options: VLLMRuntimeOptions | None = None,
+        gen_kwargs: dict[str, Any] | None = None,
     ) -> Response:
         """Generate a single response for a conversation.
 
@@ -344,6 +351,8 @@ class VLLMOfflineClient(Client["RequestOutput", VLLMRuntimeOptions]):
             messages: Conversation as a list of role/content dicts.
             options: Optional generation configuration. Pass a
                 VLLMRuntimeOptions instance to use vLLM-specific settings.
+            gen_kwargs: Additional provider-specific generation kwargs that are
+                not covered by ``options``. Has precedence over ``options``.
 
         Returns:
             A Response object containing the generated text and metadata.
@@ -352,13 +361,18 @@ class VLLMOfflineClient(Client["RequestOutput", VLLMRuntimeOptions]):
             ProviderError: If the vLLM call fails or the stop reason is
                 an error condition.
         """
-        return self.batch_generate(messages=[messages], options=options)[0]
+        return self.batch_generate(
+            messages=[messages],
+            options=options,
+            gen_kwargs=gen_kwargs,
+        )[0]
 
     def batch_generate(
         self,
         *,
         messages: list[list[dict[str, str]]],
         options: VLLMRuntimeOptions | None = None,
+        gen_kwargs: dict[str, Any] | None = None,
     ) -> list[Response]:
         """Generate responses for a batch of conversations.
 
@@ -371,6 +385,8 @@ class VLLMOfflineClient(Client["RequestOutput", VLLMRuntimeOptions]):
             options: Optional generation configuration. Pass a
                 VLLMRuntimeOptions instance to use vLLM-specific settings
                 such as temperature, top-p, or a JSON schema.
+            gen_kwargs: Additional provider-specific generation kwargs that are
+                not covered by ``options``. Has precedence over ``options``.
 
         Returns:
             A list of Response objects, one per input conversation, in the
@@ -380,9 +396,13 @@ class VLLMOfflineClient(Client["RequestOutput", VLLMRuntimeOptions]):
             ProviderError: If the model is not loaded or the vLLM call fails.
         """
         if self._pipe is None:
-            raise ProviderError(
-                "vLLM model is not loaded. The model may have been destroyed."
+            error_response = self._handle_error(
+                ProviderError(
+                    "vLLM model is not loaded. The model may have been destroyed."
+                ),
+                context="vLLM offline batch generation failed",
             )
+            return [error_response for _ in messages]
 
         if isinstance(options, VLLMRuntimeOptions):
             sampling_params = options.to_sampling_params()
@@ -394,16 +414,51 @@ class VLLMOfflineClient(Client["RequestOutput", VLLMRuntimeOptions]):
                 kw["max_tokens"] = options.max_tokens
             sampling_params = SamplingParams(**kw)
 
+        if gen_kwargs:
+            for key, value in gen_kwargs.items():
+                if not hasattr(sampling_params, key):
+                    err = self._handle_error(
+                        ValueError(
+                            f"Unsupported vLLM sampling parameter override: {key!r}."
+                        ),
+                        context="vLLM offline generation setup failed",
+                    )
+                    return [err for _ in messages]
+                setattr(sampling_params, key, value)
+
         try:
             outputs = self._pipe.chat(
-                messages, sampling_params, use_tqdm=False
+                cast(Any, messages), sampling_params, use_tqdm=False
             )
         except Exception as exc:
-            raise ProviderError(
-                f"vLLM offline batch generation failed: {exc}"
-            ) from exc
+            error_response = self._handle_error(
+                exc, context="vLLM offline batch generation failed"
+            )
+            return [error_response for _ in messages]
 
-        return [self._process_response(output) for output in outputs]
+        responses: list[Response] = []
+        for idx, output in enumerate(outputs):
+            try:
+                responses.append(self._process_response(output))
+            except Exception as exc:
+                responses.append(
+                    self._handle_error(
+                        exc,
+                        context=f"vLLM offline response processing failed at index {idx}",
+                    )
+                )
+
+        if len(responses) < len(messages):
+            padding = len(messages) - len(responses)
+            err = self._handle_error(
+                ProviderError(
+                    "vLLM offline returned fewer outputs than requested."
+                ),
+                context="vLLM offline batch response validation failed",
+            )
+            responses.extend([err for _ in range(padding)])
+
+        return responses
 
     def destroy(self) -> None:
         """Free GPU memory and clean up all vLLM resources.
@@ -479,3 +534,6 @@ class VLLMOfflineClient(Client["RequestOutput", VLLMRuntimeOptions]):
         raise ProviderError(
             f"vLLM stopped with unexpected reason '{stop_reason}'{token_suffix}."
         )
+
+
+__all__ = ["VLLMOfflineClient", "VLLMRuntimeOptions"]

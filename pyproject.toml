@@ -17,7 +17,6 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
-  "License :: OSI Approved :: Apache Software License",
   "Framework :: MkDocs",
   "Framework :: Pytest",
   "Typing :: Typed",
@@ -25,14 +24,13 @@ classifiers = [
 
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "colorama>=0.4.6,<1",
     "datasets>=4.8.5,<5",
-    "google-genai>=2.3.0",
-    "openai>=2.36.0",
 ]
 
 [project.optional-dependencies]
 vllm = [    
-    "mistral-common>=1.11.2",
+    "mistral-common>=1.11.2,<2",
     "vllm==0.21.0",
 ]
 anthropic = [
@@ -56,6 +54,7 @@ docs = [
 ]
 
 dev = [
+    "llm_annotator[vllm,anthropic,gemini,openai]",
     {include-group = "docs"},
     "interrogate>=1.7.0,<2",
     "mypy>=1.20.1,<2",
@@ -63,6 +62,7 @@ dev = [
     "pytest>=9.0.3,<10",
     "pytest-cov>=7.1.0",
     "ruff>=0.15.10,<1",
+    "types-colorama>=0.4.15.20240311,<1",
 ]
 
 [project.urls]

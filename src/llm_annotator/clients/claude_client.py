@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Literal
 
 from llm_annotator.clients.base import (
     Client,
+    OnError,
     Provider,
     ProviderRuntimeOptions,
     Response,
@@ -13,17 +15,35 @@ from llm_annotator.clients.base import (
 from llm_annotator.clients.exceptions import ProviderError
 
 
+@dataclass(slots=True, frozen=True)
+class ClaudeRuntimeOptions(ProviderRuntimeOptions):
+    """Runtime options specific to the Claude provider."""
+
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
+    """Controls the amount of effort Claude puts into generating the response, which can affect quality and latency. Higher effort levels may produce better responses but take more time and compute resources. If not specified, the provider default will be used."""
+    thinking_type: Literal["enabled", "disabled", "adaptive"] | None = None
+    """When enabled, responses include thinking content blocks showing Claude's thinking process before the final answer. Requires a minimum budget of 1,024 tokens and counts towards your max_tokens limit."""
+    thinking_budget: int | None = None
+    """Determines how many tokens Claude can use for its internal reasoning process. Larger budgets can enable more thorough analysis for complex problems, improving response quality. Must be ≥1024 and less than max_tokens."""
+    thinking_display: Literal["summarized", "ommitted", "full"] | None = None
+    """When thinking is enabled (or adaptive). Controls how thinking content appears in the response. When set to summarized, thinking is returned normally. When set to omitted, thinking content is redacted but a signature is returned for multi-turn continuity. Defaults to summarized."""
+
+
 if TYPE_CHECKING:
     from anthropic.types.message import Message as ClaudeMessage
 
 
-class ClaudeClient(Client["ClaudeMessage", ProviderRuntimeOptions]):
+class ClaudeClient(Client[ClaudeRuntimeOptions]):
     """Client wrapper for Anthropic Claude APIs."""
 
     provider_type = Provider.CLAUDE
 
     def __init__(
-        self, model: str, max_workers: int = 4, api_key: str | None = None
+        self,
+        model: str,
+        max_workers: int = 4,
+        api_key: str | None = None,
+        on_error: OnError = "raise",
     ) -> None:
         """Initialize the Claude client.
 
@@ -31,10 +51,13 @@ class ClaudeClient(Client["ClaudeMessage", ProviderRuntimeOptions]):
             model: Claude model identifier.
             max_workers: Maximum number of concurrent worker threads for ``batch_generate``.
             api_key: Anthropic API key. If not provided, the client will attempt to read from the environment variable `ANTHROPIC_API_KEY`.
+            on_error: Error behavior when generation fails.
         """
         from anthropic import Anthropic
 
-        super().__init__(model=model, max_workers=max_workers)
+        super().__init__(
+            model=model, max_workers=max_workers, on_error=on_error
+        )
 
         self._api_key = api_key
         self._client = Anthropic(api_key=self._api_key)
@@ -63,19 +86,23 @@ class ClaudeClient(Client["ClaudeMessage", ProviderRuntimeOptions]):
             model=response.model,
             provider=self.provider_type,
             num_output_tokens=num_output_tokens,
+            full_response=response,
         )
 
     def generate(
         self,
         *,
         messages: list[dict[str, str]],
-        options: ProviderRuntimeOptions | None = None,
+        options: ClaudeRuntimeOptions | None = None,
+        gen_kwargs: dict[str, Any] | None = None,
     ) -> Response:
         """Generate a structured JSON response using Claude.
 
         Args:
             messages: List of message dictionaries.
-            options: Optional generation configuration.
+            options: Provider-specific generation options.
+            gen_kwargs: Additional provider-specific generation kwargs that are not covered by the standard options.
+                Has precedence over ``options``.
 
         Returns:
             A Response object containing the generated response.
@@ -83,13 +110,23 @@ class ClaudeClient(Client["ClaudeMessage", ProviderRuntimeOptions]):
         Raises:
             ProviderError: If the provider call fails.
         """
-        options = options or ProviderRuntimeOptions()
+        options = options or ClaudeRuntimeOptions()
+
         try:
+            # Claude API requires separating the system prompt
+            messages, system_instruction = _extract_system_instruction(
+                messages
+            )
+
             request_payload: dict[str, Any] = {
                 "model": self.model,
                 "max_tokens": options.max_tokens or 4096,
                 "messages": messages,
             }
+
+            if system_instruction:
+                request_payload["system"] = system_instruction
+
             if options.json_schema is not None:
                 request_payload["output_config"] = {
                     "format": {
@@ -97,18 +134,48 @@ class ClaudeClient(Client["ClaudeMessage", ProviderRuntimeOptions]):
                         "schema": options.json_schema,
                     }
                 }
+            if options.effort is not None:
+                if "output_config" not in request_payload:
+                    request_payload["output_config"] = {}
+                request_payload["output_config"]["effort"] = options.effort
 
+            if options.thinking_type is not None:
+                request_payload["thinking"] = {"type": options.thinking_type}
+
+                if (
+                    options.thinking_type == "enabled"
+                    and options.thinking_budget is not None
+                ):
+                    request_payload["thinking"]["budget_tokens"] = (
+                        options.thinking_budget
+                    )
+
+                if (
+                    options.thinking_type in {"enabled", "adaptive"}
+                    and options.thinking_display is not None
+                ):
+                    request_payload["thinking"]["display"] = (
+                        options.thinking_display
+                    )
+
+            request_payload.update(gen_kwargs or {})
             response = self._client.messages.create(**request_payload)
         except Exception as exc:
-            raise ProviderError(f"Claude request failed: {exc}") from exc
+            return self._handle_error(exc, context="Claude request failed")
         else:
-            return self._process_response(response=response)
+            try:
+                return self._process_response(response=response)
+            except Exception as exc:
+                return self._handle_error(
+                    exc, context="Claude response processing failed"
+                )
 
     def batch_generate(
         self,
         *,
         messages: list[list[dict[str, str]]],
-        options: ProviderRuntimeOptions | None = None,
+        options: ClaudeRuntimeOptions | None = None,
+        gen_kwargs: dict[str, Any] | None = None,
     ) -> list[Response]:
         """Generate responses for a batch of inputs concurrently.
 
@@ -117,7 +184,9 @@ class ClaudeClient(Client["ClaudeMessage", ProviderRuntimeOptions]):
 
         Args:
             messages: List of message lists, one per request.
-            options: Optional generation configuration.
+            options: Provider-specific generation options.
+            gen_kwargs: Additional provider-specific generation kwargs that are not covered by the standard options.
+                Has precedence over ``options``.
 
         Returns:
             A list of Response objects in the same order as the input.
@@ -129,10 +198,27 @@ class ClaudeClient(Client["ClaudeMessage", ProviderRuntimeOptions]):
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = [
-                executor.submit(self.generate, messages=msgs, options=options)
+                executor.submit(
+                    self.generate,
+                    messages=msgs,
+                    options=options,
+                    gen_kwargs=gen_kwargs,
+                )
                 for msgs in messages
             ]
-        return [f.result() for f in futures]
+
+        responses: list[Response] = []
+        for idx, future in enumerate(futures):
+            try:
+                responses.append(future.result())
+            except Exception as exc:
+                responses.append(
+                    self._handle_error(
+                        exc,
+                        context=f"Claude batch request failed at index {idx}",
+                    )
+                )
+        return responses
 
     def _handle_stop_reason(
         self, *, stop_reason: str | None, num_output_tokens: int | None
@@ -182,9 +268,45 @@ class ClaudeClient(Client["ClaudeMessage", ProviderRuntimeOptions]):
     def destroy(self) -> None:
         """Clean up any resources used by the client."""
 
-        from anthropic import Anthropic
-
-        if self._running_batch_ids:
-            client = Anthropic(api_key=self._api_key)
+        if self._client is not None and self._running_batch_ids:
             for batch_id in self._running_batch_ids:
-                client.messages.batches.cancel(batch_id)
+                self._client.messages.batches.cancel(batch_id)
+
+
+def _extract_system_instruction(
+    messages: list[dict[str, str]],
+) -> tuple[list[dict[str, str]], str]:
+    """Convert OpenAI-style messages to Claude input text and instruction.
+
+    Args:
+        messages: List of message dictionaries with 'role' and 'content' keys.
+    Returns:
+        A tuple of (list[dict[str, str]], system_instruction) to be used for Claude generation.
+    """
+    system_instruction = ""
+    for msg_idx, message in enumerate(messages):
+        role = message["role"]
+        content = message["content"]
+
+        if role == "system":
+            if system_instruction:
+                raise ProviderError(
+                    "For Claude, only a single system message is supported."
+                )
+
+            if msg_idx != 0:
+                raise ValueError(
+                    "Make sure that the system message is the first message in the list."
+                )
+            system_instruction = content
+        elif role not in {"user", "assistant"}:
+            raise ValueError(
+                f"Unsupported message role {role!r} for Claude client. Only 'system', 'assistant', and 'user' roles are supported."
+            )
+
+    messages = messages[1:] if system_instruction else messages
+
+    return messages, system_instruction
+
+
+__all__ = ["ClaudeClient", "ClaudeRuntimeOptions"]

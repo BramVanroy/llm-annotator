@@ -17,6 +17,8 @@ uv.lock
 .code-workspace
 scratches/
 results/
+vllm/
+pytorch/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
