@@ -140,6 +140,16 @@ markdown_extensions:
 # Navigation structure for the generated docs site
 nav:
   - Home: index.md
-  - Provider Setup: provider-info.md
-  - API Reference:
-      - llm-annotator (top-level): api/top_level.md
+  - Provider setup: provider-info.md
+  - API reference:
+      - Annotator: api/annotator.md
+      - Clients:
+          - Base: api/clients/base.md
+          - Claude: api/clients/claude.md
+          - Gemini: api/clients/gemini.md
+          - OpenAI: api/clients/openai.md
+          - vLLM (server): api/clients/vllm_client.md
+          - vLLM (offline): api/clients/vllm_offline_client.md
+          - Exceptions: api/clients/exceptions.md
+      - Utils: api/utils.md
+      - Logging: api/logging_utils.md

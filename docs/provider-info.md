@@ -35,10 +35,10 @@ export GEMINI_API_KEY="..."
 For Hugging Face Hub uploads from annotation jobs, authenticate with one of:
 
 ```bash
-export HUGGINGFACE_HUB_TOKEN="..."
-# or
 export HF_TOKEN="..."
 ```
+
+(For Windows users using PowerShell, use the `$env:MYVAR = "myvalue"` syntax.)
 
 ## Examples by provider
 
@@ -107,5 +107,3 @@ client = VLLMOfflineClient(
 with Annotator(client=client) as anno:
     ...
 ```
-
-If you use local vLLM, install flashinfer matching your CUDA version.

@@ -32,6 +32,18 @@ _SOURCE_LINK_PATTERN = re.compile(
     r'(?P<source>[^"]+)'
     r'(?P<suffix>"[^>]*>)'
 )
+_PYCON_BLOCK_PATTERN = re.compile(
+    r'<div class="language-pycon highlight"><pre[^>]*><span></span><code>'
+    r"(?P<code>.*?)"
+    r"</code></pre></div>",
+    flags=re.DOTALL,
+)
+_TEXT_BLOCK_PATTERN = re.compile(
+    r'<div class="language-text highlight"><pre[^>]*><span></span><code>'
+    r"(?P<code>.*?)"
+    r"</code></pre></div>",
+    flags=re.DOTALL,
+)
 
 
 def _strip_doctest_prompts(code: str) -> str:
@@ -65,6 +77,31 @@ def _strip_doctest_prompts(code: str) -> str:
                 expect_output = False
 
     return "\n".join(result).strip()
+
+
+def _extract_code_text(raw_code: str) -> str:
+    """Extract plain code text from rendered HTML code blocks."""
+    without_tags = re.sub(r"<[^>]+>", "", raw_code)
+    return html_lib.unescape(without_tags)
+
+
+def _render_python_block(code: str) -> str:
+    """Render code as a highlighted Python block."""
+    inner = pyg_highlight(code, _lexer, _formatter)
+    return (
+        '<div class="language-python highlight">'
+        "<pre><span></span><code>" + inner + "</code></pre></div>"
+    )
+
+
+def _rewrite_doctest_block(match: re.Match[str]) -> str:
+    """Rewrite a doctest-like code block into plain Python-highlighted code."""
+    plain_code = _extract_code_text(match.group("code"))
+    if ">>>" not in plain_code:
+        return match.group(0)
+
+    clean = _strip_doctest_prompts(plain_code)
+    return _render_python_block(clean)
 
 
 def _get_docs_source_ref() -> str:
@@ -139,24 +176,8 @@ def _rewrite_source_links(
 def on_page_content(html: str, **kwargs) -> str:
     """Post-process rendered page HTML for doctests and GitHub source links."""
 
-    def transform_block(m: re.Match) -> str:
-        """Transform a text-highlighted doctest block into Python-highlighted code."""
-        raw_code = m.group(1)
-        if "&gt;&gt;&gt;" not in raw_code:
-            return m.group(0)
-        clean = _strip_doctest_prompts(html_lib.unescape(raw_code))
-        inner = pyg_highlight(clean, _lexer, _formatter)
-        return (
-            '<div class="language-python highlight">'
-            "<pre><span></span><code>" + inner + "</code></pre></div>"
-        )
-
-    html = re.sub(
-        r'<div class="language-text highlight"><pre[^>]*><span></span><code>(.*?)</code></pre></div>',
-        transform_block,
-        html,
-        flags=re.DOTALL,
-    )
+    html = _PYCON_BLOCK_PATTERN.sub(_rewrite_doctest_block, html)
+    html = _TEXT_BLOCK_PATTERN.sub(_rewrite_doctest_block, html)
 
     repo_url = _get_repo_url(kwargs.get("config"))
     if repo_url is None:

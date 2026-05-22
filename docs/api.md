@@ -1,3 +1,3 @@
 # API Reference
 
-::: LLM Annotator
+::: llm_annotator

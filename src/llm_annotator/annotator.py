@@ -627,7 +627,7 @@ class Annotator:
         Args:
             output_dir: Directory to save annotation results.
             prompt_template: Prompt template string. Can contain fields in ``{}``
-              that match dataset column names, e.g. ``"Analyse the following text: {text}"``.
+                that match dataset column names, e.g. ``"Analyse the following text: {text}"``.
             dataset_name: Name or path of the dataset to annotate.
             dataset: Pre-loaded dataset to use instead of loading from name/path.
             new_hub_id: Optional Hugging Face dataset ID for uploads.

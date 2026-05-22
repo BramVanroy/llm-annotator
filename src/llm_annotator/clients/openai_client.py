@@ -61,7 +61,7 @@ class OpenAIClient(Client[T_OpenAIOptions], Generic[T_OpenAIOptions]):
         Args:
             model: OpenAI model identifier.
             max_workers: Maximum number of concurrent worker threads for ``batch_generate``. Lower this value if
-            you are getting rate limited.
+                you are getting rate limited.
             base_url: Base URL for the OpenAI API endpoint.
             api_key: OpenAI API key. If omitted, the SDK will use
                 ``OPENAI_API_KEY`` from the environment.
