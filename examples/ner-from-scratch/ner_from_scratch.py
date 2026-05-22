@@ -7,7 +7,9 @@ CURR_DIR = Path(__file__).parent
 
 
 def main():
-    prompt = CURR_DIR.joinpath("prompt_template.md").read_text(encoding="utf-8")
+    prompt = CURR_DIR.joinpath("prompt_template.md").read_text(
+        encoding="utf-8"
+    )
     model = "RedHatAI/gemma-3-27b-it-FP8-dynamic"
     extra_vllm_init_kwargs = {"limit_mm_per_prompt": {"image": 0, "audio": 0}}
     sampling_params = {

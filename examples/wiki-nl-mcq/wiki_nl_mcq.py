@@ -11,9 +11,15 @@ OUTPUT_ROOT_DIR = CURR_DIR.parent.parent.joinpath("outputs")
 
 def main():
     hf_user = get_hf_username()
-    prompt_template = CURR_DIR.joinpath("prompt_template.md").read_text(encoding="utf-8")
-    system_message = CURR_DIR.joinpath("system_prompt.md").read_text(encoding="utf-8")
-    json_schema = json.loads(CURR_DIR.joinpath("output.schema.json").read_text(encoding="utf-8"))
+    prompt_template = CURR_DIR.joinpath("prompt_template.md").read_text(
+        encoding="utf-8"
+    )
+    system_message = CURR_DIR.joinpath("system_prompt.md").read_text(
+        encoding="utf-8"
+    )
+    json_schema = json.loads(
+        CURR_DIR.joinpath("output.schema.json").read_text(encoding="utf-8")
+    )
 
     model = "RedHatAI/Mistral-Small-3.2-24B-Instruct-2506-FP8"
     dataset = "BramVanroy/finewiki-nl-30-to-24k-tokens"

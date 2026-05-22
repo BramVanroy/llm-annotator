@@ -80,7 +80,9 @@ def test_configure_logging_disabled() -> None:
     assert logger.disabled is True
 
 
-def test_configure_logging_plain_style(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_configure_logging_plain_style(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # Verifies plain style selects the standard formatter and requested level.
     _reset_root_logger()
     monkeypatch.setattr(sys, "stderr", StringIO())
@@ -89,7 +91,9 @@ def test_configure_logging_plain_style(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     assert logger.level == logging.WARNING
     assert len(logger.handlers) == 1
-    assert not isinstance(logger.handlers[0].formatter, logging_utils._ColorFormatter)
+    assert not isinstance(
+        logger.handlers[0].formatter, logging_utils._ColorFormatter
+    )
 
 
 def test_configure_logging_pretty_style_posix_tty(
@@ -104,7 +108,9 @@ def test_configure_logging_pretty_style_posix_tty(
     monkeypatch.setattr(sys, "stderr", FakeTTY())
 
     logger = logging_utils.configure_logging(enabled=True, style="pretty")
-    assert isinstance(logger.handlers[0].formatter, logging_utils._ColorFormatter)
+    assert isinstance(
+        logger.handlers[0].formatter, logging_utils._ColorFormatter
+    )
 
 
 def test_configure_logging_pretty_style_windows_tty(
@@ -119,7 +125,9 @@ def test_configure_logging_pretty_style_windows_tty(
     monkeypatch.setattr(sys, "stderr", FakeTTY())
 
     logger = logging_utils.configure_logging(enabled=True, style="pretty")
-    assert isinstance(logger.handlers[0].formatter, logging_utils._ColorFormatter)
+    assert isinstance(
+        logger.handlers[0].formatter, logging_utils._ColorFormatter
+    )
 
 
 def test_set_log_level_updates_root_logger() -> None:

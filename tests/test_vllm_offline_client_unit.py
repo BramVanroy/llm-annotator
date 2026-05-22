@@ -96,7 +96,9 @@ def fake_vllm_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     return state
 
 
-def test_runtime_options_to_sampling_params(fake_vllm_runtime: dict[str, Any]) -> None:
+def test_runtime_options_to_sampling_params(
+    fake_vllm_runtime: dict[str, Any],
+) -> None:
     # Verifies runtime options are translated to SamplingParams fields.
     opts = VLLMRuntimeOptions(
         max_tokens=10,
@@ -187,7 +189,10 @@ def test_batch_generate_pipe_none_returns_error_response(
     client = VLLMOfflineClient(model="m", on_error="ignore")
     client._pipe = None
     responses = client.batch_generate(
-        messages=[[{"role": "user", "content": "x"}], [{"role": "user", "content": "y"}]]
+        messages=[
+            [{"role": "user", "content": "x"}],
+            [{"role": "user", "content": "y"}],
+        ]
     )
     assert len(responses) == 2
     assert all(r.error is not None for r in responses)
@@ -213,7 +218,9 @@ def test_batch_generate_pad_when_fewer_outputs(
     client = VLLMOfflineClient(model="m", on_error="ignore")
 
     def _chat_short(
-        _messages: list[list[dict[str, str]]], _sampling: object, use_tqdm: bool = False
+        _messages: list[list[dict[str, str]]],
+        _sampling: object,
+        use_tqdm: bool = False,
     ) -> list[object]:
         _ = use_tqdm
         return [
@@ -230,7 +237,10 @@ def test_batch_generate_pad_when_fewer_outputs(
 
     monkeypatch.setattr(client._pipe, "chat", _chat_short)
     responses = client.batch_generate(
-        messages=[[{"role": "user", "content": "a"}], [{"role": "user", "content": "b"}]]
+        messages=[
+            [{"role": "user", "content": "a"}],
+            [{"role": "user", "content": "b"}],
+        ]
     )
     assert len(responses) == 2
     assert responses[0].error is None

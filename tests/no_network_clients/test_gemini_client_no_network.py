@@ -105,7 +105,9 @@ def test_gemini_handle_stop_reason_success_branches(
     client.on_error = "raise"
     client._logger = cast(
         Any,
-        types.SimpleNamespace(warning=lambda _msg: None, debug=lambda _msg: None),
+        types.SimpleNamespace(
+            warning=lambda _msg: None, debug=lambda _msg: None
+        ),
     )
 
     client._handle_stop_reason(stop_reason=stop_reason, num_output_tokens=2)
@@ -113,7 +115,14 @@ def test_gemini_handle_stop_reason_success_branches(
 
 @pytest.mark.parametrize(
     "stop_reason",
-    ["MAX_TOKENS", "SAFETY", "MALFORMED_FUNCTION_CALL", "LANGUAGE", "NO_IMAGE", "OTHER"],
+    [
+        "MAX_TOKENS",
+        "SAFETY",
+        "MALFORMED_FUNCTION_CALL",
+        "LANGUAGE",
+        "NO_IMAGE",
+        "OTHER",
+    ],
 )
 def test_gemini_handle_stop_reason_error_branches(stop_reason: str) -> None:
     # Verifies Gemini stop-reason handler maps all error classes to exceptions.
@@ -123,8 +132,12 @@ def test_gemini_handle_stop_reason_error_branches(stop_reason: str) -> None:
     client.on_error = "raise"
     client._logger = cast(
         Any,
-        types.SimpleNamespace(warning=lambda _msg: None, debug=lambda _msg: None),
+        types.SimpleNamespace(
+            warning=lambda _msg: None, debug=lambda _msg: None
+        ),
     )
 
     with pytest.raises(Exception):
-        client._handle_stop_reason(stop_reason=stop_reason, num_output_tokens=2)
+        client._handle_stop_reason(
+            stop_reason=stop_reason, num_output_tokens=2
+        )

@@ -20,7 +20,9 @@ Classification:"""
 
     output_schema = {
         "type": "object",
-        "properties": {"sentiment": {"type": "string", "enum": ["positive", "negative"]}},
+        "properties": {
+            "sentiment": {"type": "string", "enum": ["positive", "negative"]}
+        },
         "required": ["sentiment"],
     }
 
@@ -34,12 +36,19 @@ Classification:"""
         return sample
 
     model = "RedHatAI/Mistral-Small-3.2-24B-Instruct-2506-FP8"
-    extra_vllm_init_kwargs = {"tokenizer_mode": "mistral", "config_format": "mistral", "load_format": "mistral"}
+    extra_vllm_init_kwargs = {
+        "tokenizer_mode": "mistral",
+        "config_format": "mistral",
+        "load_format": "mistral",
+    }
 
     model = "RedHatAI/gemma-3-27b-it-FP8-dynamic"
     extra_vllm_init_kwargs = {}
     with Annotator(
-        model=model, max_model_len=4096, verbose=True, extra_vllm_init_kwargs=extra_vllm_init_kwargs
+        model=model,
+        max_model_len=4096,
+        verbose=True,
+        extra_vllm_init_kwargs=extra_vllm_init_kwargs,
     ) as anno:
         ds = anno.annotate_dataset(
             output_dir="outputs/sentiment-imdb-qwen",

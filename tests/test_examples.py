@@ -24,7 +24,6 @@ import pytest
 
 EXAMPLES_DIR = Path(__file__).parent.parent / "examples"
 ALL_EXAMPLE_SCRIPTS = sorted(EXAMPLES_DIR.rglob("*.py"))
-ANNOTATOR_EXAMPLE_SCRIPTS = [p for p in ALL_EXAMPLE_SCRIPTS]
 
 
 @pytest.mark.parametrize(
@@ -40,8 +39,8 @@ def test_example_syntax(script: Path) -> None:
 
 @pytest.mark.parametrize(
     "script",
-    ANNOTATOR_EXAMPLE_SCRIPTS,
-    ids=[p.relative_to(EXAMPLES_DIR).as_posix() for p in ANNOTATOR_EXAMPLE_SCRIPTS],
+    ALL_EXAMPLE_SCRIPTS,
+    ids=[p.relative_to(EXAMPLES_DIR).as_posix() for p in ALL_EXAMPLE_SCRIPTS],
 )
 def test_example_imports(script: Path) -> None:
     """Import *script* as a module and assert it loads without raising.
@@ -50,7 +49,9 @@ def test_example_imports(script: Path) -> None:
     """
     module_name = f"_example_{script.stem}_{script.parent.name}"
     spec = importlib.util.spec_from_file_location(module_name, script)
-    assert spec is not None and spec.loader is not None, f"Could not create module spec for {script}"
+    assert spec is not None and spec.loader is not None, (
+        f"Could not create module spec for {script}"
+    )
     module = importlib.util.module_from_spec(spec)
     # Register so relative imports inside the script (if any) can resolve.
     sys.modules[module_name] = module

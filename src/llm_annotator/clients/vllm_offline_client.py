@@ -152,7 +152,9 @@ class VLLMOfflineClient(Client[VLLMRuntimeOptions]):
         ...     "properties": {"label": {"type": "string"}},
         ...     "required": ["label"],
         ... }
-        >>> opts = VLLMRuntimeOptions(max_tokens=128, json_schema=schema)  # doctest: +SKIP
+        >>> opts = VLLMRuntimeOptions(
+        ...     max_tokens=128, json_schema=schema
+        ... )  # doctest: +SKIP
         >>> with VLLMOfflineClient(  # doctest: +SKIP
         ...     model="meta-llama/Llama-3.2-3B-Instruct"
         ... ) as client:

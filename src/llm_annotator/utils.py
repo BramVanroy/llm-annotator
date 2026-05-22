@@ -293,7 +293,6 @@ def extract_prompt_prefix(prompt: str) -> str:
     return re.split(_PLACEHOLDER_RE, prompt, maxsplit=1)[0]
 
 
-
 __all__ = [
     "convert_int_to_annotated_str",
     "count_lines",

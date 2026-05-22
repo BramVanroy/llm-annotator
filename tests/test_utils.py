@@ -47,7 +47,9 @@ def test_retry_succeeds_without_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     assert sleeps == []
 
 
-def test_retry_uses_exponential_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_retry_uses_exponential_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # Verifies retry sleep times double after each transient failure.
     sleeps: list[int] = []
     attempts = {"n": 0}
@@ -65,7 +67,9 @@ def test_retry_uses_exponential_backoff(monkeypatch: pytest.MonkeyPatch) -> None
     assert sleeps == [1, 2]
 
 
-def test_retry_raises_after_exhaustion(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_retry_raises_after_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # Verifies original exception is re-raised after retries are exhausted.
     monkeypatch.setattr(utils.time, "sleep", lambda _x: None)
 
@@ -149,10 +153,14 @@ def test_get_lib_versions(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_get_hf_username(monkeypatch: pytest.MonkeyPatch) -> None:
     # Verifies HF username extraction for user, org, and unauthenticated states.
-    monkeypatch.setattr(utils, "whoami", lambda: {"name": "alice", "type": "user"})
+    monkeypatch.setattr(
+        utils, "whoami", lambda: {"name": "alice", "type": "user"}
+    )
     assert utils.get_hf_username() == "alice"
 
-    monkeypatch.setattr(utils, "whoami", lambda: {"name": "org", "type": "org"})
+    monkeypatch.setattr(
+        utils, "whoami", lambda: {"name": "org", "type": "org"}
+    )
     assert utils.get_hf_username() is None
 
     def _raise() -> None:

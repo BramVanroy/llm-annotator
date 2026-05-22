@@ -127,10 +127,9 @@ def cleanup_remote_datasets():
     This cleanup is opt-in and disabled by default to keep local test runs
     fully offline. Enable it by setting ``LLM_ANNOTATOR_ALLOW_NETWORK_TESTS=1``.
     """
-    allow_network = (
-        os.environ.get("LLM_ANNOTATOR_ALLOW_NETWORK_TESTS", "").lower()
-        in {"1", "true", "yes"}
-    )
+    allow_network = os.environ.get(
+        "LLM_ANNOTATOR_ALLOW_NETWORK_TESTS", ""
+    ).lower() in {"1", "true", "yes"}
 
     yield
 
@@ -224,7 +223,10 @@ def fake_openai_module(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             self.chat = types.SimpleNamespace(completions=FakeCompletions())
             self.models = types.SimpleNamespace(
                 list=lambda: types.SimpleNamespace(
-                    data=[types.SimpleNamespace(id=m) for m in state["model_list"]]
+                    data=[
+                        types.SimpleNamespace(id=m)
+                        for m in state["model_list"]
+                    ]
                 )
             )
             self._client = FakeHTTPClient()
@@ -264,7 +266,9 @@ def fake_openai_module(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
     monkeypatch.setitem(__import__("sys").modules, "openai", fake_openai)
     monkeypatch.setitem(__import__("sys").modules, "openai.types", types_mod)
-    monkeypatch.setitem(__import__("sys").modules, "openai.types.chat", chat_mod)
+    monkeypatch.setitem(
+        __import__("sys").modules, "openai.types.chat", chat_mod
+    )
     monkeypatch.setitem(
         __import__("sys").modules,
         "openai.types.chat.chat_completion",

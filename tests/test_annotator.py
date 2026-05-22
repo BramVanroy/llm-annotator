@@ -30,7 +30,9 @@ class DummyClient(Client[ProviderRuntimeOptions]):
         self.destroy_called = 0
 
     def _process_response(self, response: str) -> Response:
-        return Response(text=response, provider=self.provider_type, model=self.model)
+        return Response(
+            text=response, provider=self.provider_type, model=self.model
+        )
 
     def generate(
         self,
@@ -59,7 +61,9 @@ class DummyClient(Client[ProviderRuntimeOptions]):
         gen_kwargs: dict[str, Any] | None = None,
     ) -> list[Response]:
         _ = gen_kwargs
-        return [self.generate(messages=msg, options=options) for msg in messages]
+        return [
+            self.generate(messages=msg, options=options) for msg in messages
+        ]
 
     def _handle_stop_reason(
         self, *, stop_reason: str | None, num_output_tokens: int | None
@@ -76,15 +80,25 @@ def dummy_annotator() -> Annotator:
     return Annotator(client=DummyClient(), batch_size=2, verbose=True)
 
 
-def test_get_skip_idxs_with_filters(tmp_path: Path, dummy_annotator: Annotator) -> None:
+def test_get_skip_idxs_with_filters(
+    tmp_path: Path, dummy_annotator: Annotator
+) -> None:
     # Verifies skip-index discovery respects dataset_split and dataset_config filters.
     p = tmp_path / "out"
     p.mkdir()
     (p / "out.jsonl").write_text(
         "\n".join(
             [
-                json.dumps({"idx": 1, "dataset_split": "train", "dataset_config": "en"}),
-                json.dumps({"idx": 2, "dataset_split": "test", "dataset_config": "en"}),
+                json.dumps(
+                    {
+                        "idx": 1,
+                        "dataset_split": "train",
+                        "dataset_config": "en",
+                    }
+                ),
+                json.dumps(
+                    {"idx": 2, "dataset_split": "test", "dataset_config": "en"}
+                ),
             ]
         )
         + "\n",
@@ -100,7 +114,9 @@ def test_get_skip_idxs_with_filters(tmp_path: Path, dummy_annotator: Annotator) 
     assert only_train == {1}
 
 
-def test_load_dataset_validation_errors(tmp_path: Path, dummy_annotator: Annotator) -> None:
+def test_load_dataset_validation_errors(
+    tmp_path: Path, dummy_annotator: Annotator
+) -> None:
     # Verifies core _load_dataset argument validation branches.
     ds = Dataset.from_dict({"text": ["a"]})
 
@@ -130,7 +146,9 @@ def test_load_dataset_validation_errors(tmp_path: Path, dummy_annotator: Annotat
         )
 
 
-def test_create_messages_with_and_without_system(dummy_annotator: Annotator) -> None:
+def test_create_messages_with_and_without_system(
+    dummy_annotator: Annotator,
+) -> None:
     # Verifies message construction branches for system and non-system prompts.
     sample = {"text": "hello"}
     with_system = dummy_annotator._create_messages(
@@ -188,7 +206,9 @@ def test_process_output_branches(dummy_annotator: Annotator) -> None:
     assert err_schema["label"] is None
 
 
-def test_process_batch_validate_and_postprocess(capsys: pytest.CaptureFixture[str]) -> None:
+def test_process_batch_validate_and_postprocess(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     # Verifies _process_batch integrates schema parsing, custom postprocess, and validate hooks.
     annotator = Annotator(client=DummyClient(on_error="ignore"), verbose=True)
     schema = {
@@ -221,14 +241,20 @@ def test_process_batch_validate_and_postprocess(capsys: pytest.CaptureFixture[st
     _ = capsys.readouterr()
 
 
-def test_annotate_dataset_retries_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_annotate_dataset_retries_invalid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     # Verifies annotate_dataset retry loop re-processes invalid outputs.
-    annotator = Annotator(client=DummyClient(on_error="ignore"), batch_size=2, verbose=False)
+    annotator = Annotator(
+        client=DummyClient(on_error="ignore"), batch_size=2, verbose=False
+    )
     ds = Dataset.from_dict({"text": ["a", "b"]})
 
     calls = {"n": 0}
 
-    def _fake_process_batch(self: Annotator, **kwargs: Any) -> list[dict[str, Any]]:
+    def _fake_process_batch(
+        self: Annotator, **kwargs: Any
+    ) -> list[dict[str, Any]]:
         _ = self
         calls["n"] += 1
         batch = kwargs["batch"]
@@ -294,12 +320,16 @@ def test_annotate_dataset_guard_rails(tmp_path: Path) -> None:
         )
 
 
-def test_generate_dataset_forwards_to_annotate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_generate_dataset_forwards_to_annotate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     # Verifies generate_dataset builds prompt dataset and forwards expected args.
     annotator = Annotator(client=DummyClient())
     captured: dict[str, Any] = {}
 
-    def _fake_annotate_dataset(self: Annotator, *args: Any, **kwargs: Any) -> Dataset:
+    def _fake_annotate_dataset(
+        self: Annotator, *args: Any, **kwargs: Any
+    ) -> Dataset:
         _ = self
         _ = args
         captured.update(kwargs)
@@ -317,14 +347,22 @@ def test_generate_dataset_forwards_to_annotate(monkeypatch: pytest.MonkeyPatch, 
     assert len(captured["dataset"]) == 3
 
 
-def test_post_annotate_and_pfout_name(tmp_path: Path, dummy_annotator: Annotator) -> None:
+def test_post_annotate_and_pfout_name(
+    tmp_path: Path, dummy_annotator: Annotator
+) -> None:
     # Verifies _post_annotate output assembly/sorting and output filename generation.
     p = tmp_path / "out"
     p.mkdir()
-    (p / "a.jsonl").write_text('{"idx": 1, "response": "x"}\n', encoding="utf-8")
-    (p / "b.jsonl").write_text('{"idx": 0, "response": "y"}\n', encoding="utf-8")
+    (p / "a.jsonl").write_text(
+        '{"idx": 1, "response": "x"}\n', encoding="utf-8"
+    )
+    (p / "b.jsonl").write_text(
+        '{"idx": 0, "response": "y"}\n', encoding="utf-8"
+    )
 
-    done = dummy_annotator._post_annotate(pdout=p, idx_column="idx", keep_idx_column=False)
+    done = dummy_annotator._post_annotate(
+        pdout=p, idx_column="idx", keep_idx_column=False
+    )
     assert done.column_names == ["response"]
 
     single = dummy_annotator.get_pfout_name(

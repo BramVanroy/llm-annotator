@@ -99,7 +99,9 @@ def test_vllm_batch_generate_http_error_returns_error_responses(
             return {"choices": []}
 
     class FailingHTTPClient:
-        def post(self, url: str, json: dict[str, object]) -> FailingHTTPResponse:
+        def post(
+            self, url: str, json: dict[str, object]
+        ) -> FailingHTTPResponse:
             _ = url
             _ = json
             return FailingHTTPResponse()

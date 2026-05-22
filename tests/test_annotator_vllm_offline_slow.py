@@ -63,7 +63,9 @@ def test_annotate_imdb_smoke_with_offline_vllm(
     offline_vllm_client: VLLMOfflineClient,
 ) -> None:
     # Verifies Annotator can process a small IMDb slice end-to-end with offline vLLM.
-    annotator = Annotator(client=offline_vllm_client, batch_size=2, num_proc=None)
+    annotator = Annotator(
+        client=offline_vllm_client, batch_size=2, num_proc=None
+    )
 
     ds = annotator.annotate_dataset(
         output_dir=tmp_path / "imdb-smoke",
@@ -90,7 +92,9 @@ def test_annotate_imdb_with_schema_and_task_prefix(
     offline_vllm_client: VLLMOfflineClient,
 ) -> None:
     # Verifies Annotator schema parsing path with prefixed output keys on IMDb samples.
-    annotator = Annotator(client=offline_vllm_client, batch_size=2, num_proc=None)
+    annotator = Annotator(
+        client=offline_vllm_client, batch_size=2, num_proc=None
+    )
     schema = {
         "type": "object",
         "properties": {

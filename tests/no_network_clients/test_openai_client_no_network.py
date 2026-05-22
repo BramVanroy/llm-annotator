@@ -77,7 +77,15 @@ def test_openai_batch_generate_preserves_input_order(
 
 @pytest.mark.parametrize(
     "stop_reason",
-    [None, "stop", "length", "content_filter", "tool_calls", "function_call", "weird"],
+    [
+        None,
+        "stop",
+        "length",
+        "content_filter",
+        "tool_calls",
+        "function_call",
+        "weird",
+    ],
 )
 def test_openai_handle_stop_reason_branches(stop_reason: str | None) -> None:
     # Verifies OpenAI stop-reason handler accepts success and raises for failures.
@@ -87,12 +95,18 @@ def test_openai_handle_stop_reason_branches(stop_reason: str | None) -> None:
     client.on_error = "raise"
     client._logger = cast(
         Any,
-        types.SimpleNamespace(warning=lambda _msg: None, debug=lambda _msg: None),
+        types.SimpleNamespace(
+            warning=lambda _msg: None, debug=lambda _msg: None
+        ),
     )
 
     if stop_reason == "stop":
-        client._handle_stop_reason(stop_reason=stop_reason, num_output_tokens=1)
+        client._handle_stop_reason(
+            stop_reason=stop_reason, num_output_tokens=1
+        )
         return
 
     with pytest.raises(Exception):
-        client._handle_stop_reason(stop_reason=stop_reason, num_output_tokens=1)
+        client._handle_stop_reason(
+            stop_reason=stop_reason, num_output_tokens=1
+        )

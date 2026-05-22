@@ -102,7 +102,9 @@ def test_claude_handle_stop_reason_success_branches(
     client.on_error = "raise"
     client._logger = cast(
         Any,
-        types.SimpleNamespace(warning=lambda _msg: None, debug=lambda _msg: None),
+        types.SimpleNamespace(
+            warning=lambda _msg: None, debug=lambda _msg: None
+        ),
     )
 
     client._handle_stop_reason(stop_reason=stop_reason, num_output_tokens=3)
@@ -110,7 +112,14 @@ def test_claude_handle_stop_reason_success_branches(
 
 @pytest.mark.parametrize(
     "stop_reason",
-    ["max_tokens", "tool_use", "pause_turn", "refusal", "model_context_window_exceeded", "weird"],
+    [
+        "max_tokens",
+        "tool_use",
+        "pause_turn",
+        "refusal",
+        "model_context_window_exceeded",
+        "weird",
+    ],
 )
 def test_claude_handle_stop_reason_error_branches(stop_reason: str) -> None:
     # Verifies Claude stop-reason handler raises for each non-success reason.
@@ -120,11 +129,15 @@ def test_claude_handle_stop_reason_error_branches(stop_reason: str) -> None:
     client.on_error = "raise"
     client._logger = cast(
         Any,
-        types.SimpleNamespace(warning=lambda _msg: None, debug=lambda _msg: None),
+        types.SimpleNamespace(
+            warning=lambda _msg: None, debug=lambda _msg: None
+        ),
     )
 
     with pytest.raises(Exception):
-        client._handle_stop_reason(stop_reason=stop_reason, num_output_tokens=3)
+        client._handle_stop_reason(
+            stop_reason=stop_reason, num_output_tokens=3
+        )
 
 
 def test_claude_destroy_cancels_running_batches() -> None:
