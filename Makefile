@@ -40,4 +40,3 @@ serve-docs:
 	DOCS_SOURCE_REF=$(DOCS_SOURCE_REF) uv run mike deploy --branch $(DOCS_BRANCH) --update-aliases $(DOCS_VERSION) $(DOCS_ALIAS)
 	uv run mike set-default --branch $(DOCS_BRANCH) $(DOCS_ALIAS)
 	uv run mike serve -b $(DOCS_BRANCH) -a $(DOCS_ADDR)
-

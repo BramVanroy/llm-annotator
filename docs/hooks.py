@@ -103,7 +103,9 @@ def _build_github_source_url(
     source_target: str,
 ) -> str:
     """Build a GitHub source URL from a repo URL and relative source target."""
-    filepath, hash_sep, fragment = html_lib.unescape(source_target).partition("#")
+    filepath, hash_sep, fragment = html_lib.unescape(source_target).partition(
+        "#"
+    )
     quoted_ref = quote(git_ref, safe="/")
     quoted_filepath = quote(filepath, safe="/")
     url = f"{repo_url}/blob/{quoted_ref}/{quoted_filepath}"
@@ -127,8 +129,8 @@ def _rewrite_source_links(
             source_target=source_target,
         )
         return (
-            f'{match.group("prefix")}{html_lib.escape(source_url, quote=True)}'
-            f'{match.group("suffix")}'
+            f"{match.group('prefix')}{html_lib.escape(source_url, quote=True)}"
+            f"{match.group('suffix')}"
         )
 
     return _SOURCE_LINK_PATTERN.sub(transform_link, html)

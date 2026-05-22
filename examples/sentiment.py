@@ -9,7 +9,7 @@ def main():
     hf_user = get_hf_username()
     prompt_prefix = """Analyze the sentiment of the following movie review and classify it as positive or negative.
 
-Review: 
+Review:
 """  # noqa: W291
     prompt_template = (
         prompt_prefix

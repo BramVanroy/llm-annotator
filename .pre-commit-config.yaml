@@ -9,8 +9,11 @@ repos:
       - id: check-yaml
         # Needed to allow the mkdocs.yml config file to be linted by pre-commit
         args: [--unsafe]
+      # Exlclude the prompts
       - id: end-of-file-fixer
+        exclude: ^examples/.*\.md$
       - id: trailing-whitespace
+        exclude: ^examples/.*\.md$
 
   - repo: local
     hooks:
