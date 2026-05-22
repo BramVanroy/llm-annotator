@@ -4,12 +4,12 @@ PACKAGE = src/llm_annotator
 
 quality:
 	uv run interrogate -vv
-	uv run ruff check $(PACKAGE) tests/ scripts/
-	uv run ruff format --check $(PACKAGE) tests/ scripts/
+	uv run ruff check $(PACKAGE) tests/ examples/
+	uv run ruff format --check $(PACKAGE) tests/ examples/
 
 style:
-	uv run ruff check $(PACKAGE) tests/ scripts/ --fix
-	uv run ruff format $(PACKAGE) tests/ scripts/
+	uv run ruff check $(PACKAGE) tests/ examples/ --fix
+	uv run ruff format $(PACKAGE) tests/ examples/
 
 test:
 	uv run pytest -m "not slow" --cov=$(PACKAGE) --cov-report=term-missing --cov-report=xml
@@ -27,7 +27,7 @@ test-all:
 	uv run pytest --cov=$(PACKAGE) --cov-report=term-missing --cov-report=xml
 
 typecheck:
-	uv run mypy $(PACKAGE) tests/
+	uv run mypy $(PACKAGE) tests/ examples/
 
 DOCS_BRANCH ?= tmp-gh-pages
 DOCS_VERSION ?= 0.0.0
