@@ -290,3 +290,137 @@ def test_destroy_is_idempotent(
     client.destroy()
     assert client._pipe is None
     assert collected["called"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# auto_reduce_batch_size / OOM recovery
+# ---------------------------------------------------------------------------
+
+_MSG = {"role": "user", "content": "x"}
+
+
+def _make_output(text: str = "ok") -> object:
+    return types.SimpleNamespace(
+        outputs=[
+            types.SimpleNamespace(
+                text=text, token_ids=[1], finish_reason="stop"
+            )
+        ]
+    )
+
+
+def test_batch_generate_splits_into_chunks(
+    fake_vllm_runtime: dict[str, Any],
+) -> None:
+    # Verifies batch_size splits messages into separate vLLM calls.
+    client = VLLMOfflineClient(model="m", batch_size=2)
+    responses = client.batch_generate(
+        messages=[[_MSG], [_MSG], [_MSG], [_MSG]]
+    )
+    assert len(responses) == 4
+    # With batch_size=2 and 4 messages there should be exactly 2 chat calls.
+    assert len(fake_vllm_runtime["chat_calls"]) == 2
+    client.destroy()
+
+
+def test_batch_generate_auto_reduces_on_oom(
+    fake_vllm_runtime: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Verifies chunk size is halved and the failing chunk retried on CUDA OOM.
+    client = VLLMOfflineClient(model="m", batch_size=4)
+    call_sizes: list[int] = []
+
+    def _oom_then_ok(
+        messages: list[object],
+        sampling_params: object,
+        use_tqdm: bool = False,
+    ) -> list[object]:
+        call_sizes.append(len(messages))
+        if len(messages) > 2:
+            raise RuntimeError("CUDA out of memory. Tried to allocate 1 GiB.")
+        return [_make_output() for _ in messages]
+
+    monkeypatch.setattr(client._pipe, "chat", _oom_then_ok)
+
+    responses = client.batch_generate(messages=[[_MSG]] * 5)
+
+    assert len(responses) == 5
+    assert all(r.error is None for r in responses)
+    # sizes: 4 (OOM) → 2, 2, 1
+    assert call_sizes == [4, 2, 2, 1]
+    client.destroy()
+
+
+def test_batch_generate_reraises_non_oom_immediately(
+    fake_vllm_runtime: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Verifies that non-OOM exceptions are not retried.
+    client = VLLMOfflineClient(model="m", batch_size=4)
+    call_count = {"n": 0}
+
+    def _value_error(
+        messages: list[object],
+        sampling_params: object,
+        use_tqdm: bool = False,
+    ) -> list[object]:
+        call_count["n"] += 1
+        raise ValueError("unrelated error")
+
+    monkeypatch.setattr(client._pipe, "chat", _value_error)
+
+    with pytest.raises(ProviderError):
+        client.batch_generate(messages=[[_MSG]] * 4)
+
+    assert call_count["n"] == 1
+    client.destroy()
+
+
+def test_batch_generate_reraises_when_min_batch_size_exceeded(
+    fake_vllm_runtime: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Verifies OOM is re-raised when halving would go below min_batch_size.
+    client = VLLMOfflineClient(model="m", batch_size=2, min_batch_size=2)
+
+    def _always_oom(
+        messages: list[object],
+        sampling_params: object,
+        use_tqdm: bool = False,
+    ) -> list[object]:
+        raise RuntimeError("CUDA out of memory.")
+
+    monkeypatch.setattr(client._pipe, "chat", _always_oom)
+
+    with pytest.raises(ProviderError, match="out of memory"):
+        client.batch_generate(messages=[[_MSG], [_MSG]])
+    client.destroy()
+
+
+def test_batch_generate_oom_detected_through_provider_error_chain(
+    fake_vllm_runtime: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Verifies OOM wrapped as __cause__ inside ProviderError triggers retry.
+    client = VLLMOfflineClient(model="m", batch_size=2)
+    call_sizes: list[int] = []
+
+    def _oom_first(
+        messages: list[object],
+        sampling_params: object,
+        use_tqdm: bool = False,
+    ) -> list[object]:
+        call_sizes.append(len(messages))
+        if len(call_sizes) == 1:
+            oom = RuntimeError("CUDA out of memory.")
+            raise RuntimeError("dispatch failed") from oom
+        return [_make_output() for _ in messages]
+
+    monkeypatch.setattr(client._pipe, "chat", _oom_first)
+
+    responses = client.batch_generate(messages=[[_MSG], [_MSG]])
+
+    assert len(responses) == 2
+    assert call_sizes == [2, 1, 1]
+    client.destroy()

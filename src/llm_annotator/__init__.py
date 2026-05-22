@@ -20,6 +20,9 @@ from .clients.vllm_offline_client import (
 from .clients.vllm_offline_client import (
     VLLMRuntimeOptions as VLLMRuntimeOptions,
 )
+from .clients.vllm_offline_client import (
+    auto_reduce_batch_size as auto_reduce_batch_size,
+)
 from .logging_utils import configure_logging as configure_logging
 from .logging_utils import get_logger as get_logger
 from .logging_utils import set_log_level as set_log_level
@@ -46,6 +49,7 @@ __all__ = [
     "VLLMOfflineClient",
     "VLLMRuntimeOptions",
     "VLLMServerRuntimeOptions",
+    "auto_reduce_batch_size",
     "configure_logging",
     "extract_prompt_prefix",
     "get_hash",
