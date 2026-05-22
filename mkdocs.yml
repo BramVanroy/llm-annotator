@@ -139,6 +139,7 @@ markdown_extensions:
 
 # Navigation structure for the generated docs site
 nav:
-  - Home: index.md  
+  - Home: index.md
+  - Provider Setup: provider-info.md
   - API Reference:
       - llm-annotator (top-level): api/top_level.md

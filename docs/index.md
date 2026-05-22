@@ -1,86 +1,107 @@
-# llm-annotator Documentation
+# LLM Annotator
 
-Welcome to the **llm-annotator** documentation! This library provides a simple, extensible framework for annotating datasets with Large Language Models (LLMs) using vLLM.
+LLM Annotator is a Python library for robust, resumable annotation and
+generation workflows powered by large language models.
 
-## Quick Links
+It provides a common interface for multiple providers:
 
-```{toctree}
-:maxdepth: 2
-:caption: Contents
+- `VLLMOfflineClient` for local vLLM inference.
+- `VLLMClient` for vLLM server endpoints.
+- `OpenAIClient` for OpenAI-compatible APIs.
+- `ClaudeClient` for Anthropic APIs.
+- `GeminiClient` for Gemini APIs.
 
-getting-started
-api-reference
-examples
-```
+Provider setup details, extras, and auth variables are listed on
+[Provider setup](provider-info.md).
 
-## Overview
+## Install
 
-The `llm-annotator` package offers:
-
-- **Easy dataset annotation**: Apply LLM-based annotations to existing datasets
-- **Data generation from scratch**: Generate new datasets using LLM completions
-- **Structured outputs**: Constrain outputs using JSON schemas
-- **Resumable jobs**: Automatically resume interrupted annotation jobs
-- **Streaming support**: Process large datasets efficiently
-- **Hub integration**: Upload results directly to Hugging Face Hub
-- **Validation & retries**: Custom validation with automatic retries for invalid outputs
-
-## Installation
-
-Install using pip or uv:
-
-```bash
-pip install llm-annotator
-```
-
-or
+With uv:
 
 ```bash
 uv add llm-annotator
 ```
 
-For flash-attention support (recommended for better performance):
+With pip:
 
 ```bash
-# Replace cu128 with your CUDA version: cu128, cu129, or cu130
-uv pip install flashinfer-python flashinfer-cubin
-uv pip install flashinfer-jit-cache --index-url https://flashinfer.ai/whl/cu128
+pip install llm-annotator
 ```
 
-## Quick Start
+Install provider extras when needed:
 
-Here's a minimal example to get started:
+```bash
+uv add "llm-annotator[vllm]"
+uv add "llm-annotator[openai]"
+uv add "llm-annotator[anthropic]"
+uv add "llm-annotator[gemini]"
+```
+
+## Quickstart
+
+Annotate a dataset:
 
 ```python
-from llm_annotator import Annotator
+from llm_annotator import Annotator, VLLMOfflineClient
 
-# Create an annotator with your chosen model
-with Annotator(model="meta-llama/Llama-3.2-3B-Instruct", max_model_len=4096) as anno:
-    # Annotate a dataset
+client = VLLMOfflineClient(
+    model="meta-llama/Llama-3.2-3B-Instruct",
+    max_model_len=4096,
+)
+
+with Annotator(client=client) as anno:
     ds = anno.annotate_dataset(
-        output_dir="outputs/sentiment",
-        full_prompt_template="Classify the sentiment of this review: {text}",
+        output_dir="outputs/imdb-sentiment",
+        prompt_template="Classify the sentiment: {text}",
         dataset_name="stanfordnlp/imdb",
         dataset_split="test",
         max_num_samples=100,
     )
-    
-    print(ds)
 ```
 
-## Main Components
+Generate a dataset from prompts:
 
-### Annotator Class
+```python
+from llm_annotator import Annotator, OpenAIClient
 
-The {class}`~llm_annotator.Annotator` class is the core of the library. It provides two main public methods:
+client = OpenAIClient(model="gpt-4o-mini")
 
-- {meth}`~llm_annotator.Annotator.annotate_dataset`: Annotate an existing dataset
-- {meth}`~llm_annotator.Annotator.generate_dataset`: Generate a new dataset from scratch
+with Annotator(client=client) as anno:
+    ds = anno.generate_dataset(
+        output_dir="outputs/generated",
+        prompts="Create one short NER training sentence.",
+        max_num_samples=50,
+    )
+```
 
-See the {doc}`api-reference` for detailed documentation of all methods and parameters.
+## Why use it
 
-## Indices and tables
+- Resume interrupted runs from JSONL checkpoints.
+- Validate and post-process outputs with custom callables.
+- Enforce structured responses through JSON schemas.
+- Upload incrementally to the Hugging Face Hub.
 
-* {ref}`genindex`
-* {ref}`modindex`
-* {ref}`search`
+## Development
+
+```bash
+git clone https://github.com/BramVanroy/llm-annotator.git
+cd llm-annotator
+uv sync --dev
+```
+
+Run checks:
+
+```bash
+make style
+make quality
+make test
+make typecheck
+```
+
+Local docs preview with mike:
+
+```bash
+make serve-docs
+```
+
+The API reference section is generated from source code docstrings.

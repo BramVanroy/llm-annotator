@@ -1,4 +1,4 @@
-# A simple, extensible LLM-based dataset generator and annotator
+# Robust, resumable LLM dataset annotation
 
 [![CI](https://github.com/BramVanroy/llm-annotator/actions/workflows/ci.yml/badge.svg)](https://github.com/BramVanroy/llm-annotator/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/BramVanroy/llm-annotator/branch/main/graph/badge.svg)](https://codecov.io/gh/BramVanroy/llm-annotator)
@@ -8,11 +8,33 @@
 ![GitHub tag](https://img.shields.io/github/v/tag/BramVanroy/llm-annotator)
 
 
-This repository provides a small, resumable framework for annotating datasets with LLMs (via `vllm`).
+llm-annotator is a Python 3.12+ library for robust, resumable
+LLM-driven dataset annotation and generation.
+
+It supports multiple providers through pluggable clients:
+
+- vLLM offline inference: `VLLMOfflineClient`
+- vLLM server API: `VLLMClient`
+- OpenAI API: `OpenAIClient`
+- Anthropic API: `ClaudeClient`
+- Gemini API: `GeminiClient`
+
+Key capabilities:
+
+- Resumable processing with JSONL checkpoints.
+- Annotation of existing datasets and generation from scratch.
+- Structured outputs via JSON schema.
+- Retry and validation hooks for robust pipelines.
+- Optional Hugging Face Hub upload cadence.
+- Context-manager cleanup of client resources.
 
 ## Documentation
 
-📚 **[Read the full documentation](https://bramvanroy.github.io/llm-annotator/)** for detailed guides, API reference, and examples.
+Read the full documentation at
+[bramvanroy.github.io/llm-annotator](https://bramvanroy.github.io/llm-annotator/).
+
+Provider setup reference:
+[docs/provider-info.md](docs/provider-info.md)
 
 ## Installation
 
@@ -28,35 +50,67 @@ or
 pip install llm-annotator
 ```
 
-Installing flash-infer for your version (eg CUDA12.8)
+Install provider extras as needed:
+
+```sh
+uv add "llm-annotator[vllm]"
+uv add "llm-annotator[openai]"
+uv add "llm-annotator[anthropic]"
+uv add "llm-annotator[gemini]"
+```
+
+See [docs/provider-info.md](docs/provider-info.md) for auth environment
+variables and provider-specific setup notes.
+
+For local vLLM runs, install flashinfer for your CUDA version.
 
 ```sh
 uv pip install flashinfer-python flashinfer-cubin
-# JIT cache package (replace cu129 with your CUDA version: cu128, cu129, or cu130)
+# JIT cache package (replace cu128 with your CUDA variant)
 uv pip install flashinfer-jit-cache --index-url https://flashinfer.ai/whl/cu128
 ```
 
 ## Usage
 
-Quick example:
+Annotate an existing dataset:
 
 ```python
-from llm_annotator import Annotator
+from llm_annotator import Annotator, VLLMOfflineClient
 
-# Annotate a dataset with sentiment classification
-with Annotator(model="meta-llama/Llama-3.2-3B-Instruct", max_model_len=4096) as anno:
+# Use a local vLLM model
+client = VLLMOfflineClient(
+    model="meta-llama/Llama-3.2-3B-Instruct",
+    max_model_len=4096,
+)
+
+with Annotator(client=client, verbose=True) as anno:
     ds = anno.annotate_dataset(
         output_dir="outputs/sentiment",
-        full_prompt_template="Classify the sentiment: {text}",
+        prompt_template="Classify the sentiment of this text: {text}",
         dataset_name="stanfordnlp/imdb",
         dataset_split="test",
         max_num_samples=100,
     )
 ```
 
-See the **[documentation](https://bramvanroy.github.io/llm-annotator/)** for more examples, including:
+Generate a dataset from scratch:
+
+```python
+from llm_annotator import Annotator, OpenAIClient
+
+client = OpenAIClient(model="gpt-4o-mini")
+
+with Annotator(client=client) as anno:
+    ds = anno.generate_dataset(
+        output_dir="outputs/generated-qa",
+        prompts="Write a short geography quiz question with answer.",
+        max_num_samples=200,
+    )
+```
+
+See the documentation for more examples, including:
 - Structured output with JSON schemas
-- Custom validation and postprocessing
+- Custom validation and post-processing
 - Large-scale streaming annotation
 - Generating datasets from scratch
 - Multi-GPU support
@@ -66,13 +120,22 @@ Or check out the [examples/](examples/) directory for complete working examples.
 
 ## Testing
 
+Install development dependencies first:
+
 ```sh
-make test
+uv sync --dev
 ```
 
-`make test` runs the fast suite and skips tests marked as `slow`.
+Run the default checks:
 
-Additional test targets:
+```sh
+make style
+make quality
+make test
+make typecheck
+```
+
+Pytest marker targets:
 
 ```sh
 # Fast tests (same as `make test`)
@@ -100,16 +163,17 @@ Slow and integration tests may load local models, require more runtime, or depen
 
 ## Building documentation
 
-Build the documentation locally:
+Local versioned docs preview (uses mike on a temporary local branch):
 
 ```sh
-make docs
+make serve-docs
 ```
 
-Serve the documentation locally (at http://localhost:8000):
+Override version metadata when needed:
 
 ```sh
-make docs-serve
+make serve-docs DOCS_VERSION=0.4.0 DOCS_ALIAS=latest DOCS_SOURCE_REF=v0.4.0
 ```
 
-The documentation is automatically built and deployed to GitHub Pages when changes are pushed to the `main` branch. The pre-commit hook will check that documentation builds successfully before allowing a push if docstrings or documentation files have changed.
+Docs are published with mike on release tags through
+`.github/workflows/docs.yml`.
