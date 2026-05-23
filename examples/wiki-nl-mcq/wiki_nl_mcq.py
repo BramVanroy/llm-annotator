@@ -24,7 +24,7 @@ def main(args=None):
         "--max-num-samples",
         type=int,
         default=None,
-        help="Limit number of samples to process.",
+        help="Number of samples to process. Use -1 for the full dataset.",
     )
     parser.add_argument("--temperature", type=float, default=0.15)
     parser.add_argument("--max-tokens", type=int, default=12_000)
@@ -39,6 +39,8 @@ def main(args=None):
         "--hub-id", default=None, help="HF Hub dataset ID to push to."
     )
     args = parser.parse_args(args)
+    if args.max_num_samples == -1:
+        args.max_num_samples = None
 
     hf_user = get_hf_username()
     prompt_template = CURR_DIR.joinpath("prompt_template.md").read_text(

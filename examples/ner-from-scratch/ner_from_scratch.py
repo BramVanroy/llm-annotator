@@ -20,7 +20,12 @@ def main(args=None):
         "--model", default="RedHatAI/gemma-3-27b-it-FP8-dynamic"
     )
     parser.add_argument("--max-model-len", type=int, default=2048)
-    parser.add_argument("--max-num-samples", type=int, default=100)
+    parser.add_argument(
+        "--max-num-samples",
+        type=int,
+        default=100,
+        help="Number of samples to generate. Use -1 for no limit.",
+    )
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--top-k", type=int, default=64)
@@ -31,12 +36,15 @@ def main(args=None):
         help="Output directory. Defaults to outputs/ner-from_scratch-{n}.",
     )
     args = parser.parse_args(args)
+    if args.max_num_samples == -1:
+        args.max_num_samples = None
 
     prompt = CURR_DIR.joinpath("prompt_template.md").read_text(
         encoding="utf-8"
     )
     n = args.max_num_samples
-    output_dir = args.output_dir or f"outputs/ner-from_scratch-{n}"
+    n_str = str(n) if n is not None else "full"
+    output_dir = args.output_dir or f"outputs/ner-from_scratch-{n_str}"
     extra_vllm_kwargs = {"limit_mm_per_prompt": {"image": 0, "audio": 0}}
     options = VLLMRuntimeOptions(
         temperature=args.temperature,

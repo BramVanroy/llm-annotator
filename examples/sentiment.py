@@ -15,12 +15,19 @@ def main(args=None):
         "--model", default="RedHatAI/gemma-3-27b-it-FP8-dynamic"
     )
     parser.add_argument("--max-model-len", type=int, default=4096)
-    parser.add_argument("--max-num-samples", type=int, default=200)
+    parser.add_argument(
+        "--max-num-samples",
+        type=int,
+        default=200,
+        help="Number of samples to process. Use -1 for the full dataset.",
+    )
     parser.add_argument("--output-dir", default="outputs/sentiment-imdb-qwen")
     parser.add_argument(
         "--hub-id", default=None, help="HF Hub dataset ID to push to."
     )
     args = parser.parse_args(args)
+    if args.max_num_samples == -1:
+        args.max_num_samples = None
 
     hf_user = get_hf_username()
     prompt_prefix = """Analyze the sentiment of the following movie review and classify it as positive or negative.

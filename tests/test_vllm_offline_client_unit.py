@@ -135,6 +135,7 @@ def test_load_pipeline_explicit_args_override_extras(
         max_model_len=512,
         extra_vllm_kwargs={"max_model_len": 128, "foo": "bar"},
     )
+    client._ensure_pipeline_loaded()
     kwargs = fake_vllm_runtime["llm_kwargs"]
     assert isinstance(kwargs, dict)
     assert kwargs["max_model_len"] == 512
@@ -149,6 +150,28 @@ def test_warm_up_no_op_without_prefix(
     client = VLLMOfflineClient(model="m")
     client.warm_up(system_message=None, prompt_prefix=None)
     assert fake_vllm_runtime["chat_calls"] == []
+    # Pipeline should not have been loaded (lazy loading: no-op warm_up skips load).
+    assert fake_vllm_runtime["llm_kwargs"] is None
+    client.destroy()
+
+
+def test_warm_up_enables_prefix_caching_when_prefix_given(
+    fake_vllm_runtime: dict[str, Any],
+) -> None:
+    # Verifies that prefix caching and chunked prefill are enabled automatically
+    # before the engine is loaded when a prompt prefix is supplied.
+    client = VLLMOfflineClient(
+        model="m",
+        enable_prefix_caching=False,
+        enable_chunked_prefill=False,
+    )
+    assert not client._enable_prefix_caching
+    assert not client._enable_chunked_prefill
+    client.warm_up(prompt_prefix="Classify the following:")
+    assert client._enable_prefix_caching
+    assert client._enable_chunked_prefill
+    assert fake_vllm_runtime["llm_kwargs"]["enable_prefix_caching"] is True
+    assert fake_vllm_runtime["llm_kwargs"]["enable_chunked_prefill"] is True
     client.destroy()
 
 
@@ -187,6 +210,8 @@ def test_batch_generate_pipe_none_returns_error_response(
 ) -> None:
     # Verifies missing pipeline returns one error response per input message.
     client = VLLMOfflineClient(model="m", on_error="ignore")
+    # Simulate a pipeline that was loaded and then destroyed.
+    client._pipeline_loaded = True
     client._pipe = None
     responses = client.batch_generate(
         messages=[
@@ -235,6 +260,7 @@ def test_batch_generate_pad_when_fewer_outputs(
             )
         ]
 
+    client._ensure_pipeline_loaded()
     monkeypatch.setattr(client._pipe, "chat", _chat_short)
     responses = client.batch_generate(
         messages=[
@@ -341,6 +367,7 @@ def test_batch_generate_auto_reduces_on_oom(
             raise RuntimeError("CUDA out of memory. Tried to allocate 1 GiB.")
         return [_make_output() for _ in messages]
 
+    client._ensure_pipeline_loaded()
     monkeypatch.setattr(client._pipe, "chat", _oom_then_ok)
 
     responses = client.batch_generate(messages=[[_MSG]] * 5)
@@ -368,6 +395,7 @@ def test_batch_generate_reraises_non_oom_immediately(
         call_count["n"] += 1
         raise ValueError("unrelated error")
 
+    client._ensure_pipeline_loaded()
     monkeypatch.setattr(client._pipe, "chat", _value_error)
 
     with pytest.raises(ProviderError):
@@ -391,6 +419,7 @@ def test_batch_generate_reraises_when_min_batch_size_exceeded(
     ) -> list[object]:
         raise RuntimeError("CUDA out of memory.")
 
+    client._ensure_pipeline_loaded()
     monkeypatch.setattr(client._pipe, "chat", _always_oom)
 
     with pytest.raises(ProviderError, match="out of memory"):
@@ -417,6 +446,7 @@ def test_batch_generate_oom_detected_through_provider_error_chain(
             raise RuntimeError("dispatch failed") from oom
         return [_make_output() for _ in messages]
 
+    client._ensure_pipeline_loaded()
     monkeypatch.setattr(client._pipe, "chat", _oom_first)
 
     responses = client.batch_generate(messages=[[_MSG], [_MSG]])

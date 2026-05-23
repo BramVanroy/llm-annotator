@@ -132,6 +132,7 @@ class VLLMRuntimeOptions(ProviderRuntimeOptions):
     presence_penalty: float = 0.0
     frequency_penalty: float = 0.0
     repetition_penalty: float = 1.0
+    language_model_only: bool = True
     seed: int | None = None
     n: int = 1
     whitespace_pattern: str | None = r"[ ]?"
@@ -206,6 +207,9 @@ class VLLMOfflineClient(Client[VLLMRuntimeOptions]):
         max_num_batched_tokens: Maximum tokens per forward pass.
         enable_prefix_caching: Enable automatic KV-cache prefix reuse.
         enable_chunked_prefill: Process prefills in chunks to bound memory.
+        language_model_only: If True, all non-text modalities are disabled,
+            saving some memory.
+        speculative_config: Optional dict of vLLM speculative decoding config parameters.
         extra_vllm_kwargs: Additional keyword arguments forwarded to
             ``vllm.LLM``. Explicit constructor arguments take precedence
             over any conflicting keys here.
@@ -277,6 +281,8 @@ class VLLMOfflineClient(Client[VLLMRuntimeOptions]):
         max_num_batched_tokens: int | None = None,
         enable_prefix_caching: bool = True,
         enable_chunked_prefill: bool = True,
+        language_model_only: bool = True,
+        speculative_config: dict[str, Any] | None = None,
         extra_vllm_kwargs: dict[str, Any] | None = None,
         on_error: OnError = "raise",
         batch_size: int | None = None,
@@ -310,7 +316,7 @@ class VLLMOfflineClient(Client[VLLMRuntimeOptions]):
                 re-raised. Must be >= 1.
 
         Raises:
-            ImportError: If vLLM is not installed.
+            ImportError: If vLLM is not installed (raised on first use).
         """
         super().__init__(model=model, on_error=on_error)
         self._tensor_parallel_size = tensor_parallel_size
@@ -322,17 +328,26 @@ class VLLMOfflineClient(Client[VLLMRuntimeOptions]):
         self._max_num_batched_tokens = max_num_batched_tokens
         self._enable_prefix_caching = enable_prefix_caching
         self._enable_chunked_prefill = enable_chunked_prefill
+        self._language_model_only = language_model_only
+        self._speculative_config = speculative_config or {}
         self._extra_vllm_kwargs: dict[str, Any] = extra_vllm_kwargs or {}
         self._batch_size = batch_size
         self._min_batch_size = min_batch_size
         self._pipe: LLM | None = None
-        self._load_pipeline()
+        self._pipeline_loaded = False
+
+    def _ensure_pipeline_loaded(self) -> None:
+        """Load the pipeline on first use if it has not been loaded yet."""
+        if not self._pipeline_loaded:
+            self._load_pipeline()
 
     def _load_pipeline(self) -> None:
         """Load the vLLM LLM engine and move weights to GPU.
 
         Explicit constructor arguments take precedence over any conflicting
-        keys in ``extra_vllm_kwargs``.
+        keys in ``extra_vllm_kwargs``. Called lazily on first use so that
+        ``enable_prefix_caching`` and ``enable_chunked_prefill`` can be
+        adjusted (e.g. by :meth:`warm_up`) before the engine is constructed.
 
         Raises:
             ImportError: If vLLM is not installed.
@@ -350,7 +365,10 @@ class VLLMOfflineClient(Client[VLLMRuntimeOptions]):
             "enforce_eager": self._enforce_eager,
             "enable_prefix_caching": self._enable_prefix_caching,
             "enable_chunked_prefill": self._enable_chunked_prefill,
+            "language_model_only": self._language_model_only,
         }
+        if self._speculative_config:
+            explicit["speculative_config"] = self._speculative_config
         if self._quantization is not None:
             explicit["quantization"] = self._quantization
         if self._max_model_len is not None:
@@ -360,6 +378,7 @@ class VLLMOfflineClient(Client[VLLMRuntimeOptions]):
 
         kwargs.update(explicit)
         self._pipe = LLM(**kwargs)
+        self._pipeline_loaded = True
 
     def warm_up(
         self,
@@ -388,7 +407,19 @@ class VLLMOfflineClient(Client[VLLMRuntimeOptions]):
         Raises:
             ProviderError: If the warm-up inference call fails.
         """
-        if self._pipe is None or (not system_message and not prompt_prefix):
+        if not system_message and not prompt_prefix:
+            return
+
+        # Auto-enable KV-cache prefix reuse and chunked prefill before the
+        # engine is constructed so that the shared prefix tokens are only
+        # encoded once across the full annotation workload.
+        if prompt_prefix is not None:
+            self._enable_prefix_caching = True
+            self._enable_chunked_prefill = True
+
+        self._ensure_pipeline_loaded()
+
+        if self._pipe is None:
             return
 
         from vllm import SamplingParams
@@ -507,6 +538,7 @@ class VLLMOfflineClient(Client[VLLMRuntimeOptions]):
         Raises:
             ProviderError: If the model is not loaded or the vLLM call fails.
         """
+        self._ensure_pipeline_loaded()
         if self._pipe is None:
             error_response = self._handle_error(
                 ProviderError(
