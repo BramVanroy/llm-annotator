@@ -97,6 +97,7 @@ def main(args=None):
         model=args.model,
         max_model_len=args.max_model_len,
         max_num_seqs=args.max_num_seqs,
+        batch_size=args.max_num_seqs,
         gpu_memory_utilization=0.95,
         enable_thinking=args.enable_thinking,
         speculative_config=args.speculative_config,
