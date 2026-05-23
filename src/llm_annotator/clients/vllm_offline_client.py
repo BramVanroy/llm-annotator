@@ -219,6 +219,9 @@ class VLLMOfflineClient(Client[VLLMRuntimeOptions]):
             below ``min_batch_size``.
         min_batch_size: Smallest permitted chunk size before an OOM error is
             re-raised. Must be >= 1.
+        enable_thinking: Whether to enable thinking mode via
+            ``chat_template_kwargs``. Passed to every ``LLM.chat`` call.
+            Defaults to ``False``.
 
     Examples:
         Basic generation:
@@ -287,6 +290,7 @@ class VLLMOfflineClient(Client[VLLMRuntimeOptions]):
         on_error: OnError = "raise",
         batch_size: int | None = None,
         min_batch_size: int = 1,
+        enable_thinking: bool = False,
     ) -> None:
         """Initialize the offline vLLM client and load the model into memory.
 
@@ -314,6 +318,9 @@ class VLLMOfflineClient(Client[VLLMRuntimeOptions]):
                 below ``min_batch_size``.
             min_batch_size: Smallest permitted chunk size before an OOM is
                 re-raised. Must be >= 1.
+            enable_thinking: Whether to enable thinking mode via
+                ``chat_template_kwargs``. Passed to every ``LLM.chat`` call.
+                Defaults to ``False``.
 
         Raises:
             ImportError: If vLLM is not installed (raised on first use).
@@ -333,6 +340,7 @@ class VLLMOfflineClient(Client[VLLMRuntimeOptions]):
         self._extra_vllm_kwargs: dict[str, Any] = extra_vllm_kwargs or {}
         self._batch_size = batch_size
         self._min_batch_size = min_batch_size
+        self._enable_thinking = enable_thinking
         self._pipe: LLM | None = None
         self._pipeline_loaded = False
 
@@ -439,7 +447,12 @@ class VLLMOfflineClient(Client[VLLMRuntimeOptions]):
 
         try:
             self._pipe.chat(
-                cast(Any, [messages]), sampling_params, use_tqdm=False
+                cast(Any, [messages]),
+                sampling_params,
+                chat_template_kwargs={
+                    "enable_thinking": self._enable_thinking
+                },
+                use_tqdm=False,
             )
         except Exception as exc:
             self._handle_error(exc, context="vLLM offline warm-up failed")
@@ -572,7 +585,12 @@ class VLLMOfflineClient(Client[VLLMRuntimeOptions]):
 
         try:
             outputs = self._pipe.chat(
-                cast(Any, messages), sampling_params, use_tqdm=False
+                cast(Any, messages),
+                sampling_params,
+                chat_template_kwargs={
+                    "enable_thinking": self._enable_thinking
+                },
+                use_tqdm=False,
             )
         except Exception as exc:
             error_response = self._handle_error(

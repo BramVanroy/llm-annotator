@@ -31,6 +31,10 @@ def main(args=None):
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--top-k", type=int, default=64)
     parser.add_argument("--max-tokens", type=int, default=36_000)
+    parser.add_argument("--repetition-penalty", type=float, default=1.0)
+    parser.add_argument(
+        "--enable-thinking", action="store_true", default=False
+    )
     parser.add_argument(
         "--dataset", default="BramVanroy/finemath-4plus-seqlen36k"
     )
@@ -87,12 +91,15 @@ def main(args=None):
         top_p=args.top_p,
         top_k=args.top_k,
         max_tokens=args.max_tokens,
+        repetition_penalty=args.repetition_penalty,
     )
     client = VLLMOfflineClient(
         model=args.model,
         max_model_len=args.max_model_len,
         max_num_seqs=args.max_num_seqs,
         gpu_memory_utilization=0.95,
+        enable_thinking=args.enable_thinking,
+        speculative_config=args.speculative_config,
     )
 
     if num_samples is None:
