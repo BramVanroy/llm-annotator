@@ -558,3 +558,62 @@ def test_annotate_dataset_keep_columns_type_error(tmp_path: Path) -> None:
             dataset=Dataset.from_dict({"text": ["a"]}),
             keep_columns=1,
         )
+
+
+def test_annotator_config_file_written(tmp_path: Path) -> None:
+    # Verifies _annotator_config.json is created and contains correct init and
+    # annotate_dataset sections.
+    annotator = Annotator(client=DummyClient(), batch_size=4, num_proc=2)
+    annotator.annotate_dataset(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        dataset=Dataset.from_dict({"text": ["a", "b"]}),
+    )
+
+    config_path = tmp_path / "out" / "_annotator_config.json"
+    assert config_path.exists()
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+
+    assert config["init"]["client"]["type"] == "DummyClient"
+    assert config["init"]["client"]["model"] == "dummy"
+    assert config["init"]["client"]["on_error"] == "raise"
+    assert config["init"]["client"]["max_workers"] == 4
+    assert config["init"]["batch_size"] == 4
+    assert config["init"]["num_proc"] == 2
+    assert config["init"]["verbose"] is False
+    assert "annotate_dataset" in config
+
+
+def test_annotator_config_annotate_dataset_fields(tmp_path: Path) -> None:
+    # Verifies annotate_dataset section captures all passed arguments correctly.
+    def my_validator(sample: dict) -> bool:
+        return bool(sample.get("response"))
+
+    options = ProviderRuntimeOptions(max_tokens=64)
+    annotator = Annotator(client=DummyClient())
+    annotator.annotate_dataset(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        dataset=Dataset.from_dict({"text": ["a"]}),
+        keep_columns=["text"],
+        options=options,
+        validate_fn=my_validator,
+        num_retries_invalid=0,
+        system_message="You are helpful.",
+    )
+
+    config = json.loads(
+        (tmp_path / "out" / "_annotator_config.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    ad = config["annotate_dataset"]
+
+    assert ad["keep_columns"] == ["idx", "text"]
+    assert ad["options"] == {"max_tokens": 64, "json_schema": None}
+    assert (
+        ad["validate_fn"]
+        == "test_annotator_config_annotate_dataset_fields.<locals>.my_validator"
+    )
+    assert ad["system_message"] == "You are helpful."
+    assert ad["num_retries_invalid"] == 0

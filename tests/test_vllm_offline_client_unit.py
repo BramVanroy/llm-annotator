@@ -312,7 +312,9 @@ def test_destroy_is_idempotent(
     monkeypatch.setattr(gc, "collect", _collect)
 
     client = VLLMOfflineClient(model="m")
+    client._ensure_pipeline_loaded()
     client.destroy()
+    # Idempotent: second call should work without error
     client.destroy()
     assert client._pipe is None
     assert collected["called"] >= 1

@@ -1,18 +1,17 @@
+import json
 from pathlib import Path
 
 from llm_annotator import Annotator, VLLMOfflineClient, VLLMRuntimeOptions
+from llm_annotator.logging_utils import get_logger
 from llm_annotator.utils import get_hf_username
 
 
+logger = get_logger(__name__)
 CURR_DIR = Path(__file__).parent
 
 
 def main(args=None):
     import argparse
-
-    # TODO: add speculative_config, which should be a string but which we should then json.loads
-    # TODO: add reasoner_parser to vlm offline client
-    # TODO: check how reasoning/thinking should be implemented
 
     parser = argparse.ArgumentParser(
         description="Translate finemath to Dutch."
@@ -50,16 +49,36 @@ def main(args=None):
     if args.max_num_samples == -1:
         args.max_num_samples = None
 
+    if args.speculative_config is not None:
+        try:
+            args.speculative_config = json.loads(args.speculative_config)
+        except json.JSONDecodeError as exc:
+            raise ValueError("Invalid JSON for --speculative-config") from exc
+
     hf_user = get_hf_username()
+
+    if (
+        hf_user is None
+        and args.hub_id is not None
+        and "{hf_user}" in args.hub_id
+    ):
+        logger.warning(
+            "You are not logged into Hugging Face so uploading is disabled."
+            " Please log in with `huggingface-cli login` or setting HF_TOKEN to enable uploading."
+        )
+
     prompt_template = CURR_DIR.joinpath("prompt_template.md").read_text(
         encoding="utf-8"
     )
 
-    n = args.max_num_samples
-    n_str = str(n) if n is not None else "full"
+    num_samples = args.max_num_samples
+    n_str = str(num_samples) if num_samples is not None else "full"
     hub_id = args.hub_id
     if hub_id is not None:
-        hub_id = hub_id.format(hf_user=hf_user, n=n_str)
+        if hf_user is None:
+            hub_id = None
+        else:
+            hub_id = hub_id.format(hf_user=hf_user, n=n_str)
     elif hf_user:
         hub_id = f"{hf_user}/finemath-dutch-{n_str}"
 
@@ -75,16 +94,22 @@ def main(args=None):
         max_num_seqs=args.max_num_seqs,
         gpu_memory_utilization=0.95,
     )
+
+    if num_samples is None:
+        upload_every_n_samples = 2500
+    else:
+        upload_every_n_samples = max(1, num_samples // 4)
+
     with Annotator(client=client, verbose=True) as anno:
         anno.annotate_dataset(
-            output_dir=f"outputs/finemath-dutch-{n}",
+            output_dir=f"outputs/finemath-dutch-{num_samples}",
             prompt_template=prompt_template,
             dataset_name=args.dataset,
             dataset_split=args.dataset_split,
             new_hub_id=hub_id,
-            max_num_samples=n,
+            max_num_samples=num_samples,
             keep_columns=True,
-            upload_every_n_samples=None,
+            upload_every_n_samples=upload_every_n_samples,
             options=options,
         )
 

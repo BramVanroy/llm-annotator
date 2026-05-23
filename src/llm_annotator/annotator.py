@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import json
 import shutil
 import string
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import wraps
 from math import ceil
 from pathlib import Path
@@ -20,6 +21,7 @@ from huggingface_hub import create_branch, create_repo, upload_large_folder
 from tqdm import tqdm
 
 from llm_annotator.clients.base import Client, ProviderRuntimeOptions, Response
+from llm_annotator.logging_utils import get_logger
 from llm_annotator.utils import (
     ensure_returns_bool,
     ensure_returns_dict,
@@ -116,6 +118,11 @@ class Annotator:
     batch_size: int = 256
     num_proc: int | None = None
     verbose: bool = False
+    _logger: Any = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """Initialize a package-scoped logger for annotator runtime messages."""
+        self._logger = get_logger("annotator")
 
     def __enter__(self) -> "Annotator":
         """Enter the context manager, returning the annotator instance."""
@@ -320,7 +327,7 @@ class Annotator:
 
             if sort_by_length:
                 if self.verbose:
-                    print(
+                    self._logger.info(
                         "Sorting dataset roughly by prompt length for more efficient batching (longest first)..."
                     )
                 dataset = dataset.map(
@@ -356,7 +363,9 @@ class Annotator:
             )
             processed_n_samples = len(skip_idxs)
             if self.verbose:
-                print(f"Skipping {len(skip_idxs)} already-processed samples")
+                self._logger.info(
+                    f"Skipping {len(skip_idxs):,} already-processed samples"
+                )
 
         dataset = self._postprocess_dataset(dataset=dataset)
         return dataset, processed_n_samples
@@ -567,7 +576,7 @@ class Annotator:
                 1 for res in results if not res[f"{task_prefix}valid_fields"]
             )
             if n_invalid == len(results) and self.verbose:
-                print(
+                self._logger.warning(
                     "Warning: All samples in the batch failed to produce valid JSON fields."
                     " This might be exceptional (esp. for smaller batches)"
                     " but if it happens often it suggests a deeper issue,"
@@ -579,7 +588,7 @@ class Annotator:
                 1 for res in results if not res[f"{task_prefix}valid"]
             )
             if n_invalid == len(results) and self.verbose:
-                print(
+                self._logger.warning(
                     "Warning: All samples in the batch failed to produce valid outputs after"
                     " running the custom validation function."
                 )
@@ -740,7 +749,7 @@ class Annotator:
         # If shuffle_seed and sorting by length, warn that shuffling will be
         # effectively disabled
         if shuffle_seed is not None and sort_by_length:
-            print(
+            self._logger.warning(
                 "Warning: 'shuffle_seed' is set but 'sort_by_length' is also set."
                 " After processing the full dataset (sorted by length), the order"
                 " will therefore be restored to the shuffled order, NOT the original order."
@@ -810,6 +819,76 @@ class Annotator:
 
         pdout.joinpath("_version.json").write_text(
             json.dumps(get_lib_versions(), indent=4), encoding="utf-8"
+        )
+
+        def _serialize():
+            _client_params: dict[str, Any] = {}
+            _seen_params: set[str] = set()
+            for _cls in type(self.client).__mro__:
+                _init = vars(_cls).get("__init__")
+                if _init is None:
+                    continue
+                for _pname in inspect.signature(_init).parameters:
+                    if _pname == "self" or _pname in _seen_params:
+                        continue
+                    _seen_params.add(_pname)
+                    if hasattr(self.client, _pname):
+                        _client_params[_pname] = getattr(self.client, _pname)
+                    elif hasattr(self.client, f"_{_pname}"):
+                        _client_params[_pname] = getattr(
+                            self.client, f"_{_pname}"
+                        )
+
+            return {
+                "init": {
+                    **{
+                        f.name: getattr(self, f.name)
+                        for f in dataclasses.fields(self)
+                        if f.name != "client" and f.init
+                    },
+                    "client": {
+                        "type": type(self.client).__name__,
+                        **_client_params,
+                    },
+                },
+                "annotate_dataset": {
+                    "output_dir": str(output_dir),
+                    "prompt_template": prompt_template,
+                    "dataset_name": dataset_name,
+                    "dataset": repr(dataset) if dataset is not None else None,
+                    "new_hub_id": new_hub_id,
+                    "overwrite": overwrite,
+                    "dataset_config": dataset_config,
+                    "data_dir": data_dir,
+                    "dataset_split": dataset_split,
+                    "keep_columns": sorted(str(x) for x in keep_columns)
+                    if isinstance(keep_columns, set)
+                    else keep_columns,
+                    "shuffle_seed": shuffle_seed,
+                    "options": options.dict() if options is not None else None,
+                    "max_num_samples": max_num_samples,
+                    "cache_input_dataset": cache_input_dataset,
+                    "use_cached_input_dataset": use_cached_input_dataset,
+                    "prompt_field_swapper": prompt_field_swapper,
+                    "output_schema": output_schema,
+                    "idx_column": idx_column,
+                    "upload_every_n_samples": upload_every_n_samples,
+                    "max_samples_per_output_file": max_samples_per_output_file,
+                    "task_prefix": task_prefix,
+                    "sort_by_length": sort_by_length,
+                    "validate_fn": getattr(validate_fn, "__qualname__", None),
+                    "postprocess_fn": getattr(
+                        postprocess_fn, "__qualname__", None
+                    ),
+                    "num_retries_invalid": num_retries_invalid,
+                    "system_message": system_message,
+                    "keep_idx_column": keep_idx_column,
+                },
+            }
+
+        pdout.joinpath("_annotator_config.json").write_text(
+            json.dumps(_serialize(), indent=4),
+            encoding="utf-8",
         )
 
         # Push initial empty dir with versions file to hub
@@ -899,7 +978,7 @@ class Annotator:
                     while invalid_indices and n_retries < num_retries_invalid:
                         n_retries += 1
                         if self.verbose:
-                            print(
+                            self._logger.info(
                                 f"Retrying {len(invalid_indices):,} invalid samples (attempt {n_retries}/{num_retries_invalid})..."
                             )
 
@@ -941,7 +1020,7 @@ class Annotator:
                                 invalid_indices
                                 and n_retries == num_retries_invalid
                             ):
-                                print(
+                                self._logger.warning(
                                     f"After {n_retries}/{num_retries_invalid} attempts, {len(invalid_indices):,} samples are still invalid. Skipping..."
                                 )
 
@@ -1157,7 +1236,7 @@ class Annotator:
         if new_hub_id:
             ds.push_to_hub(new_hub_id, private=True)
             if self.verbose:
-                print(
+                self._logger.info(
                     f"Uploaded final dataset to the HF Hub: https://huggingface.co/datasets/{new_hub_id}!"
                 )
 
@@ -1252,7 +1331,7 @@ class Annotator:
         )
         if self.verbose:
             url = f"https://huggingface.co/datasets/{new_hub_id}/tree/{task_prefix}jsonl_upload"
-            print(f"Backed-up data to the HF Hub: {url}")
+            self._logger.info(f"Backed-up data to the HF Hub: {url}")
 
 
 __all__ = ["Annotator", "destroy_on_error"]
