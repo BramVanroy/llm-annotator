@@ -31,6 +31,9 @@ dependencies = [
 vllm = [
     "mistral-common>=1.11.2,<2",
     "vllm==0.21.0",
+    "flashinfer-python==0.6.8.post1",
+    "flashinfer-cubin==0.6.8.post1",
+    "flashinfer-jit-cache==0.6.8.post1"
 ]
 anthropic = [
     "anthropic>=0.102.0,<1",
@@ -41,6 +44,14 @@ openai = [
 gemini = [
     "google-genai>=2.3.0,<3",
 ]
+
+[[tool.uv.index]]
+name = "flashinfer-jit-cache-cu130"
+url = "https://flashinfer.ai/whl/cu130/"
+explicit = true
+
+[tool.uv.sources]
+flashinfer-jit-cache = { index = "flashinfer-jit-cache-cu130" }
 
 [dependency-groups]
 docs = [
