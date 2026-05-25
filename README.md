@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/BramVanroy/llm-annotator/actions/workflows/ci.yml/badge.svg)](https://github.com/BramVanroy/llm-annotator/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/BramVanroy/llm-annotator/branch/main/graph/badge.svg)](https://codecov.io/gh/BramVanroy/llm-annotator)
-[![PyPI version](https://badge.fury.io/py/llm-annotator.svg)](https://badge.fury.io/py/llm-annotator)
+![PyPI version](https://img.shields.io/pypi/v/llm-annotator)
 [![Python versions](https://img.shields.io/pypi/pyversions/llm-annotator.svg)](https://pypi.org/project/llm-annotator/)
 [![License](https://img.shields.io/github/license/BramVanroy/llm-annotator)](LICENSE)
 
