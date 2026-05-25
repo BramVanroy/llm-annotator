@@ -476,20 +476,12 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
 
         Returns:
             A Response built from the first generated sequence.
-
-        Raises:
-            ProviderError: If the stop reason indicates an error condition.
         """
         output = response.outputs[0]
         num_output_tokens = len(output.token_ids) if output.token_ids else None
         finish_reason = output.finish_reason
 
-        self._handle_stop_reason(
-            stop_reason=finish_reason,
-            num_output_tokens=num_output_tokens,
-        )
-
-        return Response(
+        partial = Response(
             text=output.text.strip() if output.text else "",
             stop_reason=finish_reason,
             model=self.model,
@@ -497,6 +489,20 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
             num_output_tokens=num_output_tokens,
             full_response=response,
         )
+
+        try:
+            self._handle_stop_reason(
+                stop_reason=finish_reason,
+                num_output_tokens=num_output_tokens,
+            )
+        except Exception as exc:
+            return self._handle_error(
+                exc,
+                context="vLLM offline response stop reason",
+                partial=partial,
+            )
+
+        return partial
 
     def generate(
         self,

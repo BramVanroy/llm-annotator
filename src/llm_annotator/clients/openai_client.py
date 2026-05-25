@@ -120,12 +120,7 @@ class OpenAIClient(Client[T_OpenAIOptions]):
             else ""
         )
 
-        self._handle_stop_reason(
-            stop_reason=finish_reason,
-            num_output_tokens=num_output_tokens,
-        )
-
-        return Response(
+        partial = Response(
             text=text,
             stop_reason=finish_reason,
             model=response.model,
@@ -133,6 +128,20 @@ class OpenAIClient(Client[T_OpenAIOptions]):
             num_output_tokens=num_output_tokens,
             full_response=response,
         )
+
+        try:
+            self._handle_stop_reason(
+                stop_reason=finish_reason,
+                num_output_tokens=num_output_tokens,
+            )
+        except Exception as exc:
+            return self._handle_error(
+                exc,
+                context="OpenAI response stop reason",
+                partial=partial,
+            )
+
+        return partial
 
     def destroy(self) -> None:
         """Cancel any in-flight batches and clean up resources."""

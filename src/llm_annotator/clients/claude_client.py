@@ -94,10 +94,6 @@ class ClaudeClient(Client[ClaudeRuntimeOptions]):
 
     def _process_response(self, response: ClaudeMessage) -> Response:
         num_output_tokens = getattr(response.usage, "output_tokens", None)
-        self._handle_stop_reason(
-            stop_reason=response.stop_reason,
-            num_output_tokens=num_output_tokens,
-        )
 
         text_chunks: list[str] = []
         for block in response.content:
@@ -108,7 +104,7 @@ class ClaudeClient(Client[ClaudeRuntimeOptions]):
                 text_chunks.append(block_text)
         content = "\n".join(text_chunks).strip()
 
-        return Response(
+        partial = Response(
             text=content,
             stop_reason=response.stop_reason,
             model=response.model,
@@ -116,6 +112,20 @@ class ClaudeClient(Client[ClaudeRuntimeOptions]):
             num_output_tokens=num_output_tokens,
             full_response=response,
         )
+
+        try:
+            self._handle_stop_reason(
+                stop_reason=response.stop_reason,
+                num_output_tokens=num_output_tokens,
+            )
+        except Exception as exc:
+            return self._handle_error(
+                exc,
+                context="Claude response stop reason",
+                partial=partial,
+            )
+
+        return partial
 
     def generate(
         self,

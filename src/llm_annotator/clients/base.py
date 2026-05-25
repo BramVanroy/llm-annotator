@@ -95,8 +95,37 @@ class Client(ABC, Generic[T_Options]):
         self.on_error = on_error
         self._logger = get_logger(f"clients.{self.provider_type.value}")
 
-    def _handle_error(self, exc: Exception, *, context: str) -> Response:
-        """Handle provider errors according to ``self.on_error`` policy."""
+    def _handle_error(
+        self,
+        exc: Exception,
+        *,
+        context: str,
+        partial: Response | None = None,
+    ) -> Response:
+        """Handle provider errors according to ``self.on_error`` policy.
+
+        When ``partial`` is provided (e.g. after a response was already
+        partially decoded), its fields are forwarded to the returned
+        :class:`Response` so callers retain the generated text, stop
+        reason, token counts, and the raw provider object.
+
+        Args:
+            exc: The exception to handle.
+            context: Human-readable description of where the error occurred.
+            partial: Optional partial :class:`Response` built before the
+                error was detected. Its ``text``, ``stop_reason``,
+                ``num_output_tokens``, and ``full_response`` fields are
+                preserved in the returned error :class:`Response`.
+
+        Returns:
+            An error :class:`Response`. Only reached when
+            ``self.on_error`` is ``"ignore"`` or ``"warn"``; otherwise
+            a :class:`~llm_annotator.clients.exceptions.ProviderError`
+            is raised.
+
+        Raises:
+            ProviderError: When ``self.on_error`` is ``"raise"``.
+        """
         message = f"{context}: {exc}"
         provider_error = (
             exc if isinstance(exc, ProviderError) else ProviderError(message)
@@ -112,9 +141,18 @@ class Client(ABC, Generic[T_Options]):
             self._logger.warning(message)
 
         return Response(
-            text="",
-            model=self.model,
-            provider=self.provider_type,
+            text=partial.text if partial is not None else "",
+            stop_reason=partial.stop_reason if partial is not None else None,
+            model=(partial.model if partial is not None else None)
+            or self.model,
+            provider=(partial.provider if partial is not None else None)
+            or self.provider_type,
+            num_output_tokens=(
+                partial.num_output_tokens if partial is not None else None
+            ),
+            full_response=partial.full_response
+            if partial is not None
+            else None,
             error=response_error,
             error_type=type(provider_error).__name__,
         )
