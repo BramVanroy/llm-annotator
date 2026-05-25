@@ -5,10 +5,9 @@
 [![PyPI version](https://badge.fury.io/py/llm-annotator.svg)](https://badge.fury.io/py/llm-annotator)
 [![Python versions](https://img.shields.io/pypi/pyversions/llm-annotator.svg)](https://pypi.org/project/llm-annotator/)
 [![License](https://img.shields.io/github/license/BramVanroy/llm-annotator)](LICENSE)
-![GitHub tag](https://img.shields.io/github/v/tag/BramVanroy/llm-annotator)
 
 
-llm-annotator is a Python 3.12+ library for robust, resumable
+`llm-annotator` is a Python 3.12+ library for robust, resumable
 LLM-driven dataset annotation and generation.
 
 It supports multiple providers through pluggable clients:
@@ -27,6 +26,10 @@ Key capabilities:
 - Retry and validation hooks for robust pipelines.
 - Optional Hugging Face Hub upload cadence.
 - Context-manager cleanup of client resources.
+
+It is not intended for parallel, multi-node, multi-instance generation.
+If that is what you are after, maybe [`datatrove`](https://github.com/huggingface/datatrove/tree/main/examples/inference)
+is something for you.
 
 ## Documentation
 
