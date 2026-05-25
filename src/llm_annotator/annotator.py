@@ -5,7 +5,7 @@ import inspect
 import json
 import shutil
 import string
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from functools import wraps
 from math import ceil
 from pathlib import Path
@@ -865,7 +865,9 @@ class Annotator:
                     if isinstance(keep_columns, set)
                     else keep_columns,
                     "shuffle_seed": shuffle_seed,
-                    "options": options.dict() if options is not None else None,
+                    "options": asdict(options)
+                    if options is not None
+                    else None,
                     "max_num_samples": max_num_samples,
                     "cache_input_dataset": cache_input_dataset,
                     "use_cached_input_dataset": use_cached_input_dataset,

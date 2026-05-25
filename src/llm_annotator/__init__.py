@@ -9,11 +9,13 @@ from .clients.exceptions import ConfigurationError as ConfigurationError
 from .clients.exceptions import LLMClientError as LLMClientError
 from .clients.exceptions import ParsingError as ParsingError
 from .clients.exceptions import ProviderError as ProviderError
-from .clients.gemini_client import GeminiClient as GeminiClient
 from .clients.openai_client import OpenAIClient as OpenAIClient
 from .clients.openai_client import OpenAIRuntimeOptions as OpenAIRuntimeOptions
+from .clients.vllm_client import (
+    VLLMBaseRuntimeOptions as VLLMBaseRuntimeOptions,
+)
 from .clients.vllm_client import VLLMClient as VLLMClient
-from .clients.vllm_client import VLLMRuntimeOptions as VLLMServerRuntimeOptions
+from .clients.vllm_client import VLLMRuntimeOptions as VLLMRuntimeOptions
 from .clients.vllm_offline_client import (
     VLLMOfflineClient as VLLMOfflineClient,
 )
@@ -35,7 +37,6 @@ __all__ = [
     "ClaudeClient",
     "ClaudeRuntimeOptions",
     "ConfigurationError",
-    "GeminiClient",
     "LLMClientError",
     "OnError",
     "OpenAIClient",
@@ -45,10 +46,11 @@ __all__ = [
     "ProviderError",
     "ProviderRuntimeOptions",
     "Response",
+    "VLLMBaseRuntimeOptions",
     "VLLMClient",
     "VLLMOfflineClient",
     "VLLMOfflineRuntimeOptions",
-    "VLLMServerRuntimeOptions",
+    "VLLMRuntimeOptions",
     "auto_reduce_batch_size",
     "configure_logging",
     "extract_prompt_prefix",

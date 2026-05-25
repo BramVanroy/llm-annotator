@@ -96,14 +96,13 @@ def main(args=None):
         top_k=args.top_k,
         max_tokens=args.max_tokens,
         repetition_penalty=args.repetition_penalty,
+        chat_template_kwargs={"enable_thinking": args.enable_thinking},
     )
     client = VLLMOfflineClient(
         model=args.model,
         max_model_len=args.max_model_len,
         max_num_seqs=args.max_num_seqs,
         batch_size=args.max_num_seqs,
-        gpu_memory_utilization=0.95,
-        enable_thinking=args.enable_thinking,
         speculative_config=args.speculative_config,
     )
 
@@ -112,7 +111,9 @@ def main(args=None):
     else:
         upload_every_n_samples = max(1, num_samples // 4)
 
-    with Annotator(client=client, verbose=True) as anno:
+    with Annotator(
+        client=client, verbose=True, batch_size=args.max_num_seqs
+    ) as anno:
         anno.annotate_dataset(
             output_dir=f"outputs/finemath-dutch-{num_samples}",
             prompt_template=prompt_template,

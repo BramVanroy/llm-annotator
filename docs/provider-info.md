@@ -11,7 +11,6 @@ configure authentication for each provider.
 | vLLM server (OpenAI-compatible) | `llm-annotator[vllm]` | `VLLMClient` | No API key by default (`api_key="EMPTY"`). |
 | OpenAI | `llm-annotator[openai]` | `OpenAIClient` | `OPENAI_API_KEY` |
 | Anthropic Claude | `llm-annotator[anthropic]` | `ClaudeClient` | `ANTHROPIC_API_KEY` |
-| Google Gemini | `llm-annotator[gemini]` | `GeminiClient` | `GEMINI_API_KEY` |
 
 ## Install extras
 
@@ -19,7 +18,6 @@ configure authentication for each provider.
 uv add "llm-annotator[vllm]"
 uv add "llm-annotator[openai]"
 uv add "llm-annotator[anthropic]"
-uv add "llm-annotator[gemini]"
 ```
 
 ## Environment variables
@@ -29,7 +27,6 @@ Set only the variables you need for the provider you use:
 ```bash
 export OPENAI_API_KEY="..."
 export ANTHROPIC_API_KEY="..."
-export GEMINI_API_KEY="..."
 ```
 
 For Hugging Face Hub uploads from annotation jobs, authenticate with one of:
@@ -68,16 +65,6 @@ client = OpenAIClient(
 from llm_annotator import Annotator, ClaudeClient
 
 client = ClaudeClient(model="claude-sonnet-4-20250514")
-with Annotator(client=client) as anno:
-    ...
-```
-
-### Gemini
-
-```python
-from llm_annotator import Annotator, GeminiClient
-
-client = GeminiClient(model="gemini-2.5-pro")
 with Annotator(client=client) as anno:
     ...
 ```

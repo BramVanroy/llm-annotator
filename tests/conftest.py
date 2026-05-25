@@ -176,6 +176,14 @@ def block_network(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def fake_openai_module(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """Provide a minimal fake OpenAI SDK and capture request payloads."""
+    _default_batch_output = (
+        '{"id": "resp-1", "custom_id": "request-0", "response": '
+        '{"status_code": 200, "body": {"model": "fake-model", "choices": '
+        '[{"finish_reason": "stop", "message": {"role": "assistant", '
+        '"content": "hello"}}], "usage": {"completion_tokens": 7, '
+        '"prompt_tokens": 10, "total_tokens": 17}}}, "error": null}'
+    )
+
     state: dict[str, Any] = {
         "last_create_kwargs": None,
         "last_post_url": None,
@@ -183,6 +191,13 @@ def fake_openai_module(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "create_raises": None,
         "post_json": {"choices": []},
         "model_list": ["served-model"],
+        # Batch API state
+        "batch_output_content": _default_batch_output,
+        "batch_initial_status": "validating",
+        "batch_retrieve_responses": [],
+        "created_batches": [],
+        "cancelled_batches": [],
+        "uploaded_files": [],
     }
 
     class FakeHTTPResponse:
@@ -214,6 +229,48 @@ def fake_openai_module(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
                 model="fake-model",
             )
 
+    class FakeFiles:
+        def create(self, file: Any, purpose: str) -> object:
+            state["uploaded_files"].append({"file": file, "purpose": purpose})
+            return types.SimpleNamespace(id="file-fake")
+
+        def content(self, file_id: str) -> object:
+            _ = file_id
+            return types.SimpleNamespace(text=state["batch_output_content"])
+
+    class FakeBatches:
+        def create(
+            self,
+            input_file_id: str,
+            endpoint: str,
+            completion_window: str,
+        ) -> object:
+            state["created_batches"].append(
+                {
+                    "input_file_id": input_file_id,
+                    "endpoint": endpoint,
+                    "completion_window": completion_window,
+                }
+            )
+            return types.SimpleNamespace(
+                id="batch-fake",
+                status=state["batch_initial_status"],
+                output_file_id="file-output-fake",
+            )
+
+        def retrieve(self, batch_id: str) -> object:
+            poll_responses: list[Any] = state["batch_retrieve_responses"]
+            if poll_responses:
+                return poll_responses.pop(0)
+            return types.SimpleNamespace(
+                id=batch_id,
+                status="completed",
+                output_file_id="file-output-fake",
+            )
+
+        def cancel(self, batch_id: str) -> None:
+            state["cancelled_batches"].append(batch_id)
+
     class FakeOpenAI:
         def __init__(
             self, api_key: str | None = None, base_url: str | None = None
@@ -230,6 +287,8 @@ def fake_openai_module(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
                 )
             )
             self._client = FakeHTTPClient()
+            self.files = FakeFiles()
+            self.batches = FakeBatches()
 
     fake_openai = types.ModuleType("openai")
     fake_openai.OpenAI = FakeOpenAI  # type: ignore[attr-defined]
@@ -259,8 +318,16 @@ def fake_openai_module(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
                 kwargs["choices"] = normalized_choices
             if "usage" not in kwargs:
                 kwargs["usage"] = types.SimpleNamespace(completion_tokens=None)
+            elif isinstance(kwargs["usage"], dict):
+                kwargs["usage"] = types.SimpleNamespace(
+                    **cast(dict[str, object], kwargs["usage"])
+                )
             for key, value in kwargs.items():
                 setattr(self, key, value)
+
+        @classmethod
+        def model_validate(cls, data: dict[str, Any]) -> "FakeChatCompletion":
+            return cls(**data)
 
     cc_mod.ChatCompletion = FakeChatCompletion  # type: ignore[attr-defined]
 

@@ -25,18 +25,14 @@ class ClaudeRuntimeOptions(ProviderRuntimeOptions):
     """When enabled, responses include thinking content blocks showing Claude's thinking process before the final answer. Requires a minimum budget of 1,024 tokens and counts towards your max_tokens limit."""
     thinking_budget: int | None = None
     """Determines how many tokens Claude can use for its internal reasoning process. Larger budgets can enable more thorough analysis for complex problems, improving response quality. Must be ≥1024 and less than max_tokens."""
-    thinking_display: Literal["summarized", "ommitted", "full"] | None = None
+    thinking_display: Literal["summarized", "omitted", "full"] | None = None
     """When thinking is enabled (or adaptive). Controls how thinking content appears in the response. When set to summarized, thinking is returned normally. When set to omitted, thinking content is redacted but a signature is returned for multi-turn continuity. Defaults to summarized."""
 
-    def to_payload(self):
+    def to_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {}
 
         if self.max_tokens is not None:
             payload["max_tokens"] = self.max_tokens
-        else:
-            payload["max_tokens"] = (
-                8192  # Set a high default max_tokens for Claude
-            )
 
         if self.effort is not None:
             if "output_config" not in payload:
@@ -128,7 +124,7 @@ class ClaudeClient(Client[ClaudeRuntimeOptions]):
         options: ClaudeRuntimeOptions | None = None,
         gen_kwargs: dict[str, Any] | None = None,
     ) -> Response:
-        """Generate a structured JSON response using Claude.
+        """Generate a response using Claude.
 
         Args:
             messages: List of message dictionaries.

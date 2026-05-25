@@ -9,11 +9,11 @@ from .exceptions import ConfigurationError as ConfigurationError
 from .exceptions import LLMClientError as LLMClientError
 from .exceptions import ParsingError as ParsingError
 from .exceptions import ProviderError as ProviderError
-from .gemini_client import GeminiClient as GeminiClient
 from .openai_client import OpenAIClient as OpenAIClient
 from .openai_client import OpenAIRuntimeOptions as OpenAIRuntimeOptions
+from .vllm_client import VLLMBaseRuntimeOptions as VLLMBaseRuntimeOptions
 from .vllm_client import VLLMClient as VLLMClient
-from .vllm_client import VLLMRuntimeOptions as VLLMServerRuntimeOptions
+from .vllm_client import VLLMRuntimeOptions as VLLMRuntimeOptions
 from .vllm_offline_client import VLLMOfflineClient as VLLMOfflineClient
 from .vllm_offline_client import (
     VLLMOfflineRuntimeOptions as VLLMOfflineRuntimeOptions,
@@ -25,7 +25,6 @@ __all__ = [
     "ClaudeClient",
     "ClaudeRuntimeOptions",
     "ConfigurationError",
-    "GeminiClient",
     "LLMClientError",
     "OnError",
     "OpenAIClient",
@@ -35,8 +34,9 @@ __all__ = [
     "ProviderError",
     "ProviderRuntimeOptions",
     "Response",
+    "VLLMBaseRuntimeOptions",
     "VLLMClient",
     "VLLMOfflineClient",
     "VLLMOfflineRuntimeOptions",
-    "VLLMServerRuntimeOptions",
+    "VLLMRuntimeOptions",
 ]

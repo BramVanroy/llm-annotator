@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from enum import StrEnum, auto
 from typing import Any, ClassVar, Generic, Literal, Self, TypeVar
 
@@ -19,7 +19,6 @@ OnError = Literal["raise", "ignore", "warn"]
 class Provider(StrEnum):
     OPENAI = auto()
     CLAUDE = auto()
-    GEMINI = auto()
     VLLM = auto()
     VLLM_OFFLINE = auto()
 
@@ -39,12 +38,16 @@ class ProviderRuntimeOptions:
     max_tokens: int | None = None
     json_schema: dict[str, Any] | None = None
 
-    def dict(self, *, exclude_none: bool = False) -> dict[str, object]:
-        """Convert the options dataclass to a dict, optionally excluding None values."""
-        result = asdict(self)
-        if exclude_none:
-            result = {k: v for k, v in result.items() if v is not None}
-        return result
+    def to_payload(self) -> dict[str, Any]:
+        """Convert options to a provider-specific API request payload dict.
+
+        Subclasses override this to build the exact kwargs expected by their SDK.
+        The default implementation returns an empty dict.
+
+        Returns:
+            A dict of provider-specific request parameters.
+        """
+        return {}
 
 
 @dataclass(slots=True, frozen=True)
@@ -107,8 +110,6 @@ class Client(ABC, Generic[T_Options]):
 
         if self.on_error == "warn":
             self._logger.warning(message)
-        else:
-            self._logger.debug(message)
 
         return Response(
             text="",

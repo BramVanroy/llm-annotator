@@ -9,7 +9,6 @@ It provides a common interface for multiple providers:
 - `VLLMClient` for vLLM server endpoints.
 - `OpenAIClient` for OpenAI-compatible APIs.
 - `ClaudeClient` for Anthropic APIs.
-- `GeminiClient` for Gemini APIs.
 
 Provider setup details, extras, and auth variables are listed on
 [Provider setup](provider-info.md).
@@ -34,7 +33,6 @@ Install provider extras when needed:
 uv add "llm-annotator[vllm]"
 uv add "llm-annotator[openai]"
 uv add "llm-annotator[anthropic]"
-uv add "llm-annotator[gemini]"
 ```
 
 ## Quickstart

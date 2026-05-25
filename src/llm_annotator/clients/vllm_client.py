@@ -13,26 +13,85 @@ from llm_annotator.clients.base import (
     ProviderRuntimeOptions,
     Response,
 )
-from llm_annotator.clients.exceptions import ProviderError
+from llm_annotator.clients.exceptions import ConfigurationError, ProviderError
 from llm_annotator.clients.openai_client import OpenAIClient
 
 
 @dataclass(slots=True, frozen=True)
-class VLLMRuntimeOptions(ProviderRuntimeOptions):
-    # TODO: check which of these only apply to the online vs offline client
-    # https://docs.vllm.ai/en/latest/serving/openai_compatible_server/#api-reference
+class VLLMBaseRuntimeOptions(ProviderRuntimeOptions):
+    """Shared generation options for both vLLM server and offline clients.
+
+    Attributes:
+        top_k: Controls the number of top tokens to consider.
+            Set to -1 to consider all tokens.
+        repetition_penalty: Penalizes new tokens based on whether they appear
+            in the prompt and the generated text so far. Values > 1 encourage
+            the model to use new tokens; values < 1 encourage repetition.
+        chat_template_kwargs: Additional kwargs forwarded to the chat template.
+    """
+
     top_k: int | None = None
-    """Controls the number of top tokens to consider. Set to 0 (or -1) to consider all tokens."""
     repetition_penalty: float | None = None
-    """Penalizes new tokens based on whether they appear in the prompt and the generated text so far. Values > 1 encourage the model to use new tokens, while values < 1 encourage the model to repeat tokens."""
-    add_generation_prompt: bool = True
-    """If True, adds a generation template to each message."""
-    chat_template: str | None = None
-    """The template to use for structuring the chat. If not provided, the model's default chat template will be used."""
     chat_template_kwargs: dict[str, Any] | None = None
-    """Additional kwargs to pass to the chat template. Note that if `enable_thinking` is enabled in the Offline client, it will be added to the chat_template_kwargs that are given."""
+
+    def to_payload(self) -> dict[str, Any]:
+        """Build the shared vLLM request payload dict.
+
+        Returns:
+            A dict containing the fields common to the vLLM server and offline
+            clients.
+        """
+        payload: dict[str, Any] = {}
+        if self.top_k is not None:
+            payload["top_k"] = self.top_k
+        if self.repetition_penalty is not None:
+            payload["repetition_penalty"] = self.repetition_penalty
+        return payload
+
+
+@dataclass(slots=True, frozen=True)
+class VLLMRuntimeOptions(VLLMBaseRuntimeOptions):
+    """Generation options for the vLLM OpenAI-compatible server.
+
+    Extends :class:`VLLMBaseRuntimeOptions` with server-specific parameters
+    from the `/v1/chat/completions` extra-params API.
+    See https://docs.vllm.ai/en/latest/serving/openai_compatible_server/#api-reference
+
+    Attributes:
+        add_generation_prompt: If ``True``, appends a generation prompt to each
+            message. Defaults to ``True``.
+        chat_template: Optional chat template string. When omitted the model’s
+            default template is used.
+        mm_processor_kwargs: Arguments forwarded to the model’s multi-modal
+            processor (e.g. ``{"num_crops": 4}`` for Phi-3-Vision).
+    """
+
+    add_generation_prompt: bool = True
+    chat_template: str | None = None
     mm_processor_kwargs: dict[str, Any] | None = None
-    """Arguments to be forwarded to the model's processor for multi-modal data, e.g., image processor. Overrides for the multi-modal processor obtained from AutoProcessor.from_pretrained. The available overrides depend on the model that is being run. For example, for Phi-3-Vision: {"num_crops": 4}."""
+
+    def to_payload(self) -> dict[str, Any]:
+        """Build the vLLM server request payload dict.
+
+        Returns:
+            A dict of vLLM server-specific request parameters, including all
+            shared base fields.
+        """
+        payload: dict[str, Any] = {}
+        if self.top_k is not None:
+            payload["top_k"] = self.top_k
+        if self.repetition_penalty is not None:
+            payload["repetition_penalty"] = self.repetition_penalty
+        if self.max_tokens is not None:
+            payload["max_completion_tokens"] = self.max_tokens
+        payload["add_generation_prompt"] = self.add_generation_prompt
+        if self.chat_template is not None:
+            payload["chat_template"] = self.chat_template
+        if self.chat_template_kwargs is not None:
+            payload["chat_template_kwargs"] = self.chat_template_kwargs
+        if self.mm_processor_kwargs is not None:
+            payload["mm_processor_kwargs"] = self.mm_processor_kwargs
+        return payload
 
 
 class VLLMClient(OpenAIClient[VLLMRuntimeOptions]):
@@ -70,35 +129,49 @@ class VLLMClient(OpenAIClient[VLLMRuntimeOptions]):
         messages: list[list[dict[str, str]]],
         options: VLLMRuntimeOptions | None = None,
         gen_kwargs: dict[str, Any] | None = None,
+        use_batch_api: bool = False,
+        poll_interval: float = 10.0,
     ) -> list[Response]:
-        """Generate responses for a batch of inputs using vLLM's batch API.
+        """Generate responses for a batch of inputs using vLLM's native batch endpoint.
 
-        Uses the `/v1/chat/completions/batch` endpoint for efficient batch
-        processing of multiple conversations.
+        Sends all conversations in a single request to ``/v1/chat/completions/batch``.
+        The OpenAI Batch API is not supported; passing ``use_batch_api=True`` raises
+        a :class:`ConfigurationError`.
 
         Args:
             messages: List of message lists, where each list is a conversation.
             options: Optional generation configuration.
-            gen_kwargs: Additional provider-specific generation kwargs that are not covered by the standard options.
-                Has precedence over ``options``.
+            gen_kwargs: Additional provider-specific generation kwargs that are
+                not covered by the standard options. Has precedence over
+                ``options``.
+            use_batch_api: Must be ``False``. The OpenAI Batch API is not
+                supported by the vLLM server client.
+            poll_interval: Accepted for interface compatibility with
+                :class:`OpenAIClient`. Ignored.
 
         Returns:
             A list of Response objects, one per input conversation,
             indexed in the same order as input.
 
         Raises:
+            ConfigurationError: If ``use_batch_api=True``.
             ProviderError: If the batch request fails.
         """
+        if use_batch_api:
+            raise ConfigurationError(
+                "The vLLM server client does not support the OpenAI Batch API."
+                " Set use_batch_api=False (the default) to use vLLM's native"
+                " batch endpoint instead."
+            )
+        _ = poll_interval
         from openai.types.chat.chat_completion import ChatCompletion
 
         options = options or self._default_options()
         try:
             # Construct batch request payload following vLLM batch API format
-            request_payload: dict[str, Any] = {
-                "model": self.model,
-                "messages": messages,
-                "max_completion_tokens": options.max_tokens,
-            }
+            request_payload: dict[str, Any] = options.to_payload()
+            request_payload["model"] = self.model
+            request_payload["messages"] = messages
             if options.json_schema is not None:
                 # TODO: test. Maybe we need "structured_outputs"
                 # https://docs.vllm.ai/en/latest/serving/openai_compatible_server/#extra-parameters_1
@@ -110,11 +183,6 @@ class VLLMClient(OpenAIClient[VLLMRuntimeOptions]):
                         "strict": True,
                     },
                 }
-
-            opts = options.dict(exclude_none=True)
-            opts.pop("max_tokens", None)
-            opts.pop("json_schema", None)
-            request_payload.update(opts)
             request_payload.update(gen_kwargs or {})
 
             # The batch endpoint is at /v1/chat/completions/batch
@@ -169,4 +237,4 @@ class VLLMClient(OpenAIClient[VLLMRuntimeOptions]):
         return VLLMRuntimeOptions()
 
 
-__all__ = ["VLLMClient", "VLLMRuntimeOptions"]
+__all__ = ["VLLMBaseRuntimeOptions", "VLLMClient", "VLLMRuntimeOptions"]

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast
+import io
+import json
+import time
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 
 from llm_annotator.clients.base import (
     Client,
@@ -35,15 +38,33 @@ class OpenAIRuntimeOptions(ProviderRuntimeOptions):
     presence_penalty: float | None = None
     """Number between -2.0 and 2.0. Positive values penalize new tokens based on whether they appear in the text so far, increasing the model's likelihood to talk about new topics."""
 
+    def to_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
 
-# Annoying typing magic to make sure OpenAI and vLLMClients work
-# VLLMClient uses its own RuntimeOptions but shares the same structured and most of its methods
-# so we need to make the base Client generic in the options type, and then have OpenAIClient and VLLMClient
-# specify their own options type while still being recognized as Clients for the shared code to work.
+        if self.max_tokens is not None:
+            payload["max_completion_tokens"] = self.max_tokens
+        if self.frequency_penalty is not None:
+            payload["frequency_penalty"] = self.frequency_penalty
+        if self.reasoning_effort is not None:
+            payload["reasoning_effort"] = self.reasoning_effort
+        if self.temperature is not None:
+            payload["temperature"] = self.temperature
+        if self.top_p is not None:
+            payload["top_p"] = self.top_p
+        if self.presence_penalty is not None:
+            payload["presence_penalty"] = self.presence_penalty
+        return payload
+
+
+# OpenAIClient is declared generic so that VLLMClient can specialise it with
+# VLLMRuntimeOptions while still inheriting OpenAI's HTTP machinery. Without
+# the TypeVar, overriding ``generate`` / ``batch_generate`` with a different
+# options type would be a Liskov-unsafe parameter narrowing and mypy would
+# flag it.
 T_OpenAIOptions = TypeVar("T_OpenAIOptions", bound=ProviderRuntimeOptions)
 
 
-class OpenAIClient(Client[T_OpenAIOptions], Generic[T_OpenAIOptions]):
+class OpenAIClient(Client[T_OpenAIOptions]):
     """Client wrapper for OpenAI APIs."""
 
     provider_type = Provider.OPENAI
@@ -78,6 +99,7 @@ class OpenAIClient(Client[T_OpenAIOptions], Generic[T_OpenAIOptions]):
         self._api_key = api_key
         self._base_url = base_url
         self._client = OpenAI(api_key=self._api_key, base_url=base_url)
+        self._active_batch_ids: list[str] = []
 
     def _process_response(self, response: ChatCompletion) -> Response:
         """Process OpenAI response and handle stop reasons.
@@ -112,6 +134,182 @@ class OpenAIClient(Client[T_OpenAIOptions], Generic[T_OpenAIOptions]):
             full_response=response,
         )
 
+    def destroy(self) -> None:
+        """Cancel any in-flight batches and clean up resources."""
+        for batch_id in list(self._active_batch_ids):
+            try:
+                self._client.batches.cancel(batch_id)
+            except Exception:
+                pass
+        self._active_batch_ids.clear()
+
+    def _build_batch_request(
+        self,
+        idx: int,
+        messages: list[dict[str, str]],
+        options: OpenAIRuntimeOptions,
+        gen_kwargs: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Build a single Batch API request line for the given messages.
+
+        Args:
+            idx: Zero-based index used as the ``custom_id`` suffix.
+            messages: Chat messages for this request.
+            options: Generation options.
+            gen_kwargs: Extra kwargs merged into the body (highest precedence).
+
+        Returns:
+            A dict representing one line of the JSONL batch input file.
+        """
+        body: dict[str, Any] = options.to_payload()
+        body["model"] = self.model
+        body["messages"] = messages
+        if options.json_schema is not None:
+            body["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "response",
+                    "schema": options.json_schema,
+                    "strict": True,
+                },
+            }
+        body.update(gen_kwargs or {})
+        return {
+            "custom_id": f"request-{idx}",
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": body,
+        }
+
+    def _execute_batch_api(
+        self,
+        messages: list[list[dict[str, str]]],
+        options: OpenAIRuntimeOptions,
+        gen_kwargs: dict[str, Any] | None,
+        poll_interval: float,
+    ) -> list[Response]:
+        """Run the OpenAI Batch API path for ``batch_generate``.
+
+        Uploads a JSONL file, creates a batch job, polls until the job
+        finishes, then downloads and parses the output.
+
+        Args:
+            messages: One list of message dicts per request.
+            options: Generation options applied to every request in the batch.
+            gen_kwargs: Extra kwargs merged into every request body.
+            poll_interval: Seconds to wait between status-poll calls.
+
+        Returns:
+            Responses in the same order as the input ``messages``.
+        """
+        from openai.types.chat.chat_completion import ChatCompletion
+
+        # Build JSONL content in memory.
+        lines = [
+            json.dumps(
+                self._build_batch_request(idx, msgs, options, gen_kwargs)
+            )
+            for idx, msgs in enumerate(messages)
+        ]
+        jsonl_bytes = "\n".join(lines).encode()
+        jsonl_file = io.BytesIO(jsonl_bytes)
+
+        # Upload input file.
+        uploaded = self._client.files.create(
+            file=("batch.jsonl", jsonl_file, "application/jsonl"),
+            purpose="batch",
+        )
+        file_id: str = uploaded.id
+
+        # Create the batch.
+        batch = self._client.batches.create(
+            input_file_id=file_id,
+            endpoint="/v1/chat/completions",
+            completion_window="24h",
+        )
+        batch_id: str = batch.id
+        self._active_batch_ids.append(batch_id)
+
+        # Poll until the batch reaches a terminal state.
+        terminal_statuses = {"completed", "failed", "expired", "cancelled"}
+        while batch.status not in terminal_statuses:
+            time.sleep(poll_interval)
+            batch = self._client.batches.retrieve(batch_id)
+
+        self._active_batch_ids.remove(batch_id)
+
+        # Handle batch-level failure.
+        if batch.status != "completed":
+            error_msg = f"Batch {batch_id} ended with status '{batch.status}'."
+            return [
+                self._handle_error(
+                    ProviderError(error_msg),
+                    context=f"OpenAI batch API failed at index {idx}",
+                )
+                for idx in range(len(messages))
+            ]
+
+        # Download and parse the output JSONL.
+        assert batch.output_file_id is not None
+        output_content = self._client.files.content(batch.output_file_id)
+        result_map: dict[str, dict[str, Any]] = {}
+        for raw_line in output_content.text.splitlines():
+            raw_line = raw_line.strip()
+            if not raw_line:
+                continue
+            parsed_line: dict[str, Any] = json.loads(raw_line)
+            result_map[parsed_line["custom_id"]] = parsed_line
+
+        responses: list[Response] = []
+        for idx in range(len(messages)):
+            custom_id = f"request-{idx}"
+            entry: dict[str, Any] | None = result_map.get(custom_id)
+            if entry is None:
+                responses.append(
+                    self._handle_error(
+                        ProviderError(f"No output entry for '{custom_id}'."),
+                        context=f"OpenAI batch API missing result at index {idx}",
+                    )
+                )
+                continue
+
+            if entry.get("error") is not None:
+                responses.append(
+                    self._handle_error(
+                        ProviderError(str(entry["error"])),
+                        context=f"OpenAI batch API item error at index {idx}",
+                    )
+                )
+                continue
+
+            item_response = entry.get("response", {})
+            if item_response.get("status_code") != 200:
+                responses.append(
+                    self._handle_error(
+                        ProviderError(
+                            f"Unexpected status code {item_response.get('status_code')} "
+                            f"for '{custom_id}'."
+                        ),
+                        context=f"OpenAI batch API bad status at index {idx}",
+                    )
+                )
+                continue
+
+            try:
+                completion = ChatCompletion.model_validate(
+                    item_response["body"]
+                )
+                responses.append(self._process_response(completion))
+            except Exception as exc:
+                responses.append(
+                    self._handle_error(
+                        exc,
+                        context=f"OpenAI batch API response processing failed at index {idx}",
+                    )
+                )
+
+        return responses
+
     def _default_options(self) -> T_OpenAIOptions:
         """Return default runtime options for this OpenAI-compatible client."""
         return cast(T_OpenAIOptions, OpenAIRuntimeOptions())
@@ -137,26 +335,27 @@ class OpenAIClient(Client[T_OpenAIOptions], Generic[T_OpenAIOptions]):
         Raises:
             ProviderError: If the provider call fails.
         """
-        options = options or self._default_options()
+        resolved = cast(
+            OpenAIRuntimeOptions, options or self._default_options()
+        )
         try:
-            request_payload: dict[str, Any] = {
-                "model": self.model,
-                "messages": messages,
-                "max_completion_tokens": options.max_tokens,
-            }
-            if options.json_schema is not None:
+            request_payload: dict[str, Any] = resolved.to_payload()
+
+            request_payload.update(
+                {
+                    "model": self.model,
+                    "messages": messages,
+                }
+            )
+            if resolved.json_schema is not None:
                 request_payload["response_format"] = {
                     "type": "json_schema",
                     "json_schema": {
                         "name": "response",
-                        "schema": options.json_schema,
+                        "schema": resolved.json_schema,
                         "strict": True,
                     },
                 }
-            opts = options.dict(exclude_none=True)
-            opts.pop("max_tokens", None)
-            opts.pop("json_schema", None)
-            request_payload.update(opts)
             request_payload.update(gen_kwargs or {})
             response = self._client.chat.completions.create(**request_payload)
         except Exception as exc:
@@ -175,17 +374,26 @@ class OpenAIClient(Client[T_OpenAIOptions], Generic[T_OpenAIOptions]):
         messages: list[list[dict[str, str]]],
         options: T_OpenAIOptions | None = None,
         gen_kwargs: dict[str, Any] | None = None,
+        use_batch_api: bool = False,
+        poll_interval: float = 10.0,
     ) -> list[Response]:
-        """Generate responses for a batch of inputs concurrently.
+        """Generate responses for a batch of inputs.
 
-        The OpenAI API has no native synchronous batch endpoint, so requests
-        are dispatched in parallel using a thread pool.
+        By default, requests are dispatched in parallel using a thread pool.
+        When ``use_batch_api=True``, the OpenAI Batch API is used instead:
+        all requests are submitted as a single batch job and results are
+        retrieved once the job completes. The Batch API supports a completion
+        window of up to 24 hours and offers lower cost, but adds latency.
 
         Args:
             messages: List of message lists, one per request.
             options: Optional generation configuration.
             gen_kwargs: Additional provider-specific generation kwargs that are not covered by the standard options.
                 Has precedence over ``options``.
+            use_batch_api: When ``True``, use the OpenAI Batch API instead of
+                concurrent individual requests. Defaults to ``False``.
+            poll_interval: Seconds between batch status polls. Only used when
+                ``use_batch_api=True``. Defaults to ``10.0``.
 
         Returns:
             A list of Response objects in the same order as the input.
@@ -193,6 +401,14 @@ class OpenAIClient(Client[T_OpenAIOptions], Generic[T_OpenAIOptions]):
         Raises:
             ProviderError: If any individual request fails.
         """
+        if use_batch_api:
+            resolved = cast(
+                OpenAIRuntimeOptions, options or self._default_options()
+            )
+            return self._execute_batch_api(
+                messages, resolved, gen_kwargs, poll_interval
+            )
+
         from concurrent.futures import ThreadPoolExecutor
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:

@@ -12,10 +12,10 @@ from llm_annotator.clients.base import (
     Client,
     OnError,
     Provider,
-    ProviderRuntimeOptions,
     Response,
 )
 from llm_annotator.clients.exceptions import ProviderError
+from llm_annotator.clients.vllm_client import VLLMBaseRuntimeOptions
 
 
 if TYPE_CHECKING:
@@ -104,84 +104,92 @@ def auto_reduce_batch_size(
 
 
 @dataclass(slots=True, frozen=True)
-class VLLMOfflineRuntimeOptions(ProviderRuntimeOptions):
-    """vLLM-specific generation options extending ProviderRuntimeOptions.
+class VLLMOfflineRuntimeOptions(VLLMBaseRuntimeOptions):
+    """Generation options for the vLLM offline client.
+
+    Extends :class:`VLLMBaseRuntimeOptions` (which provides ``top_k``,
+    ``repetition_penalty``, and ``chat_template_kwargs``) with
+    ``SamplingParams``-compatible fields for in-process vLLM inference.
 
     Attributes:
-        max_tokens: Maximum number of output tokens. Inherited from ProviderRuntimeOptions.
+        max_tokens: Maximum number of output tokens. Inherited from
+            :class:`~llm_annotator.clients.base.ProviderRuntimeOptions`.
         json_schema: Optional JSON schema dict for structured output via guided
-            decoding. Inherited from ProviderRuntimeOptions. When provided, vLLM
-            constrains generation to valid JSON matching the schema.
-        temperature: Sampling temperature. None uses the model default.
-        top_p: Top-p nucleus sampling probability. None uses the model default.
-        top_k: Top-k sampling cutoff. None uses the model default.
-        stop: Optional list of strings that halt generation when produced.
-        presence_penalty: Penalty applied to tokens already present in the output.
-        frequency_penalty: Penalty applied proportional to token frequency in output.
+            decoding. Inherited from
+            :class:`~llm_annotator.clients.base.ProviderRuntimeOptions`. When
+            provided, vLLM constrains generation to valid JSON matching the
+            schema.
+        top_k: Top-k sampling cutoff. Inherited from
+            :class:`VLLMBaseRuntimeOptions`. ``None`` uses the model default.
         repetition_penalty: Multiplicative penalty for token repetition.
+            Inherited from :class:`VLLMBaseRuntimeOptions`.
+        chat_template_kwargs: Additional kwargs forwarded to the chat template.
+            Inherited from :class:`VLLMBaseRuntimeOptions`. Pass
+            ``{"enable_thinking": True}`` here to enable thinking mode.
+        temperature: Sampling temperature. ``None`` uses the model default.
+        top_p: Top-p nucleus sampling probability. ``None`` uses the model
+            default.
+        stop: Optional list of strings that halt generation when produced.
+        presence_penalty: Penalty applied to tokens already present in the
+            output. Defaults to ``0.0`` (vLLM default).
+        frequency_penalty: Penalty applied proportional to token frequency in
+            the output. Defaults to ``0.0`` (vLLM default).
         seed: Optional fixed random seed for reproducible generation.
         n: Number of independent output sequences to generate per request.
+            Defaults to ``1``.
         whitespace_pattern: Regex pattern inserted between JSON tokens during
-            guided decoding. Only used when json_schema is set.
-        chat_template_kwargs: Additional kwargs to pass to the chat template. Note that if
-            `enable_thinking` is enabled in the Offline client, it will be added to the
-            chat_template_kwargs that are given.
+            guided decoding. Only used when ``json_schema`` is set.
     """
 
     temperature: float | None = None
     top_p: float | None = None
-    top_k: int | None = None
     stop: list[str] | None = None
     presence_penalty: float = 0.0
     frequency_penalty: float = 0.0
-    repetition_penalty: float = 1.0
-    language_model_only: bool = True
     seed: int | None = None
     n: int = 1
     whitespace_pattern: str | None = r"[ ]?"
-    chat_template_kwargs: dict[str, Any] | None = None
 
-    def to_sampling_params(self) -> Any:
-        """Convert these options to a vLLM SamplingParams instance.
+    def to_payload(self) -> dict[str, Any]:
+        """Build a ``SamplingParams``-compatible payload dict.
+
+        The dict can be passed directly to ``vllm.SamplingParams(**payload)``.
+        ``chat_template_kwargs`` is intentionally excluded; it must be passed
+        separately to ``LLM.chat()``.
 
         Returns:
-            A configured SamplingParams object ready for use with the vLLM LLM.
+            A dict of ``SamplingParams``-compatible keyword arguments.
 
         Raises:
             ImportError: If vLLM is not installed.
         """
-        from vllm import SamplingParams
-        from vllm.sampling_params import StructuredOutputsParams
+        payload: dict[str, Any] = {}
+        if self.top_k is not None:
+            payload["top_k"] = self.top_k
+        if self.repetition_penalty is not None:
+            payload["repetition_penalty"] = self.repetition_penalty
 
-        structured_outputs = None
+        payload["n"] = self.n
+        payload["presence_penalty"] = self.presence_penalty
+        payload["frequency_penalty"] = self.frequency_penalty
+        if self.max_tokens is not None:
+            payload["max_tokens"] = self.max_tokens
+        if self.temperature is not None:
+            payload["temperature"] = self.temperature
+        if self.top_p is not None:
+            payload["top_p"] = self.top_p
+        if self.stop is not None:
+            payload["stop"] = self.stop
+        if self.seed is not None:
+            payload["seed"] = self.seed
         if self.json_schema is not None:
-            structured_outputs = StructuredOutputsParams(
+            from vllm.sampling_params import StructuredOutputsParams
+
+            payload["structured_outputs"] = StructuredOutputsParams(
                 json=self.json_schema,
                 whitespace_pattern=self.whitespace_pattern,
             )
-
-        kwargs: dict[str, Any] = {
-            "n": self.n,
-            "presence_penalty": self.presence_penalty,
-            "frequency_penalty": self.frequency_penalty,
-            "repetition_penalty": self.repetition_penalty,
-        }
-        if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens
-        if self.temperature is not None:
-            kwargs["temperature"] = self.temperature
-        if self.top_p is not None:
-            kwargs["top_p"] = self.top_p
-        if self.top_k is not None:
-            kwargs["top_k"] = self.top_k
-        if self.stop is not None:
-            kwargs["stop"] = self.stop
-        if self.seed is not None:
-            kwargs["seed"] = self.seed
-        if structured_outputs is not None:
-            kwargs["structured_outputs"] = structured_outputs
-
-        return SamplingParams(**kwargs)
+        return payload
 
 
 class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
@@ -223,9 +231,6 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
             below ``min_batch_size``.
         min_batch_size: Smallest permitted chunk size before an OOM error is
             re-raised. Must be >= 1.
-        enable_thinking: Whether to enable thinking mode via
-            ``chat_template_kwargs``. Passed to every ``LLM.chat`` call.
-            Defaults to ``False``.
 
     Examples:
         Basic generation:
@@ -259,7 +264,7 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
         ...     "properties": {"label": {"type": "string"}},
         ...     "required": ["label"],
         ... }
-        >>> opts = VLLMRuntimeOptions(
+        >>> opts = VLLMOfflineRuntimeOptions(
         ...     max_tokens=128, json_schema=schema
         ... )  # doctest: +SKIP
         >>> with VLLMOfflineClient(  # doctest: +SKIP
@@ -281,7 +286,7 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
         *,
         tensor_parallel_size: int = 1,
         max_num_seqs: int = 256,
-        gpu_memory_utilization: float = 0.95,
+        gpu_memory_utilization: float = 0.90,
         enforce_eager: bool = False,
         quantization: str | None = None,
         max_model_len: int | None = None,
@@ -294,7 +299,6 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
         on_error: OnError = "raise",
         batch_size: int | None = None,
         min_batch_size: int = 1,
-        enable_thinking: bool = False,
     ) -> None:
         """Initialize the offline vLLM client and load the model into memory.
 
@@ -312,6 +316,10 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
                 (e.g. a system message), since the shared prefix is only encoded once.
             enable_chunked_prefill: Process prefills in chunks to reduce
                 peak memory usage and improve scheduling efficiency.
+            language_model_only: If ``True``, all non-text modalities are
+                disabled, saving some memory. Defaults to ``True``.
+            speculative_config: Optional dict of vLLM speculative decoding
+                config parameters.
             extra_vllm_kwargs: Additional keyword arguments forwarded to
                 ``vllm.LLM``. Explicit constructor arguments take precedence
                 over any conflicting keys here.
@@ -322,9 +330,6 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
                 below ``min_batch_size``.
             min_batch_size: Smallest permitted chunk size before an OOM is
                 re-raised. Must be >= 1.
-            enable_thinking: Whether to enable thinking mode via
-                ``chat_template_kwargs``. Passed to every ``LLM.chat`` call.
-                Defaults to ``False``.
 
         Raises:
             ImportError: If vLLM is not installed (raised on first use).
@@ -344,7 +349,6 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
         self._extra_vllm_kwargs: dict[str, Any] = extra_vllm_kwargs or {}
         self._batch_size = batch_size
         self._min_batch_size = min_batch_size
-        self._enable_thinking = enable_thinking
         self._pipe: LLM | None = None
         self._pipeline_loaded = False
 
@@ -447,14 +451,11 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
             if options and options.chat_template_kwargs
             else {}
         )
-        chat_template_kwargs["enable_thinking"] = self._enable_thinking
 
-        if options is not None:
-            sampling_params = options.to_sampling_params()
-            # Force minimal output for the cache warm-up pass
-            sampling_params.max_tokens = 1
-        else:
-            sampling_params = SamplingParams(max_tokens=1)
+        resolved_options = options or VLLMOfflineRuntimeOptions()
+        payload = resolved_options.to_payload()
+        payload["max_tokens"] = 1  # Force minimal output for the warm-up pass
+        sampling_params = SamplingParams(**payload)
 
         try:
             self._pipe.chat(
@@ -575,29 +576,19 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
             if options and options.chat_template_kwargs
             else {}
         )
-        chat_template_kwargs["enable_thinking"] = self._enable_thinking
 
-        if isinstance(options, VLLMOfflineRuntimeOptions):
-            sampling_params = options.to_sampling_params()
-        else:
-            from vllm import SamplingParams
+        from vllm import SamplingParams
 
-            kw: dict[str, Any] = {}
-            if options is not None and options.max_tokens is not None:
-                kw["max_tokens"] = options.max_tokens
-            sampling_params = SamplingParams(**kw)
-
-        if gen_kwargs:
-            for key, value in gen_kwargs.items():
-                if not hasattr(sampling_params, key):
-                    err = self._handle_error(
-                        ValueError(
-                            f"Unsupported vLLM sampling parameter override: {key!r}."
-                        ),
-                        context="vLLM offline generation setup failed",
-                    )
-                    return [err for _ in messages]
-                setattr(sampling_params, key, value)
+        resolved = options or VLLMOfflineRuntimeOptions()
+        payload = resolved.to_payload()
+        payload.update(gen_kwargs or {})
+        try:
+            sampling_params = SamplingParams(**payload)
+        except TypeError as exc:
+            err = self._handle_error(
+                exc, context="vLLM offline invalid sampling parameters"
+            )
+            return [err for _ in messages]
 
         try:
             outputs = self._pipe.chat(

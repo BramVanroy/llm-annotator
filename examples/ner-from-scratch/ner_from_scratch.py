@@ -55,7 +55,7 @@ def main(args=None):
     client = VLLMOfflineClient(
         model=args.model,
         max_model_len=args.max_model_len,
-        gpu_memory_utilization=0.95,
+        gpu_memory_utilization=0.90,
         extra_vllm_kwargs=extra_vllm_kwargs,
     )
     with Annotator(client=client, verbose=True) as anno:

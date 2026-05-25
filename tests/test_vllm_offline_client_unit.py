@@ -21,8 +21,29 @@ def fake_vllm_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "chat_calls": [],
     }
 
+    _VALID_SAMPLING_KEYS = frozenset(
+        {
+            "n",
+            "max_tokens",
+            "temperature",
+            "top_p",
+            "top_k",
+            "stop",
+            "seed",
+            "presence_penalty",
+            "frequency_penalty",
+            "repetition_penalty",
+            "structured_outputs",
+        }
+    )
+
     class FakeSamplingParams:
         def __init__(self, **kwargs: object) -> None:
+            unknown = set(kwargs) - _VALID_SAMPLING_KEYS
+            if unknown:
+                raise TypeError(
+                    f"FakeSamplingParams got unexpected kwargs: {unknown}"
+                )
             for k, v in kwargs.items():
                 setattr(self, k, v)
 
@@ -98,10 +119,10 @@ def fake_vllm_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     return state
 
 
-def test_runtime_options_to_sampling_params(
+def test_runtime_options_to_payload(
     fake_vllm_runtime: dict[str, Any],
 ) -> None:
-    # Verifies runtime options are translated to SamplingParams fields.
+    # Verifies runtime options are translated to SamplingParams-compatible dict fields.
     opts = VLLMOfflineRuntimeOptions(
         max_tokens=10,
         temperature=0.1,
@@ -110,13 +131,13 @@ def test_runtime_options_to_sampling_params(
         stop=["END"],
         seed=7,
     )
-    params = opts.to_sampling_params()
-    assert params.max_tokens == 10
-    assert params.temperature == 0.1
-    assert params.top_p == 0.9
-    assert params.top_k == 20
-    assert params.stop == ["END"]
-    assert params.seed == 7
+    payload = opts.to_payload()
+    assert payload["max_tokens"] == 10
+    assert payload["temperature"] == 0.1
+    assert payload["top_p"] == 0.9
+    assert payload["top_k"] == 20
+    assert payload["stop"] == ["END"]
+    assert payload["seed"] == 7
 
 
 def test_runtime_options_with_json_schema(
@@ -124,8 +145,8 @@ def test_runtime_options_with_json_schema(
 ) -> None:
     # Verifies structured output params are attached when json_schema is provided.
     opts = VLLMOfflineRuntimeOptions(json_schema={"type": "object"})
-    params = opts.to_sampling_params()
-    assert hasattr(params, "structured_outputs")
+    payload = opts.to_payload()
+    assert "structured_outputs" in payload
 
 
 def test_load_pipeline_explicit_args_override_extras(

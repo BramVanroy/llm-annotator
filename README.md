@@ -16,7 +16,6 @@ It supports multiple providers through pluggable clients:
 - vLLM server API: `VLLMClient`
 - OpenAI API: `OpenAIClient`
 - Anthropic API: `ClaudeClient`
-- Gemini API: `GeminiClient`
 
 Key capabilities:
 
@@ -59,7 +58,6 @@ Install provider extras as needed:
 uv add "llm-annotator[vllm]"
 uv add "llm-annotator[openai]"
 uv add "llm-annotator[anthropic]"
-uv add "llm-annotator[gemini]"
 ```
 
 See [docs/provider-info.md](docs/provider-info.md) for auth environment

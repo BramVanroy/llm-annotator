@@ -146,7 +146,6 @@ nav:
       - Clients:
           - Base: api/clients/base.md
           - Claude: api/clients/claude.md
-          - Gemini: api/clients/gemini.md
           - OpenAI: api/clients/openai.md
           - vLLM (server): api/clients/vllm_client.md
           - vLLM (offline): api/clients/vllm_offline_client.md
