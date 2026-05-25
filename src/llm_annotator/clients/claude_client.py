@@ -28,6 +28,38 @@ class ClaudeRuntimeOptions(ProviderRuntimeOptions):
     thinking_display: Literal["summarized", "ommitted", "full"] | None = None
     """When thinking is enabled (or adaptive). Controls how thinking content appears in the response. When set to summarized, thinking is returned normally. When set to omitted, thinking content is redacted but a signature is returned for multi-turn continuity. Defaults to summarized."""
 
+    def to_payload(self):
+        payload: dict[str, Any] = {}
+
+        if self.max_tokens is not None:
+            payload["max_tokens"] = self.max_tokens
+        else:
+            payload["max_tokens"] = (
+                8192  # Set a high default max_tokens for Claude
+            )
+
+        if self.effort is not None:
+            if "output_config" not in payload:
+                payload["output_config"] = {}
+            payload["output_config"]["effort"] = self.effort
+
+        if self.thinking_type is not None:
+            payload["thinking"] = {"type": self.thinking_type}
+
+            if (
+                self.thinking_type == "enabled"
+                and self.thinking_budget is not None
+            ):
+                payload["thinking"]["budget_tokens"] = self.thinking_budget
+
+            if (
+                self.thinking_type in {"enabled", "adaptive"}
+                and self.thinking_display is not None
+            ):
+                payload["thinking"]["display"] = self.thinking_display
+
+        return payload
+
 
 if TYPE_CHECKING:
     from anthropic.types.message import Message as ClaudeMessage
@@ -118,45 +150,26 @@ class ClaudeClient(Client[ClaudeRuntimeOptions]):
                 messages
             )
 
-            request_payload: dict[str, Any] = {
-                "model": self.model,
-                "max_tokens": options.max_tokens or 4096,
-                "messages": messages,
-            }
+            request_payload: dict[str, Any] = options.to_payload()
+
+            request_payload.update(
+                {
+                    "model": self.model,
+                    "messages": messages,
+                }
+            )
 
             if system_instruction:
                 request_payload["system"] = system_instruction
 
             if options.json_schema is not None:
-                request_payload["output_config"] = {
-                    "format": {
-                        "type": "json_schema",
-                        "schema": options.json_schema,
-                    }
-                }
-            if options.effort is not None:
                 if "output_config" not in request_payload:
                     request_payload["output_config"] = {}
-                request_payload["output_config"]["effort"] = options.effort
 
-            if options.thinking_type is not None:
-                request_payload["thinking"] = {"type": options.thinking_type}
-
-                if (
-                    options.thinking_type == "enabled"
-                    and options.thinking_budget is not None
-                ):
-                    request_payload["thinking"]["budget_tokens"] = (
-                        options.thinking_budget
-                    )
-
-                if (
-                    options.thinking_type in {"enabled", "adaptive"}
-                    and options.thinking_display is not None
-                ):
-                    request_payload["thinking"]["display"] = (
-                        options.thinking_display
-                    )
+                request_payload["output_config"]["format"] = {
+                    "type": "json_schema",
+                    "schema": options.json_schema,
+                }
 
             request_payload.update(gen_kwargs or {})
             response = self._client.messages.create(**request_payload)
