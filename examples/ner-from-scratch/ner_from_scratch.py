@@ -3,7 +3,7 @@ from pathlib import Path
 from llm_annotator import (
     Annotator,
     VLLMOfflineClient,
-    VLLMRuntimeOptions,
+    VLLMOfflineRuntimeOptions,
 )
 
 
@@ -46,7 +46,7 @@ def main(args=None):
     n_str = str(n) if n is not None else "full"
     output_dir = args.output_dir or f"outputs/ner-from_scratch-{n_str}"
     extra_vllm_kwargs = {"limit_mm_per_prompt": {"image": 0, "audio": 0}}
-    options = VLLMRuntimeOptions(
+    options = VLLMOfflineRuntimeOptions(
         temperature=args.temperature,
         top_p=args.top_p,
         top_k=args.top_k,

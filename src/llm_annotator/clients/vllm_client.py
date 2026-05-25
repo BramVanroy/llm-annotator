@@ -19,6 +19,7 @@ from llm_annotator.clients.openai_client import OpenAIClient
 
 @dataclass(slots=True, frozen=True)
 class VLLMRuntimeOptions(ProviderRuntimeOptions):
+    # TODO: check which of these only apply to the online vs offline client
     # https://docs.vllm.ai/en/latest/serving/openai_compatible_server/#api-reference
     top_k: int | None = None
     """Controls the number of top tokens to consider. Set to 0 (or -1) to consider all tokens."""
@@ -29,7 +30,7 @@ class VLLMRuntimeOptions(ProviderRuntimeOptions):
     chat_template: str | None = None
     """The template to use for structuring the chat. If not provided, the model's default chat template will be used."""
     chat_template_kwargs: dict[str, Any] | None = None
-    """Additional kwargs to pass to the chat template."""
+    """Additional kwargs to pass to the chat template. Note that if `enable_thinking` is enabled in the Offline client, it will be added to the chat_template_kwargs that are given."""
     mm_processor_kwargs: dict[str, Any] | None = None
     """Arguments to be forwarded to the model's processor for multi-modal data, e.g., image processor. Overrides for the multi-modal processor obtained from AutoProcessor.from_pretrained. The available overrides depend on the model that is being run. For example, for Phi-3-Vision: {"num_crops": 4}."""
 

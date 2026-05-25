@@ -1,7 +1,11 @@
 import json
 from pathlib import Path
 
-from llm_annotator import Annotator, VLLMOfflineClient, VLLMRuntimeOptions
+from llm_annotator import (
+    Annotator,
+    VLLMOfflineClient,
+    VLLMOfflineRuntimeOptions,
+)
 from llm_annotator.logging_utils import get_logger
 from llm_annotator.utils import get_hf_username
 
@@ -86,7 +90,7 @@ def main(args=None):
     elif hf_user:
         hub_id = f"{hf_user}/finemath-dutch-{n_str}"
 
-    options = VLLMRuntimeOptions(
+    options = VLLMOfflineRuntimeOptions(
         temperature=args.temperature,
         top_p=args.top_p,
         top_k=args.top_k,

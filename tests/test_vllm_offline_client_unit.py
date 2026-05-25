@@ -10,7 +10,7 @@ from llm_annotator.clients.base import Response
 from llm_annotator.clients.exceptions import ProviderError
 from llm_annotator.clients.vllm_offline_client import (
     VLLMOfflineClient,
-    VLLMRuntimeOptions,
+    VLLMOfflineRuntimeOptions,
 )
 
 
@@ -43,12 +43,14 @@ def fake_vllm_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             self,
             messages: list[list[dict[str, str]]],
             sampling_params: object,
+            chat_template_kwargs: dict[str, object] | None = None,
             use_tqdm: bool = False,
         ) -> list[object]:
             state["chat_calls"].append(
                 {
                     "messages": messages,
                     "sampling_params": sampling_params,
+                    "chat_template_kwargs": chat_template_kwargs,
                     "use_tqdm": use_tqdm,
                 }
             )
@@ -100,7 +102,7 @@ def test_runtime_options_to_sampling_params(
     fake_vllm_runtime: dict[str, Any],
 ) -> None:
     # Verifies runtime options are translated to SamplingParams fields.
-    opts = VLLMRuntimeOptions(
+    opts = VLLMOfflineRuntimeOptions(
         max_tokens=10,
         temperature=0.1,
         top_p=0.9,
@@ -121,7 +123,7 @@ def test_runtime_options_with_json_schema(
     fake_vllm_runtime: dict[str, Any],
 ) -> None:
     # Verifies structured output params are attached when json_schema is provided.
-    opts = VLLMRuntimeOptions(json_schema={"type": "object"})
+    opts = VLLMOfflineRuntimeOptions(json_schema={"type": "object"})
     params = opts.to_sampling_params()
     assert hasattr(params, "structured_outputs")
 
@@ -183,7 +185,7 @@ def test_warm_up_executes_with_forced_max_tokens(
     client.warm_up(
         system_message="sys",
         prompt_prefix="prefix",
-        options=VLLMRuntimeOptions(max_tokens=99),
+        options=VLLMOfflineRuntimeOptions(max_tokens=99),
     )
     calls = fake_vllm_runtime["chat_calls"]
     assert isinstance(calls, list)
@@ -245,6 +247,7 @@ def test_batch_generate_pad_when_fewer_outputs(
     def _chat_short(
         _messages: list[list[dict[str, str]]],
         _sampling: object,
+        chat_template_kwargs: dict[str, object] | None = None,
         use_tqdm: bool = False,
     ) -> list[object]:
         _ = use_tqdm
@@ -362,6 +365,7 @@ def test_batch_generate_auto_reduces_on_oom(
     def _oom_then_ok(
         messages: list[object],
         sampling_params: object,
+        chat_template_kwargs: dict[str, object] | None = None,
         use_tqdm: bool = False,
     ) -> list[object]:
         call_sizes.append(len(messages))
@@ -392,6 +396,7 @@ def test_batch_generate_reraises_non_oom_immediately(
     def _value_error(
         messages: list[object],
         sampling_params: object,
+        chat_template_kwargs: dict[str, object] | None = None,
         use_tqdm: bool = False,
     ) -> list[object]:
         call_count["n"] += 1
@@ -417,6 +422,7 @@ def test_batch_generate_reraises_when_min_batch_size_exceeded(
     def _always_oom(
         messages: list[object],
         sampling_params: object,
+        chat_template_kwargs: dict[str, object] | None = None,
         use_tqdm: bool = False,
     ) -> list[object]:
         raise RuntimeError("CUDA out of memory.")
@@ -440,6 +446,7 @@ def test_batch_generate_oom_detected_through_provider_error_chain(
     def _oom_first(
         messages: list[object],
         sampling_params: object,
+        chat_template_kwargs: dict[str, object] | None = None,
         use_tqdm: bool = False,
     ) -> list[object]:
         call_sizes.append(len(messages))

@@ -15,7 +15,9 @@ from .openai_client import OpenAIRuntimeOptions as OpenAIRuntimeOptions
 from .vllm_client import VLLMClient as VLLMClient
 from .vllm_client import VLLMRuntimeOptions as VLLMServerRuntimeOptions
 from .vllm_offline_client import VLLMOfflineClient as VLLMOfflineClient
-from .vllm_offline_client import VLLMRuntimeOptions as VLLMRuntimeOptions
+from .vllm_offline_client import (
+    VLLMOfflineRuntimeOptions as VLLMOfflineRuntimeOptions,
+)
 
 
 __all__ = [
@@ -35,6 +37,6 @@ __all__ = [
     "Response",
     "VLLMClient",
     "VLLMOfflineClient",
-    "VLLMRuntimeOptions",
+    "VLLMOfflineRuntimeOptions",
     "VLLMServerRuntimeOptions",
 ]

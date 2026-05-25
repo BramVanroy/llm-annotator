@@ -104,7 +104,7 @@ def auto_reduce_batch_size(
 
 
 @dataclass(slots=True, frozen=True)
-class VLLMRuntimeOptions(ProviderRuntimeOptions):
+class VLLMOfflineRuntimeOptions(ProviderRuntimeOptions):
     """vLLM-specific generation options extending ProviderRuntimeOptions.
 
     Attributes:
@@ -123,6 +123,9 @@ class VLLMRuntimeOptions(ProviderRuntimeOptions):
         n: Number of independent output sequences to generate per request.
         whitespace_pattern: Regex pattern inserted between JSON tokens during
             guided decoding. Only used when json_schema is set.
+        chat_template_kwargs: Additional kwargs to pass to the chat template. Note that if
+            `enable_thinking` is enabled in the Offline client, it will be added to the
+            chat_template_kwargs that are given.
     """
 
     temperature: float | None = None
@@ -136,6 +139,7 @@ class VLLMRuntimeOptions(ProviderRuntimeOptions):
     seed: int | None = None
     n: int = 1
     whitespace_pattern: str | None = r"[ ]?"
+    chat_template_kwargs: dict[str, Any] | None = None
 
     def to_sampling_params(self) -> Any:
         """Convert these options to a vLLM SamplingParams instance.
@@ -180,7 +184,7 @@ class VLLMRuntimeOptions(ProviderRuntimeOptions):
         return SamplingParams(**kwargs)
 
 
-class VLLMOfflineClient(Client[VLLMRuntimeOptions]):
+class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
     """Offline vLLM client that runs inference in-process.
 
     Loads the model into GPU memory on construction and uses vLLM's
@@ -393,7 +397,7 @@ class VLLMOfflineClient(Client[VLLMRuntimeOptions]):
         *,
         system_message: str | None = None,
         prompt_prefix: str | None = None,
-        options: VLLMRuntimeOptions | None = None,
+        options: VLLMOfflineRuntimeOptions | None = None,
     ) -> None:
         """Prime the KV-cache with a shared prefix before the main workload.
 
@@ -438,6 +442,13 @@ class VLLMOfflineClient(Client[VLLMRuntimeOptions]):
         if prompt_prefix is not None:
             messages.append({"role": "user", "content": prompt_prefix})
 
+        chat_template_kwargs = (
+            options.chat_template_kwargs.copy()
+            if options and options.chat_template_kwargs
+            else {}
+        )
+        chat_template_kwargs["enable_thinking"] = self._enable_thinking
+
         if options is not None:
             sampling_params = options.to_sampling_params()
             # Force minimal output for the cache warm-up pass
@@ -449,9 +460,7 @@ class VLLMOfflineClient(Client[VLLMRuntimeOptions]):
             self._pipe.chat(
                 cast(Any, [messages]),
                 sampling_params,
-                chat_template_kwargs={
-                    "enable_thinking": self._enable_thinking
-                },
+                chat_template_kwargs=chat_template_kwargs,
                 use_tqdm=False,
             )
         except Exception as exc:
@@ -492,7 +501,7 @@ class VLLMOfflineClient(Client[VLLMRuntimeOptions]):
         self,
         *,
         messages: list[dict[str, str]],
-        options: VLLMRuntimeOptions | None = None,
+        options: VLLMOfflineRuntimeOptions | None = None,
         gen_kwargs: dict[str, Any] | None = None,
     ) -> Response:
         """Generate a single response for a conversation.
@@ -524,7 +533,7 @@ class VLLMOfflineClient(Client[VLLMRuntimeOptions]):
         self,
         *,
         messages: list[list[dict[str, str]]],
-        options: VLLMRuntimeOptions | None = None,
+        options: VLLMOfflineRuntimeOptions | None = None,
         gen_kwargs: dict[str, Any] | None = None,
     ) -> list[Response]:
         """Generate responses for a batch of conversations.
@@ -561,7 +570,14 @@ class VLLMOfflineClient(Client[VLLMRuntimeOptions]):
             )
             return [error_response for _ in messages]
 
-        if isinstance(options, VLLMRuntimeOptions):
+        chat_template_kwargs = (
+            options.chat_template_kwargs.copy()
+            if options and options.chat_template_kwargs
+            else {}
+        )
+        chat_template_kwargs["enable_thinking"] = self._enable_thinking
+
+        if isinstance(options, VLLMOfflineRuntimeOptions):
             sampling_params = options.to_sampling_params()
         else:
             from vllm import SamplingParams
@@ -587,9 +603,7 @@ class VLLMOfflineClient(Client[VLLMRuntimeOptions]):
             outputs = self._pipe.chat(
                 cast(Any, messages),
                 sampling_params,
-                chat_template_kwargs={
-                    "enable_thinking": self._enable_thinking
-                },
+                chat_template_kwargs=chat_template_kwargs,
                 use_tqdm=False,
             )
         except Exception as exc:
@@ -698,4 +712,8 @@ class VLLMOfflineClient(Client[VLLMRuntimeOptions]):
         )
 
 
-__all__ = ["VLLMOfflineClient", "VLLMRuntimeOptions", "auto_reduce_batch_size"]
+__all__ = [
+    "VLLMOfflineClient",
+    "VLLMOfflineRuntimeOptions",
+    "auto_reduce_batch_size",
+]

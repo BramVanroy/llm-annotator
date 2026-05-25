@@ -7,7 +7,7 @@ import pytest
 from llm_annotator.annotator import Annotator
 from llm_annotator.clients.vllm_offline_client import (
     VLLMOfflineClient,
-    VLLMRuntimeOptions,
+    VLLMOfflineRuntimeOptions,
 )
 
 
@@ -49,7 +49,7 @@ def offline_vllm_client(
         client.warm_up(
             system_message="You are a concise sentiment annotation assistant.",
             prompt_prefix="Read the review and classify sentiment.",
-            options=VLLMRuntimeOptions(max_tokens=16, temperature=0.0),
+            options=VLLMOfflineRuntimeOptions(max_tokens=16, temperature=0.0),
         )
     except Exception as exc:  # pragma: no cover - environment dependent
         pytest.skip(f"Could not initialize vLLM offline client: {exc}")
@@ -76,7 +76,9 @@ def test_annotate_imdb_smoke_with_offline_vllm(
         dataset_split="test",
         max_num_samples=6,
         keep_columns=["text", "label"],
-        options=VLLMRuntimeOptions(max_tokens=24, temperature=0.0, seed=5),
+        options=VLLMOfflineRuntimeOptions(
+            max_tokens=24, temperature=0.0, seed=5
+        ),
         sort_by_length="shortest_first",
     )
 
@@ -115,7 +117,9 @@ def test_annotate_imdb_with_schema_and_task_prefix(
         dataset_split="test",
         max_num_samples=5,
         keep_columns=["text", "label"],
-        options=VLLMRuntimeOptions(max_tokens=32, temperature=0.0, seed=11),
+        options=VLLMOfflineRuntimeOptions(
+            max_tokens=32, temperature=0.0, seed=11
+        ),
         output_schema=schema,
         task_prefix="sent_",
         num_retries_invalid=0,

@@ -1,7 +1,11 @@
 import json
 from pathlib import Path
 
-from llm_annotator import Annotator, VLLMOfflineClient, VLLMRuntimeOptions
+from llm_annotator import (
+    Annotator,
+    VLLMOfflineClient,
+    VLLMOfflineRuntimeOptions,
+)
 from llm_annotator.utils import get_hf_username
 
 
@@ -54,7 +58,7 @@ def main(args=None):
     )
 
     hub_id = args.hub_id or (f"{hf_user}/wiki-nl-mcq" if hf_user else None)
-    options = VLLMRuntimeOptions(
+    options = VLLMOfflineRuntimeOptions(
         temperature=args.temperature,
         max_tokens=args.max_tokens,
     )

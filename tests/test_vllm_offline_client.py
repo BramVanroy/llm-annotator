@@ -8,7 +8,7 @@ import pytest
 from llm_annotator.clients.base import Provider
 from llm_annotator.clients.vllm_offline_client import (
     VLLMOfflineClient,
-    VLLMRuntimeOptions,
+    VLLMOfflineRuntimeOptions,
 )
 
 
@@ -54,7 +54,7 @@ def vllm_offline_smollm_client(
         client.warm_up(
             system_message="You are a concise assistant.",
             prompt_prefix="Answer briefly.",
-            options=VLLMRuntimeOptions(max_tokens=8),
+            options=VLLMOfflineRuntimeOptions(max_tokens=8),
         )
     except Exception as exc:  # pragma: no cover - environment dependent
         pytest.skip(f"Could not initialize vLLM offline test client: {exc}")
@@ -76,7 +76,9 @@ def test_generate_with_smollm(
                 "content": "Reply with only one word: hello",
             }
         ],
-        options=VLLMRuntimeOptions(max_tokens=10, temperature=0.0, seed=0),
+        options=VLLMOfflineRuntimeOptions(
+            max_tokens=10, temperature=0.0, seed=0
+        ),
     )
 
     assert response.error is None
@@ -94,7 +96,9 @@ def test_batch_generate_with_smollm(
             [{"role": "user", "content": "Reply with one short greeting."}],
             [{"role": "user", "content": "Reply with one short farewell."}],
         ],
-        options=VLLMRuntimeOptions(max_tokens=12, temperature=0.0, seed=1),
+        options=VLLMOfflineRuntimeOptions(
+            max_tokens=12, temperature=0.0, seed=1
+        ),
     )
 
     assert len(responses) == 2
@@ -124,7 +128,7 @@ def test_guided_json_generation_with_smollm(
                 "content": "Classify the sentiment as positive or negative: I love this movie.",
             }
         ],
-        options=VLLMRuntimeOptions(
+        options=VLLMOfflineRuntimeOptions(
             max_tokens=32,
             temperature=0.0,
             seed=7,
