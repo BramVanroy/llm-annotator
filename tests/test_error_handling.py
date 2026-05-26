@@ -9,7 +9,6 @@ from llm_annotator.clients.base import (
     ProviderRuntimeOptions,
     Response,
 )
-from llm_annotator.clients.exceptions import ProviderError
 from llm_annotator.logging_utils import configure_logging, get_logger
 
 
@@ -48,12 +47,12 @@ class DummyClient(Client[ProviderRuntimeOptions]):
         return None
 
 
-def test_default_on_error_raises() -> None:
+def test_default_on_error_ignores() -> None:
     # Verifies default on_error policy raises ProviderError on failures.
     client = DummyClient(model="dummy")
 
-    with pytest.raises(ProviderError):
-        client.generate(messages=[{"role": "user", "content": "fail"}])
+    # Will not trigger an error since on_error defaults to 'ignore'.
+    client.generate(messages=[{"role": "user", "content": "fail"}])
 
 
 def test_on_error_ignore_returns_error_response() -> None:

@@ -12,8 +12,10 @@ repos:
       # Exlclude the prompts
       - id: end-of-file-fixer
         exclude: ^examples/.*\.md$
+        exclude: ^src/.*\.md$
       - id: trailing-whitespace
         exclude: ^examples/.*\.md$
+        exclude: ^src/.*\.md$
 
   - repo: local
     hooks:
