@@ -11,11 +11,9 @@ repos:
         args: [--unsafe]
       # Exlclude the prompts
       - id: end-of-file-fixer
-        exclude: ^examples/.*\.md$
-        exclude: ^src/.*\.md$
+        exclude: ^(examples|src)/.*\.md$
       - id: trailing-whitespace
-        exclude: ^examples/.*\.md$
-        exclude: ^src/.*\.md$
+        exclude: ^(examples|src)/.*\.md$
 
   - repo: local
     hooks:
