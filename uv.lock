@@ -1414,6 +1414,7 @@ source = { editable = "." }
 dependencies = [
     { name = "colorama" },
     { name = "datasets" },
+    { name = "pydantic" },
 ]
 
 [package.optional-dependencies]
@@ -1467,6 +1468,7 @@ requires-dist = [
     { name = "flashinfer-python", marker = "extra == 'vllm'", specifier = "==0.6.8.post1" },
     { name = "mistral-common", marker = "extra == 'vllm'", specifier = ">=1.11.2,<2" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=2.36.0,<3" },
+    { name = "pydantic", specifier = ">=2.13.0,<3" },
     { name = "vllm", marker = "extra == 'vllm'", specifier = "==0.21.0" },
 ]
 provides-extras = ["anthropic", "openai", "vllm"]
