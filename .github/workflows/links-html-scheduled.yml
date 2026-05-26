@@ -38,8 +38,8 @@ jobs:
             --cache
             --no-progress
             --root-dir ${{ github.workspace }}
-            --exclude-path '**/404.html'
-            --exclude-path '**/overrides/**'
+            --exclude-path '404\.html'
+            --exclude-path 'overrides/'
             '**/*.html'
 
       - name: Save lychee cache
