@@ -319,6 +319,30 @@ def test_annotate_dataset_guard_rails(tmp_path: Path) -> None:
         )
 
 
+def test_annotate_dataset_resume_from_hub_id_validation(
+    tmp_path: Path,
+) -> None:
+    # Verifies resume_from_hub_id format and overwrite guard rails.
+    annotator = Annotator(client=DummyClient())
+
+    with pytest.raises(ValueError, match="must be a Hugging Face dataset ID"):
+        annotator.annotate_dataset(
+            output_dir=tmp_path / "bad-id",
+            prompt_template="{text}",
+            dataset=Dataset.from_dict({"text": ["a"]}),
+            resume_from_hub_id="invalid-id",
+        )
+
+    with pytest.raises(ValueError, match="overwrite=True"):
+        annotator.annotate_dataset(
+            output_dir=tmp_path / "overwrite",
+            prompt_template="{text}",
+            dataset=Dataset.from_dict({"text": ["a"]}),
+            resume_from_hub_id="owner/name",
+            overwrite=True,
+        )
+
+
 def test_generate_dataset_forwards_to_annotate(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -339,11 +363,74 @@ def test_generate_dataset_forwards_to_annotate(
         output_dir=tmp_path / "g",
         prompts="hello",
         max_num_samples=3,
+        resume_from_hub_id="owner/name",
     )
 
     assert len(result) == 1
     assert captured["prompt_template"] == "{prompt}"
     assert len(captured["dataset"]) == 3
+    assert captured["resume_from_hub_id"] == "owner/name"
+
+
+def test_pull_checkpoint_from_hub_calls_snapshot_download(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Verifies pull_checkpoint_from_hub downloads from the jsonl_upload branch.
+    annotator = Annotator(client=DummyClient())
+    captured: dict[str, Any] = {}
+
+    def _fake_snapshot_download(**kwargs: Any) -> str:
+        captured.update(kwargs)
+        (tmp_path / "out.jsonl").write_text('{"idx": 0}\n', encoding="utf-8")
+        return str(tmp_path)
+
+    monkeypatch.setattr(
+        "llm_annotator.annotator.snapshot_download", _fake_snapshot_download
+    )
+
+    annotator.pull_checkpoint_from_hub(
+        checkpoint_hub_id="me/data",
+        dir_path=tmp_path,
+    )
+
+    assert captured["repo_id"] == "me/data"
+    assert captured["repo_type"] == "dataset"
+    assert captured["revision"] == "jsonl_upload"
+
+
+def test_annotate_dataset_resumes_from_downloaded_checkpoint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Verifies resume_from_hub_id checkpoint files are used by skip-index resume logic.
+    annotator = Annotator(client=DummyClient())
+
+    def _fake_pull(
+        self: Annotator,
+        checkpoint_hub_id: str,
+        dir_path: Path | str,
+        *,
+        task_prefix: str = "",
+    ) -> None:
+        _ = self
+        _ = checkpoint_hub_id
+        _ = task_prefix
+        p_out = Path(dir_path)
+        (p_out / "restored.jsonl").write_text(
+            '{"idx": 0, "response": "from_hub"}\n', encoding="utf-8"
+        )
+
+    monkeypatch.setattr(Annotator, "pull_checkpoint_from_hub", _fake_pull)
+
+    done = annotator.annotate_dataset(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        dataset=Dataset.from_dict({"text": ["a", "b"]}),
+        resume_from_hub_id="me/data",
+        keep_idx_column=True,
+    )
+
+    assert len(done) == 2
+    assert set(done["idx"]) == {0, 1}
 
 
 def test_post_annotate_and_pfout_name(

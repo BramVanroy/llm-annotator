@@ -17,7 +17,12 @@ from datasets import (
     get_dataset_split_names,
     load_dataset,
 )
-from huggingface_hub import create_branch, create_repo, upload_large_folder
+from huggingface_hub import (
+    create_branch,
+    create_repo,
+    snapshot_download,
+    upload_large_folder,
+)
 from tqdm import tqdm
 
 from llm_annotator.clients.base import Client, ProviderRuntimeOptions, Response
@@ -603,6 +608,7 @@ class Annotator:
         *,
         dataset_name: str | None = None,
         dataset: Dataset | None = None,
+        resume_from_hub_id: str | None = None,
         new_hub_id: str | None = None,
         overwrite: bool = False,
         dataset_config: str | None = None,
@@ -639,6 +645,8 @@ class Annotator:
                 that match dataset column names, e.g. ``"Analyse the following text: {text}"``.
             dataset_name: Name or path of the dataset to annotate.
             dataset: Pre-loaded dataset to use instead of loading from name/path.
+            resume_from_hub_id: Optional Hugging Face dataset ID to restore
+                checkpoint files from before resuming locally.
             new_hub_id: Optional Hugging Face dataset ID for uploads.
             overwrite: Whether to overwrite existing output directory.
             dataset_config: Dataset configuration name (optional).
@@ -742,6 +750,17 @@ class Annotator:
                 "cannot be pickled for multiprocessing. Set num_proc=None."
             )
 
+        if resume_from_hub_id is not None:
+            if not resume_from_hub_id.strip() or "/" not in resume_from_hub_id:
+                raise ValueError(
+                    "'resume_from_hub_id' must be a Hugging Face dataset ID like "
+                    "'owner/name'."
+                )
+            if overwrite:
+                raise ValueError(
+                    "Cannot set 'overwrite=True' when 'resume_from_hub_id' is set."
+                )
+
         upload_every_n_samples = upload_every_n_samples or 0
 
         prompt_template_prefix = extract_prompt_prefix(prompt_template)
@@ -817,6 +836,13 @@ class Annotator:
             shutil.rmtree(pdout)
         pdout.mkdir(exist_ok=True, parents=True)
 
+        if resume_from_hub_id:
+            self.pull_checkpoint_from_hub(
+                checkpoint_hub_id=resume_from_hub_id,
+                dir_path=pdout,
+                task_prefix=task_prefix,
+            )
+
         pdout.joinpath("_version.json").write_text(
             json.dumps(get_lib_versions(), indent=4), encoding="utf-8"
         )
@@ -856,6 +882,7 @@ class Annotator:
                     "prompt_template": prompt_template,
                     "dataset_name": dataset_name,
                     "dataset": repr(dataset) if dataset is not None else None,
+                    "resume_from_hub_id": resume_from_hub_id,
                     "new_hub_id": new_hub_id,
                     "overwrite": overwrite,
                     "dataset_config": dataset_config,
@@ -1084,6 +1111,7 @@ class Annotator:
         output_dir: str | Path,
         prompts: str | Sequence[str],
         *,
+        resume_from_hub_id: str | None = None,
         new_hub_id: str | None = None,
         overwrite: bool = False,
         options: ProviderRuntimeOptions | None = None,
@@ -1109,6 +1137,8 @@ class Annotator:
             prompts: a single prompt that will be used `max_num_samples` times (`max_num_samples`
                 must be given), or a sequence of prompts to generate outputs for, in which cases
                 `max_num_samples` will be ignored.
+            resume_from_hub_id: Optional Hugging Face dataset ID to restore
+                checkpoint files from before resuming locally.
             new_hub_id: Optional Hugging Face dataset ID for uploads.
             overwrite: Whether to overwrite existing output directory.
             options: Runtime options passed to the client for generation.
@@ -1187,6 +1217,7 @@ class Annotator:
             output_dir=output_dir,
             prompt_template="{prompt}",
             dataset=dataset,
+            resume_from_hub_id=resume_from_hub_id,
             new_hub_id=new_hub_id,
             overwrite=overwrite,
             options=options,
@@ -1278,6 +1309,54 @@ class Annotator:
         else:
             count_idx = processed_n_samples // max_samples_per_output_file
             return pdout.joinpath(f"{stem}_{count_idx}.jsonl")
+
+    @retry()
+    def pull_checkpoint_from_hub(
+        self,
+        checkpoint_hub_id: str,
+        dir_path: Path | str,
+        *,
+        task_prefix: str = "",
+    ) -> None:
+        """Restore local checkpoint files from the backup branch on HF Hub.
+
+        Args:
+            checkpoint_hub_id: Hugging Face dataset ID to pull from.
+            dir_path: Local output directory where checkpoint files are restored.
+            task_prefix: Prefix used for branch naming.
+
+        Raises:
+            ValueError: If the hub download fails or no JSONL files are restored.
+        """
+        revision = f"{task_prefix}jsonl_upload"
+        try:
+            snapshot_download(
+                repo_id=checkpoint_hub_id,
+                repo_type="dataset",
+                revision=revision,
+                local_dir=str(dir_path),
+                allow_patterns=["*.jsonl", "*.json"],
+                ignore_patterns=[
+                    f"{task_prefix}cached_input_dataset/*",
+                    ".cache/*",
+                ],
+            )
+        except Exception as exc:
+            raise ValueError(
+                "Could not restore checkpoint files from HF Hub dataset "
+                f"'{checkpoint_hub_id}' (revision='{revision}')."
+            ) from exc
+
+        if self.verbose:
+            if not any(Path(dir_path).glob("*.jsonl")):
+                self._logger.warning(
+                    "No checkpoint files were restored from the HF Hub. Please check if the provided 'checkpoint_hub_id' is correct and contains the expected files."
+                )
+            else:
+                self._logger.info(
+                    "Restored checkpoint files from the HF Hub: "
+                    f"https://huggingface.co/datasets/{checkpoint_hub_id}/tree/{revision}"
+                )
 
     @retry()
     def push_dir_to_hub(
