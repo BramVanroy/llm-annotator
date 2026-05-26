@@ -29,11 +29,11 @@ jobs:
         with:
           fail: true
           # We don't use .lychee.toml here unless you also keep a copy of it on the gh-pages branch.
-          # We set base to . to resolve relative assets correctly.
+          # --root-dir resolves root-relative links (e.g. /llm-annotator/latest/...) against the checkout.
           args: >-
             --cache
             --no-progress
-            --base ${{ github.workspace }}
+            --root-dir ${{ github.workspace }}
             '**/*.html'
 
       - name: Save lychee cache
