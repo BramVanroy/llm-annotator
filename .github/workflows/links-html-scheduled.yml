@@ -40,7 +40,7 @@ jobs:
             --root-dir ${{ github.workspace }}
             --exclude-path '404\.html'
             --exclude-path 'overrides/'
-            '**/*.html'
+            'latest/**/*.html'
 
       - name: Save lychee cache
         if: always()
