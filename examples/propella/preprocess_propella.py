@@ -25,7 +25,7 @@ def main(args=None):
 
     def count_tokens_with_template(texts):
         truncated_texts = [text[:50_000] for text in texts]
-        return {args.text_column: truncated_texts}
+        return {f"{args.text_column}_truncated": truncated_texts}
 
     ds = load_dataset(
         args.dataset, args.dataset_config, split=args.dataset_split
