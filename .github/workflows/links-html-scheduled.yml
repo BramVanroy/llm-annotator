@@ -30,10 +30,16 @@ jobs:
           fail: true
           # We don't use .lychee.toml here unless you also keep a copy of it on the gh-pages branch.
           # --root-dir resolves root-relative links (e.g. /llm-annotator/latest/...) against the checkout.
+          # 404.html uses absolute links prefixed with the site base URL (/llm-annotator/) which
+          # cannot be resolved locally, so we exclude it.
+          # overrides/ contains Jinja2 template files (.html) with raw template expressions,
+          # not rendered HTML, so we exclude those too.
           args: >-
             --cache
             --no-progress
             --root-dir ${{ github.workspace }}
+            --exclude-path '**/404.html'
+            --exclude-path '**/overrides/**'
             '**/*.html'
 
       - name: Save lychee cache
