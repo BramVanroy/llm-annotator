@@ -33,7 +33,7 @@ jobs:
           args: >-
             --cache
             --no-progress
-            --base .
+            --base ${{ github.workspace }}
             '**/*.html'
 
       - name: Save lychee cache
