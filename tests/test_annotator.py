@@ -169,9 +169,9 @@ def test_create_messages_with_and_without_system(
         system_message=None,
     )
 
-    assert with_system["prompted"][0]["role"] == "system"
-    assert with_system["prompted"][1]["role"] == "user"
-    assert no_system["prompted"][0]["role"] == "user"
+    assert with_system["messages"][0]["role"] == "system"
+    assert with_system["messages"][1]["role"] == "user"
+    assert no_system["messages"][0]["role"] == "user"
 
 
 def test_process_output_branches(dummy_annotator: Annotator) -> None:
@@ -217,7 +217,7 @@ def test_process_batch_validate_and_postprocess(
     }
 
     batch = {
-        "prompted": [
+        "messages": [
             [{"role": "user", "content": "a"}],
             [{"role": "user", "content": "b"}],
         ]
@@ -534,7 +534,7 @@ def test_annotator_smoke_with_all_client_types(client_cls: type[Any]) -> None:
     annotator = Annotator(client=client)
     out = annotator._process_batch(
         batch={
-            "prompted": [
+            "messages": [
                 [{"role": "user", "content": "a"}],
                 [{"role": "user", "content": "b"}],
             ]
@@ -572,7 +572,7 @@ def test_load_dataset_with_dataset_name_split_selection(
 
     assert len(loaded) == 2
     assert skipped == 0
-    assert "prompted" in loaded.column_names
+    assert "messages" in loaded.column_names
 
 
 def test_load_dataset_split_validation_errors(

@@ -86,7 +86,7 @@ def test_annotator_process_batch_keeps_error_rows() -> None:
     annotator = Annotator(client=client)
 
     batch = {
-        "prompted": [
+        "messages": [
             [{"role": "user", "content": "ok"}],
             [{"role": "user", "content": "fail"}],
         ]

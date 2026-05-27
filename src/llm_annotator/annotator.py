@@ -336,9 +336,11 @@ class Annotator:
                         "Sorting dataset roughly by prompt length for more efficient batching (longest first)..."
                     )
                 dataset = dataset.map(
-                    lambda prompt: {f"{task_prefix}_length": len(prompt)},
+                    lambda msgs: {
+                        f"{task_prefix}messages_chars": len(json.dumps(msgs))
+                    },
                     num_proc=self.num_proc,
-                    input_columns=[f"{task_prefix}prompted"],
+                    input_columns=[f"{task_prefix}messages"],
                 )
                 # Sort by longest first to trigger OOM as soon as possible
                 if sort_by_length == "shortest_first":
@@ -347,8 +349,8 @@ class Annotator:
                     do_reverse = True
 
                 dataset = dataset.sort(
-                    f"{task_prefix}_length", reverse=do_reverse
-                ).remove_columns([f"{task_prefix}_length"])
+                    f"{task_prefix}messages_chars", reverse=do_reverse
+                ).remove_columns([f"{task_prefix}messages_chars"])
 
             if cache_input_dataset:
                 dataset.save_to_disk(p_cached_input_ds)
@@ -402,7 +404,7 @@ class Annotator:
         """
         if system_message is not None:
             return {
-                f"{task_prefix}prompted": [
+                f"{task_prefix}messages": [
                     {"role": "system", "content": system_message},
                     {
                         "role": "user",
@@ -415,7 +417,7 @@ class Annotator:
             }
         else:
             return {
-                f"{task_prefix}prompted": [
+                f"{task_prefix}messages": [
                     {
                         "role": "user",
                         "content": prompt_template.format(
@@ -531,11 +533,11 @@ class Annotator:
     ) -> list[dict[str, Any]]:
         """Process a batch of samples through the client.
 
-        Takes a batch of prompted samples, runs inference, and processes
+        Takes a batch of messages samples, runs inference, and processes
         the outputs using the :meth:`_process_output` method.
 
         Args:
-            batch: Dictionary containing batch data with prompted samples.
+            batch: Dictionary containing batch data with messages samples.
             options: Runtime options passed to the client.
             task_prefix: String prefix to use for internal column names.
             validate_fn: Optional custom validation function that takes a processed
@@ -549,7 +551,7 @@ class Annotator:
         """
         output_schema = options.json_schema if options is not None else None
         responses = self.client.batch_generate(
-            messages=batch[f"{task_prefix}prompted"],
+            messages=batch[f"{task_prefix}messages"],
             options=options,
         )
 
@@ -819,7 +821,9 @@ class Annotator:
         prompt_field_swapper = prompt_field_swapper or {}
 
         for fld, value in prompt_field_swapper.items():
-            prompt_template = prompt_template.replace(f"{{{fld}}}", value)
+            prompt_template = prompt_template.replace(
+                f"{{{fld}}}", f"{{{value}}}"
+            )
 
         _str_formatter = string.Formatter()
         prompt_fields = tuple(
