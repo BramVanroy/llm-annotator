@@ -58,7 +58,7 @@ The annotation framework evaluates documents across 18 key properties organized 
 - Content Length: Amount of substantive content (substantial, moderate, brief, minimal)
 
 **Content Classification:**
-- One-Sentence Description: Ultra-short neutral description; exactly one sentence; target 815 words (soft max 20)
+- One-Sentence Description: Ultra-short neutral description; exactly one sentence; target 8-15 words (soft max 20)
 - Content Type: Functional structure and purpose (analytical, instructional, reference, procedural, qa_structured, conversational, creative, transactional, boilerplate, news_report, opinion_editorial, review_critique, technical_documentation, specification_standard, legal_document, press_release, structured_data, source_code)
 - Business Sector: Industry domain relevance (see Detailed Property Descriptions for exact enum values)
 - Technical Content: Type and intensity of specialized knowledge (code_heavy, math_heavy, scientific, data_heavy, engineering, basic_technical, non_technical)
@@ -669,7 +669,7 @@ def create_annotation_response_model(
         # Property 4: One-Sentence Description
         one_sentence_description: str = Field(
             ...,
-            description="Ultra-short neutral description of the document. Exactly one sentence. Target 815 words (soft max 20). Neutral tone; avoid boilerplate intros and calls to action.",
+            description="Ultra-short neutral description of the document. Exactly one sentence. Target 8-15 words (soft max 20). Neutral tone; avoid boilerplate intros and calls to action.",
             max_length=one_sentence_description_max_length,
         )
 

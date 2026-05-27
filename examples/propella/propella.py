@@ -94,7 +94,9 @@ def main(args=None):
             "--use-fp8 is only supported for model sizes 1.7b and 4b."
         )
 
-    output_schema = get_annotation_response_schema()
+    output_schema = get_annotation_response_schema(
+        one_sentence_description_max_length=150
+    )
     prompt_template = ANNOTATOR_USER_PROMPT
     system_message = annotator_system_prompt
 

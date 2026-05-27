@@ -51,7 +51,6 @@ def main(args=None):
             input_columns=[args.text_column],
             num_proc=args.num_proc,
         )
-        .filter()
     )
     ds.push_to_hub(args.hub_id, private=False)
 
