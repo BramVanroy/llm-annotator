@@ -323,6 +323,30 @@ def test_process_response_and_stop_reason_error(
     client.destroy()
 
 
+def test_process_response_warns_by_default_on_length_stop(
+    fake_vllm_runtime: dict[str, Any],
+) -> None:
+    # Verifies the offline client default policy downgrades truncation to a response error.
+    client = VLLMOfflineClient(model="m")
+    output = types.SimpleNamespace(
+        outputs=[
+            types.SimpleNamespace(
+                text=" truncated ",
+                token_ids=[1, 2, 3],
+                finish_reason="length",
+            )
+        ]
+    )
+
+    response = client._process_response(output)  # type: ignore[arg-type]
+
+    assert response.text == "truncated"
+    assert response.stop_reason == "length"
+    assert response.error is not None
+    assert "hit the configured output token limit" in response.error
+    client.destroy()
+
+
 def test_destroy_is_idempotent(
     fake_vllm_runtime: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -380,7 +404,7 @@ def test_batch_generate_auto_reduces_on_oom(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Verifies chunk size is halved and the failing chunk retried on CUDA OOM.
-    client = VLLMOfflineClient(model="m", batch_size=4)
+    client = VLLMOfflineClient(model="m", batch_size=4, on_error="raise")
     call_sizes: list[int] = []
 
     def _oom_then_ok(
@@ -411,7 +435,7 @@ def test_batch_generate_reraises_non_oom_immediately(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Verifies that non-OOM exceptions are not retried.
-    client = VLLMOfflineClient(model="m", batch_size=4)
+    client = VLLMOfflineClient(model="m", batch_size=4, on_error="raise")
     call_count = {"n": 0}
 
     def _value_error(
@@ -438,7 +462,9 @@ def test_batch_generate_reraises_when_min_batch_size_exceeded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Verifies OOM is re-raised when halving would go below min_batch_size.
-    client = VLLMOfflineClient(model="m", batch_size=2, min_batch_size=2)
+    client = VLLMOfflineClient(
+        model="m", batch_size=2, min_batch_size=2, on_error="raise"
+    )
 
     def _always_oom(
         messages: list[object],
@@ -461,7 +487,7 @@ def test_batch_generate_oom_detected_through_provider_error_chain(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Verifies OOM wrapped as __cause__ inside ProviderError triggers retry.
-    client = VLLMOfflineClient(model="m", batch_size=2)
+    client = VLLMOfflineClient(model="m", batch_size=2, on_error="raise")
     call_sizes: list[int] = []
 
     def _oom_first(

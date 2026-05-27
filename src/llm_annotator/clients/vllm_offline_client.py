@@ -296,7 +296,7 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
         language_model_only: bool = True,
         speculative_config: dict[str, Any] | None = None,
         extra_vllm_kwargs: dict[str, Any] | None = None,
-        on_error: OnError = "raise",
+        on_error: OnError = "warn",
         batch_size: int | None = None,
         min_batch_size: int = 1,
     ) -> None:
@@ -324,6 +324,7 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
                 ``vllm.LLM``. Explicit constructor arguments take precedence
                 over any conflicting keys here.
             on_error: Error behavior when generation fails.
+                Defaults to ``"warn"``.
             batch_size: Starting chunk size for :meth:`batch_generate`. When
                 ``None`` (the default) all messages are sent in one call. On
                 OOM the chunk size is halved until the call succeeds or falls

@@ -103,7 +103,7 @@ class VLLMClient(OpenAIClient[VLLMRuntimeOptions]):
         self,
         model: str | None = None,
         base_url: str = "http://localhost:8000/v1",
-        on_error: OnError = "raise",
+        on_error: OnError = "warn",
     ) -> None:
         """Initialize the VLLM client.
 

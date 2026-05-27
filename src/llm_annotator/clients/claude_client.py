@@ -71,7 +71,7 @@ class ClaudeClient(Client[ClaudeRuntimeOptions]):
         model: str,
         max_workers: int = 4,
         api_key: str | None = None,
-        on_error: OnError = "raise",
+        on_error: OnError = "warn",
     ) -> None:
         """Initialize the Claude client.
 

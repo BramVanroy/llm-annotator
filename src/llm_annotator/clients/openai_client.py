@@ -75,7 +75,7 @@ class OpenAIClient(Client[T_OpenAIOptions]):
         max_workers: int = 4,
         base_url: str | None = None,
         api_key: str | None = None,
-        on_error: OnError = "raise",
+        on_error: OnError = "warn",
     ) -> None:
         """Initialize the OpenAI client.
 
