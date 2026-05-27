@@ -1,4 +1,4 @@
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 
 
 def main(args=None):
@@ -23,19 +23,35 @@ def main(args=None):
     )
     args = parser.parse_args(args)
 
-    def count_tokens_with_template(texts):
-        truncated_texts = [text[:50_000] for text in texts]
-        return {f"{args.text_column}_truncated": truncated_texts}
+    def filter_short_texts(texts):
+        """Filter out texts with fewer than 75 words."""
+        return [len(text.split()) >= 75 for text in texts]
 
-    ds = load_dataset(
-        args.dataset, args.dataset_config, split=args.dataset_split
-    )
-    ds = ds.map(
-        count_tokens_with_template,
-        batched=True,
-        batch_size=10000,
-        input_columns=[args.text_column],
-        num_proc=args.num_proc,
+    def truncate_text(texts):
+        """Truncate texts to first 50,000 characters."""
+        return {
+            f"{args.text_column}_truncated": [text[:50_000] for text in texts]
+        }
+
+    ds: Dataset = (
+        load_dataset(
+            args.dataset, args.dataset_config, split=args.dataset_split
+        )
+        .filter(
+            filter_short_texts,
+            batched=True,
+            batch_size=10000,
+            input_columns=[args.text_column],
+            num_proc=args.num_proc,
+        )
+        .map(
+            truncate_text,
+            batched=True,
+            batch_size=10000,
+            input_columns=[args.text_column],
+            num_proc=args.num_proc,
+        )
+        .filter()
     )
     ds.push_to_hub(args.hub_id, private=False)
 
