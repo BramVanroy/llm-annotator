@@ -297,18 +297,6 @@ def test_annotate_dataset_retries_invalid(
 
 
 def test_annotate_dataset_guard_rails(tmp_path: Path) -> None:
-    # Verifies annotate_dataset rejects unsupported runtime combinations and upload config.
-    client = VLLMOfflineClient(model="dummy")
-    annotator = Annotator(client=client, num_proc=2)
-
-    with pytest.raises(ValueError, match="cannot be pickled"):
-        # VLLM Offline client will error when num_proc is not None
-        annotator.annotate_dataset(
-            output_dir=tmp_path / "x",
-            prompt_template="{text}",
-            dataset=Dataset.from_dict({"text": ["a"]}),
-        )
-
     annotator = Annotator(client=DummyClient())
     with pytest.raises(ValueError, match="new_hub_id must be provided"):
         # Because upload_every_n_samples is set, new_hub_id must be provided.

@@ -61,6 +61,13 @@ def main(args=None):
     )
 
     parser.add_argument(
+        "--num-proc",
+        type=int,
+        default=None,
+        help=("Number of processes for dataset preprocessing."),
+    )
+
+    parser.add_argument(
         "--output-dir",
         required=True,
         help="Directory where annotated output is written.",
@@ -122,11 +129,17 @@ def main(args=None):
     else:
         upload_every_n_samples = max(1, args.max_num_samples // 4)
 
-    with Annotator(
-        client=client,
-        verbose=True,
-        batch_size=args.max_num_seqs,
-    ) as anno:
+    kwargs = {
+        "client": client,
+        "verbose": True,
+        "batch_size": args.max_num_seqs,
+    }
+
+    # Do not override the default non-None value in the annotator init
+    if args.num_proc is not None:
+        kwargs["num_proc"] = args.num_proc
+
+    with Annotator(**kwargs) as anno:
         anno.annotate_dataset(
             output_dir=args.output_dir,
             prompt_template=prompt_template,

@@ -8,6 +8,7 @@ import string
 from dataclasses import asdict, dataclass, field
 from functools import wraps
 from math import ceil
+from os import cpu_count
 from pathlib import Path
 from typing import Any, Callable, Iterable, Literal, Sequence
 
@@ -36,6 +37,11 @@ from llm_annotator.utils import (
     remove_empty_jsonl_files,
     retry,
 )
+
+
+# Set a sensible default: cpu_count-1 cores
+# but at least 1 at most 8 to avoid overloading the system
+DEFAULT_CPU_COUNT = min(8, max(1, (cpu_count() or 1) - 1))
 
 
 def destroy_on_error(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -85,10 +91,7 @@ class Annotator:
         client: An initialised :class:`~llm_annotator.clients.base.Client`
             instance that performs the actual generation.
         batch_size: Number of samples per inference batch.
-        num_proc: Number of processes for dataset preprocessing. Do **not**
-            set this when ``client`` is a
-            :class:`~llm_annotator.clients.VLLMOfflineClient` — the model
-            cannot be pickled for multiprocessing.
+        num_proc: Number of processes for dataset preprocessing.
         verbose: Whether to print progress information.
 
     Examples:
@@ -122,7 +125,7 @@ class Annotator:
 
     client: Client
     batch_size: int = 256
-    num_proc: int | None = None
+    num_proc: int | None = DEFAULT_CPU_COUNT
     verbose: bool = False
     _logger: Any = field(init=False, repr=False)
 
@@ -235,6 +238,20 @@ class Annotator:
         Raises:
             ValueError: If configuration is invalid or required fields are missing.
         """
+
+        pipeline_loaded = getattr(self.client, "_pipeline_loaded", False)
+
+        if (
+            self.num_proc is not None
+            and isinstance(self.client, VLLMOfflineClient)
+            and pipeline_loaded
+        ):
+            self._logger.warning(
+                "num_proc>1 cannot be used with VLLMOfflineClient because the loaded model "
+                "cannot be pickled for multiprocessing. Setting num_proc=None."
+            )
+            self.num_proc = None
+
         if dataset is not None and dataset_name is not None:
             raise ValueError(
                 "Provide only one of 'dataset' or 'dataset_name', not both."
@@ -747,14 +764,6 @@ class Annotator:
             ...         num_retries_invalid=3,
             ...     )
         """
-        if self.num_proc is not None and isinstance(
-            self.client, VLLMOfflineClient
-        ):
-            raise ValueError(
-                "num_proc cannot be used with VLLMOfflineClient because the loaded model "
-                "cannot be pickled for multiprocessing. Set num_proc=None."
-            )
-
         if resume_from_hub_id is not None:
             if not resume_from_hub_id.strip() or "/" not in resume_from_hub_id:
                 raise ValueError(
