@@ -88,6 +88,12 @@ def main(args=None):
         default=-1,
         help="Number of samples to process. Use -1 for full split.",
     )
+    args.add_argument(
+        "--sort-by-length",
+        action="store_true",
+        default=False,
+        help="Whether to sort the dataset by longest text first. Should improve performance but may increase memory usage.",
+    )
 
     args = parser.parse_args(args)
 
@@ -154,6 +160,7 @@ def main(args=None):
             output_schema=output_schema,
             system_message=system_message,
             prompt_field_swapper={"content": args.text_column},
+            sort_by_length=args.sort_by_length,
         )
 
 
