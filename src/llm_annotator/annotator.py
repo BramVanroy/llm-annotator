@@ -26,6 +26,7 @@ from huggingface_hub import (
 from tqdm import tqdm
 
 from llm_annotator.clients.base import Client, ProviderRuntimeOptions, Response
+from llm_annotator.clients.vllm_offline_client import VLLMOfflineClient
 from llm_annotator.logging_utils import get_logger
 from llm_annotator.utils import (
     ensure_returns_bool,
@@ -746,7 +747,9 @@ class Annotator:
             ...         num_retries_invalid=3,
             ...     )
         """
-        if self.num_proc is not None and hasattr(self.client, "_pipe"):
+        if self.num_proc is not None and isinstance(
+            self.client, VLLMOfflineClient
+        ):
             raise ValueError(
                 "num_proc cannot be used with VLLMOfflineClient because the loaded model "
                 "cannot be pickled for multiprocessing. Set num_proc=None."

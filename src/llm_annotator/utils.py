@@ -241,13 +241,23 @@ def ensure_returns_dict(func, *args, **kwargs):
 def get_lib_versions() -> dict[str, str]:
     """Get the versions of key dependencies."""
 
-    return {
+    ver = {
         "python": ".".join(str(part) for part in sys.version_info[:3]),
-        "llm_annotator": version("llm_annotator"),
         "vllm": version("vllm"),
         "torch": version("torch"),
         "transformers": version("transformers"),
     }
+
+    try:
+        # May fail if llm-annotator is not installed, which can happen eg in containers
+        # when src/ is just added to PYTHONPATH without a full pip install.
+        llm_annotator_version = version("llm-annotator")
+    except Exception:
+        llm_annotator_version = "unknown"
+
+    ver["llm_annotator"] = llm_annotator_version
+
+    return ver
 
 
 def get_hf_username() -> str | None:
