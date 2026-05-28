@@ -251,7 +251,7 @@ def get_lib_versions() -> dict[str, str]:
     try:
         # May fail if llm-annotator is not installed, which can happen eg in containers
         # when src/ is just added to PYTHONPATH without a full pip install.
-        llm_annotator_version = version("llm-annotator")
+        llm_annotator_version = version("llm_annotator")
     except Exception:
         llm_annotator_version = "unknown"
 
