@@ -63,14 +63,6 @@ uv add "llm-annotator[anthropic]"
 See [docs/provider-info.md](docs/provider-info.md) for auth environment
 variables and provider-specific setup notes.
 
-For local vLLM runs, install flashinfer for your CUDA version.
-
-```sh
-uv pip install flashinfer-python flashinfer-cubin
-# JIT cache package (replace cu128 with your CUDA variant)
-uv pip install flashinfer-jit-cache --index-url https://flashinfer.ai/whl/cu128
-```
-
 ## Usage
 
 Annotate an existing dataset:
