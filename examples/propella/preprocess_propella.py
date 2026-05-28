@@ -52,7 +52,7 @@ def main(args=None):
             num_proc=args.num_proc,
         )
     )
-    ds.push_to_hub(args.hub_id, private=False)
+    ds.push_to_hub(args.hub_id, private=True)
 
 
 if __name__ == "__main__":
