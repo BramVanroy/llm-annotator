@@ -1,7 +1,14 @@
+from __future__ import annotations
+
 from datasets import Dataset, load_dataset
 
 
-def main(args=None):
+def main(args: list[str] | None = None) -> None:
+    """Preprocess Propella source text.
+
+    Args:
+        args: Optional command-line arguments.
+    """
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -21,7 +28,7 @@ def main(args=None):
         default=None,
         help="HF Hub dataset ID to push filtered dataset to.",
     )
-    args = parser.parse_args(args)
+    parsed_args = parser.parse_args(args)
 
     def filter_short_texts(texts):
         """Filter out texts with fewer than 75 words."""
@@ -30,29 +37,33 @@ def main(args=None):
     def truncate_text(texts):
         """Truncate texts to first 50,000 characters."""
         return {
-            f"{args.text_column}_truncated": [text[:50_000] for text in texts]
+            f"{parsed_args.text_column}_truncated": [
+                text[:50_000] for text in texts
+            ]
         }
 
     ds: Dataset = (
         load_dataset(
-            args.dataset, args.dataset_config, split=args.dataset_split
+            parsed_args.dataset,
+            parsed_args.dataset_config,
+            split=parsed_args.dataset_split,
         )
         .filter(
             filter_short_texts,
             batched=True,
             batch_size=10000,
-            input_columns=[args.text_column],
-            num_proc=args.num_proc,
+            input_columns=[parsed_args.text_column],
+            num_proc=parsed_args.num_proc,
         )
         .map(
             truncate_text,
             batched=True,
             batch_size=10000,
-            input_columns=[args.text_column],
-            num_proc=args.num_proc,
+            input_columns=[parsed_args.text_column],
+            num_proc=parsed_args.num_proc,
         )
     )
-    ds.push_to_hub(args.hub_id, private=True)
+    ds.push_to_hub(parsed_args.hub_id, private=True)
 
 
 if __name__ == "__main__":

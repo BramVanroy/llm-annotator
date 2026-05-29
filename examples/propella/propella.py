@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from llm_annotator import (
     Annotator,
     VLLMOfflineClient,
@@ -20,8 +22,12 @@ MODEL_ID_BY_SIZE = {
 }
 
 
-def main(args=None):
-    """Run Propella-based annotation with the canonical Propella prompt."""
+def main(args: list[str] | None = None) -> None:
+    """Run Propella-based annotation with the canonical prompt.
+
+    Args:
+        args: Optional command-line arguments.
+    """
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -94,15 +100,21 @@ def main(args=None):
         default=False,
         help="Whether to sort the dataset by longest text first. Should improve performance but may increase memory usage.",
     )
+    parser.add_argument(
+        "--force-data-preparation",
+        action="store_true",
+        default=False,
+        help="Force regeneration of prepared data.",
+    )
 
-    args = parser.parse_args(args)
+    parsed_args = parser.parse_args(args)
 
-    if args.max_num_samples == -1:
-        args.max_num_samples = None
+    if parsed_args.max_num_samples == -1:
+        parsed_args.max_num_samples = None
 
-    model_id = MODEL_ID_BY_SIZE[args.model_size]
+    model_id = MODEL_ID_BY_SIZE[parsed_args.model_size]
 
-    if args.use_fp8 and "propella-1-0.6b" in model_id:
+    if parsed_args.use_fp8 and "propella-1-0.6b" in model_id:
         raise ValueError(
             "--use-fp8 is only supported for model sizes 1.7b and 4b."
         )
@@ -113,54 +125,65 @@ def main(args=None):
     prompt_template = ANNOTATOR_USER_PROMPT
     system_message = annotator_system_prompt
 
-    hub_id = args.hub_id
+    hub_id = parsed_args.hub_id
 
-    options = VLLMOfflineRuntimeOptions(max_tokens=args.max_tokens)
+    options = VLLMOfflineRuntimeOptions(max_tokens=parsed_args.max_tokens)
 
-    quantization = "fp8" if args.use_fp8 else None
-    extra_vllm_kwargs = {"kv_cache_dtype": "fp8"} if args.use_fp8 else None
+    quantization = "fp8" if parsed_args.use_fp8 else None
+    extra_vllm_kwargs = (
+        {"kv_cache_dtype": "fp8"} if parsed_args.use_fp8 else None
+    )
 
     client = VLLMOfflineClient(
         model=model_id,
-        max_model_len=args.max_model_len,
-        max_num_seqs=args.max_num_seqs,
-        batch_size=args.max_num_seqs,
-        gpu_memory_utilization=args.gpu_memory_utilization,
+        max_model_len=parsed_args.max_model_len,
+        max_num_seqs=parsed_args.max_num_seqs,
+        batch_size=parsed_args.max_num_seqs,
+        gpu_memory_utilization=parsed_args.gpu_memory_utilization,
         quantization=quantization,
         extra_vllm_kwargs=extra_vllm_kwargs,
     )
 
-    if args.max_num_samples is None:
+    if parsed_args.max_num_samples is None:
         upload_every_n_samples = 2_500
     else:
-        upload_every_n_samples = max(1, args.max_num_samples // 4)
+        upload_every_n_samples = max(1, parsed_args.max_num_samples // 4)
 
     kwargs = {
         "client": client,
         "verbose": True,
-        "batch_size": args.max_num_seqs,
+        "batch_size": parsed_args.max_num_seqs,
     }
 
     # Do not override the default non-None value in the annotator init
-    if args.num_proc is not None:
-        kwargs["num_proc"] = args.num_proc
+    if parsed_args.num_proc is not None:
+        kwargs["num_proc"] = parsed_args.num_proc
 
     with Annotator(**kwargs) as anno:
-        anno.annotate_dataset(
-            output_dir=args.output_dir,
+        prepared_dataset, _, _ = anno.prepare_data(
+            output_dir=parsed_args.output_dir,
             prompt_template=prompt_template,
-            dataset_name=args.dataset,
-            dataset_config=args.dataset_config,
-            dataset_split=args.dataset_split,
+            dataset_name=parsed_args.dataset,
+            dataset_config=parsed_args.dataset_config,
+            dataset_split=parsed_args.dataset_split,
+            max_num_samples=parsed_args.max_num_samples,
+            system_message=system_message,
+            prompt_field_swapper={"content": parsed_args.text_column},
+            sort_by_length=parsed_args.sort_by_length,
+            prepared_hub_id=hub_id,
+            force_data_preparation=parsed_args.force_data_preparation,
+        )
+
+        anno.run_annotation(
+            output_dir=parsed_args.output_dir,
+            prompt_template=prompt_template,
+            prepared_dataset=prepared_dataset,
             new_hub_id=hub_id,
-            max_num_samples=args.max_num_samples,
             keep_columns=True,
             upload_every_n_samples=upload_every_n_samples,
             options=options,
             output_schema=output_schema,
             system_message=system_message,
-            prompt_field_swapper={"content": args.text_column},
-            sort_by_length=args.sort_by_length,
         )
 
 

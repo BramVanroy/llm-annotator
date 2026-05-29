@@ -5,6 +5,7 @@ from typing import Any, cast
 
 import pytest
 
+from llm_annotator.clients.base import Response
 from llm_annotator.clients.claude_client import (
     ClaudeClient,
     ClaudeRuntimeOptions,
@@ -78,6 +79,61 @@ def test_claude_generate_builds_payload_and_parses_response(
     assert response.text == "first line\nsecond line"
 
 
+def test_claude_runtime_options_to_payload() -> None:
+    # Verifies optional Claude runtime fields are emitted in the payload.
+    payload = ClaudeRuntimeOptions(
+        max_tokens=11,
+        effort="high",
+        thinking_type="enabled",
+        thinking_budget=2048,
+        thinking_display="full",
+    ).to_payload()
+
+    assert payload == {
+        "max_tokens": 11,
+        "output_config": {"effort": "high"},
+        "thinking": {
+            "type": "enabled",
+            "budget_tokens": 2048,
+            "display": "full",
+        },
+    }
+
+
+def test_claude_process_response_handles_mixed_blocks_and_error(
+    fake_anthropic_module: dict[str, Any],
+) -> None:
+    # Verifies non-text blocks are skipped and stop-reason failures become error responses.
+    _ = fake_anthropic_module
+    client = object.__new__(ClaudeClient)
+    client.model = "claude-test"
+    client.max_workers = 1
+    client.on_error = "ignore"
+    client._logger = cast(
+        Any,
+        types.SimpleNamespace(
+            warning=lambda _msg: None, debug=lambda _msg: None
+        ),
+    )
+
+    response = types.SimpleNamespace(
+        usage=types.SimpleNamespace(output_tokens=9),
+        stop_reason="max_tokens",
+        model="claude-fake",
+        content=[
+            types.SimpleNamespace(type="text", text="first"),
+            types.SimpleNamespace(type="tool_use", text="ignore"),
+            types.SimpleNamespace(type="text", text="second"),
+        ],
+    )
+
+    parsed = client._process_response(response)  # type: ignore[arg-type]
+
+    assert parsed.text == "first\nsecond"
+    assert parsed.error is not None
+    assert parsed.stop_reason == "max_tokens"
+
+
 def test_claude_generate_request_error_returns_error_response(
     fake_anthropic_module: dict[str, Any],
 ) -> None:
@@ -89,6 +145,60 @@ def test_claude_generate_request_error_returns_error_response(
 
     assert response.error is not None
     assert response.error_type == "ProviderError"
+
+
+def test_claude_batch_generate_handles_worker_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Verifies exceptions raised inside worker tasks are converted to error responses.
+    client = object.__new__(ClaudeClient)
+    client.model = "claude-test"
+    client.max_workers = 2
+    client.on_error = "ignore"
+    client._logger = cast(
+        Any,
+        types.SimpleNamespace(
+            warning=lambda _msg: None, debug=lambda _msg: None
+        ),
+    )
+    client._client = cast(
+        Any,
+        types.SimpleNamespace(
+            messages=types.SimpleNamespace(
+                batches=types.SimpleNamespace(cancel=lambda _batch_id: None)
+            )
+        ),
+    )
+    client._running_batch_ids = set()
+
+    def _generate(
+        self: ClaudeClient,
+        *,
+        messages: list[dict[str, str]],
+        options: ClaudeRuntimeOptions | None = None,
+        gen_kwargs: dict[str, Any] | None = None,
+    ) -> Response:
+        _ = options
+        _ = gen_kwargs
+        if messages[0]["content"] == "bad":
+            raise RuntimeError("boom")
+        return Response(
+            text=messages[0]["content"],
+            provider=self.provider_type,
+            model=self.model,
+        )
+
+    monkeypatch.setattr(ClaudeClient, "generate", _generate)
+
+    responses = client.batch_generate(
+        messages=[
+            [{"role": "user", "content": "good"}],
+            [{"role": "user", "content": "bad"}],
+        ]
+    )
+
+    assert responses[0].text == "good"
+    assert responses[1].error is not None
 
 
 @pytest.mark.parametrize("stop_reason", [None, "end_turn", "stop_sequence"])

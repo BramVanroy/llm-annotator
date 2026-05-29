@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import dataclasses
-import inspect
 import json
 import shutil
 import string
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from functools import wraps
 from math import ceil
 from os import cpu_count
@@ -21,7 +20,7 @@ from datasets import (
 from huggingface_hub import (
     create_branch,
     create_repo,
-    snapshot_download,
+    delete_branch,
     upload_large_folder,
 )
 from tqdm import tqdm
@@ -42,6 +41,8 @@ from llm_annotator.utils import (
 # Set a sensible default: cpu_count-1 cores
 # but at least 1 at most 8 to avoid overloading the system
 DEFAULT_CPU_COUNT = min(8, max(1, (cpu_count() or 1) - 1))
+
+CACHED_DATASET_BRANCH = "prepared_cache"
 
 
 def destroy_on_error(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -82,10 +83,24 @@ class Annotator:
     dataset loading, processing, and output generation with support for batching
     and uploading to Hugging Face Hub.
 
-    The ``Annotator`` class offers two main public methods:
+    The ``Annotator`` class has four public entry points:
 
-    * :meth:`annotate_dataset` — annotate an existing dataset.
-    * :meth:`generate_dataset` — generate a brand-new dataset from a prompt.
+        * :meth:`prepare_data`. Apply prompt templates, sorting, and caching
+            without running inference. Backs prepared artifacts up to Hugging Face
+            Hub if ``prepared_hub_id`` is provided.
+        * :meth:`run_annotation`. Run inference only, consuming data returned by
+            :meth:`prepare_data` or loaded from a local path or Hub repo.
+        * :meth:`annotate_dataset`. Convenience wrapper that calls
+            :meth:`prepare_data` and then :meth:`run_annotation` in one call.
+        * :meth:`generate_dataset`. Generate a new dataset from scratch by calling
+            :meth:`annotate_dataset` over a synthetic prompt dataset.
+
+    The staged :meth:`prepare_data` + :meth:`run_annotation` pattern is
+    recommended for large-scale or cluster (SLURM) workflows. When
+    ``prepared_hub_id`` is provided, prepared artifacts are stored on
+    Hugging Face Hub and restored automatically on the next call, so a
+    failed generation job can be restarted without repeating the
+    preparation step.
 
     Args:
         client: An initialised :class:`~llm_annotator.clients.base.Client`
@@ -165,7 +180,7 @@ class Annotator:
             Set of indices that have already been processed.
         """
         ids_done = set()
-        if pdout.exists() and pdout.stat().st_size > 0:
+        if pdout.exists() and pdout.is_dir():
             for pfin in pdout.glob("*.jsonl"):
                 if pfin.stat().st_size == 0:
                     continue
@@ -181,6 +196,11 @@ class Annotator:
                         lambda s: s["dataset_config"] == dataset_config
                     )
 
+                if idx_column not in ds.column_names:
+                    raise ValueError(
+                        f"Expected index column '{idx_column}' not found in existing output file '{pfin}'."
+                        " Cannot determine which samples to skip on resume. Please check your configuration and ensure the index column is included in the output."
+                    )
                 ids_done.update(ds.unique(idx_column))
 
         return ids_done
@@ -189,7 +209,6 @@ class Annotator:
         self,
         *,
         prompt_template: str,
-        pdout: Path,
         idx_column: str,
         dataset_name: str | None = None,
         dataset: Dataset | None = None,
@@ -198,14 +217,13 @@ class Annotator:
         dataset_split: str | None = None,
         max_num_samples: int | None = None,
         shuffle_seed: int | None = None,
-        cache_input_dataset: bool = True,
-        use_cached_input_dataset: bool = True,
         prompt_fields: Iterable[str] = (),
         task_prefix: str = "",
         sort_by_length: bool
         | Literal["shortest_first", "longest_first"] = False,
         system_message: str | None = None,
-    ) -> tuple[Dataset, int]:
+        preprocess_fn: Callable | None = None,
+    ) -> Dataset:
         """Load and preprocess the dataset for annotation.
 
         Handles dataset loading from various sources, applies prompt templates,
@@ -214,14 +232,11 @@ class Annotator:
         Args:
             dataset_name: Name or path of the dataset to load.
             dataset: Pre-loaded dataset to use instead of loading from name/path.
-            pdout: Output directory for caching and results.
             dataset_config: Dataset configuration name (optional).
             data_dir: Data directory for local datasets (optional).
             dataset_split: Specific split to load (optional).
             max_num_samples: Maximum number of samples to process.
             shuffle_seed: Seed for dataset shuffling (optional).
-            cache_input_dataset: Whether to cache the input dataset.
-            use_cached_input_dataset: Whether to use a cached input dataset if available.
             prompt_fields: Fields required by the prompt template.
             task_prefix: String prefix to use for internal column names and file operations.
             sort_by_length: Whether to sort the dataset by prompt length for more efficient batching.
@@ -229,11 +244,10 @@ class Annotator:
                 If set to True, defaults to longest first as that makes most sense to avoid OOM errors
                 down the line.
             system_message: Optional system message to add as "system" role in chat prompts.
+            preprocess_fn: Optional function to preprocess the dataset after loading and before applying the prompt template.
 
         Returns:
-            A tuple containing:
-                - The loaded and preprocessed dataset ready for annotation.
-                - The number of samples that were skipped because they were already processed.
+            The loaded and preprocessed dataset ready for annotation.
 
         Raises:
             ValueError: If configuration is invalid or required fields are missing.
@@ -285,123 +299,86 @@ class Annotator:
                     f"Dataset '{dataset_name}' does not have a split named '{dataset_split}'"
                 )
 
-        pdout = Path(pdout)
-        p_cached_input_ds = pdout / f"{task_prefix}cached_input_dataset"
-
-        # If exists and not empty, try to load from cache.
-        loaded_ds = None
-        if (
-            use_cached_input_dataset
-            and p_cached_input_ds.exists()
-            and p_cached_input_ds.stat().st_size > 0
-        ):
-            loaded_ds = Dataset.load_from_disk(p_cached_input_ds)
-
-        # Always prefer a locally cached dataset if available
-        if loaded_ds is not None:
-            dataset = loaded_ds
-        else:
-            if dataset is None:
-                dataset = load_dataset(
-                    dataset_name,
-                    name=dataset_config,
-                    data_dir=data_dir,
-                    split=dataset_split,
-                )
-
-            if shuffle_seed is not None:
-                dataset = dataset.shuffle(seed=shuffle_seed)
-
-            if max_num_samples:
-                dataset = dataset.select(
-                    range(min(max_num_samples, len(dataset)))
-                )
-
-            # Validate that the dataset contains all fields required by the
-            # prompt template. Tests expect a ValueError when a required
-            # field is missing.
-            if dataset is not None and prompt_fields:
-                missing = [
-                    fld
-                    for fld in prompt_fields
-                    if fld not in dataset.column_names
-                ]
-                if missing:
-                    raise ValueError(
-                        f"Template contains field '{missing[0]}' not present in dataset."
-                        f" Available columns: {dataset.column_names}"
-                    )
-
-            dataset = self._preprocess_dataset(dataset=dataset)
-
-            dataset = dataset.map(
-                self._create_messages,
-                with_indices=True,
-                num_proc=self.num_proc,
-                fn_kwargs={
-                    "prompt_fields": prompt_fields,
-                    "prompt_template": prompt_template,
-                    "idx_column": idx_column,
-                    "task_prefix": task_prefix,
-                    "system_message": system_message,
-                },
-                desc="Applying prompt template",
+        if dataset is None:
+            dataset = load_dataset(
+                dataset_name,
+                name=dataset_config,
+                data_dir=data_dir,
+                split=dataset_split,
             )
 
-            if sort_by_length:
-                if self.verbose:
-                    self._logger.info(
-                        "Sorting dataset roughly by prompt length for more efficient batching (longest first)..."
-                    )
-                dataset = dataset.map(
-                    lambda msgs: {
-                        f"{task_prefix}messages_chars": len(json.dumps(msgs))
-                    },
-                    num_proc=self.num_proc,
-                    input_columns=[f"{task_prefix}messages"],
+        # Add index column for tracking samples and resuming interrupted runs
+        if idx_column in dataset.column_names:
+            raise ValueError(
+                f"Dataset already contains a column named '{idx_column}'."
+                " Please specify a different 'idx_column' name that does not exist in the dataset."
+            )
+
+        dataset = dataset.add_column(idx_column, list(range(len(dataset))))
+
+        if shuffle_seed is not None:
+            dataset = dataset.shuffle(seed=shuffle_seed)
+
+        if max_num_samples:
+            dataset = dataset.select(range(min(max_num_samples, len(dataset))))
+
+        # Validate that the dataset contains all fields required by the
+        # prompt template. Tests expect a ValueError when a required
+        # field is missing.
+        if dataset is not None and prompt_fields:
+            missing = [
+                fld for fld in prompt_fields if fld not in dataset.column_names
+            ]
+            if missing:
+                raise ValueError(
+                    f"Template contains field '{missing[0]}' not present in dataset."
+                    f" Available columns: {dataset.column_names}"
                 )
-                # Sort by longest first to trigger OOM as soon as possible
-                if sort_by_length == "shortest_first":
-                    do_reverse = False
-                else:
-                    do_reverse = True
 
-                dataset = dataset.sort(
-                    f"{task_prefix}messages_chars", reverse=do_reverse
-                ).remove_columns([f"{task_prefix}messages_chars"])
+        if preprocess_fn is not None:
+            dataset = preprocess_fn(dataset=dataset)
 
-            if cache_input_dataset:
-                dataset.save_to_disk(p_cached_input_ds)
-
-        skip_idxs = self._get_skip_idxs(
-            pdout=pdout,
-            idx_column=idx_column,
-            dataset_split=dataset_split,
-            dataset_config=dataset_config,
+        dataset = dataset.map(
+            self._create_messages,
+            num_proc=self.num_proc,
+            fn_kwargs={
+                "prompt_fields": prompt_fields,
+                "prompt_template": prompt_template,
+                "task_prefix": task_prefix,
+                "system_message": system_message,
+            },
+            desc="Applying prompt template",
         )
-        processed_n_samples = 0
-        if skip_idxs:
-            dataset = dataset.filter(
-                lambda s: s[idx_column] not in skip_idxs,
-                num_proc=self.num_proc,
-                desc="Filtering done idxs",
-            )
-            processed_n_samples = len(skip_idxs)
+
+        if sort_by_length:
             if self.verbose:
                 self._logger.info(
-                    f"Skipping {len(skip_idxs):,} already-processed samples"
+                    "Sorting dataset roughly by prompt length for more efficient batching (longest first)..."
                 )
+            dataset = dataset.map(
+                lambda msgs: {
+                    f"{task_prefix}messages_chars": len(json.dumps(msgs))
+                },
+                num_proc=self.num_proc,
+                input_columns=[f"{task_prefix}messages"],
+            )
+            # Sort by longest first to trigger OOM as soon as possible
+            if sort_by_length == "shortest_first":
+                do_reverse = False
+            else:
+                do_reverse = True
 
-        dataset = self._postprocess_dataset(dataset=dataset)
-        return dataset, processed_n_samples
+            dataset = dataset.sort(
+                f"{task_prefix}messages_chars", reverse=do_reverse
+            ).remove_columns([f"{task_prefix}messages_chars"])
+
+        return dataset
 
     def _create_messages(
         self,
         sample: dict,
-        idx: int,
         prompt_fields: Iterable[str],
         prompt_template: str,
-        idx_column: str,
         task_prefix: str,
         system_message: str | None = None,
     ) -> dict[str, Any]:
@@ -410,10 +387,8 @@ class Annotator:
 
         Args:
             sample: The dataset sample to process.
-            idx: The index of the sample in the dataset.
             prompt_fields: Fields required by the prompt template.
             prompt_template: The prompt template string with placeholders.
-            idx_column: Column name to use as unique identifier.
             task_prefix: String prefix to use for internal column names.
             system_message: Optional system message to add as "system" role in chat prompts.
 
@@ -430,8 +405,7 @@ class Annotator:
                             **{fld: sample[fld] for fld in prompt_fields}
                         ),
                     },
-                ],
-                idx_column: idx,
+                ]
             }
         else:
             return {
@@ -442,37 +416,8 @@ class Annotator:
                             **{fld: sample[fld] for fld in prompt_fields}
                         ),
                     }
-                ],
-                idx_column: idx,
+                ]
             }
-
-    def _preprocess_dataset(self, *, dataset: Dataset) -> Dataset:
-        """Preprocess the dataset before applying prompt templates.
-
-        Override this method to add custom preprocessing logic such as
-        filtering, transforming columns, or adding metadata.
-
-        Args:
-            dataset: The loaded dataset to preprocess.
-
-        Returns:
-            The preprocessed dataset.
-        """
-        return dataset
-
-    def _postprocess_dataset(self, *, dataset: Dataset) -> Dataset:
-        """Postprocess the dataset after applying prompt templates.
-
-        Override this method to add final processing steps before annotation
-        such as additional filtering or column transformations.
-
-        Args:
-            dataset: The dataset with applied prompt templates.
-
-        Returns:
-            The postprocessed dataset ready for annotation.
-        """
-        return dataset
 
     def _process_output(
         self,
@@ -620,149 +565,206 @@ class Annotator:
 
         return results
 
-    @destroy_on_error
-    def annotate_dataset(
+    def prepare_data(
         self,
         output_dir: str | Path,
         prompt_template: str,
         *,
         dataset_name: str | None = None,
         dataset: Dataset | None = None,
-        resume_from_hub_id: str | None = None,
-        new_hub_id: str | None = None,
-        overwrite: bool = False,
         dataset_config: str | None = None,
         data_dir: str | None = None,
         dataset_split: str | None = None,
-        keep_columns: str | Iterable[str] | bool | None = None,
-        shuffle_seed: int | None = None,
-        options: ProviderRuntimeOptions | None = None,
         max_num_samples: int | None = None,
-        cache_input_dataset: bool = True,
-        use_cached_input_dataset: bool = True,
+        shuffle_seed: int | None = None,
+        preprocess_fn: Callable | None = None,
         prompt_field_swapper: dict[str, str] | None = None,
+        idx_column: str = "idx",
+        task_prefix: str = "",
+        sort_by_length: bool
+        | Literal["shortest_first", "longest_first"] = False,
+        system_message: str | None = None,
+        prepared_hub_id: str | None = None,
+        force_data_preparation: bool = False,
+    ) -> tuple[Dataset, Path | None, str | None]:
+        """Prepare input data for annotation without running generation.
+
+        The method reuses local prepared data first, then optionally restores
+        prepared data from Hugging Face Hub, and finally falls back to building
+        the prepared dataset from source.
+
+        Args:
+            output_dir: Directory where prepared artifacts are stored.
+            prompt_template: Prompt template used to build chat messages.
+            dataset_name: Name or path of the dataset to load.
+            dataset: Pre-loaded dataset to use instead of loading from name/path.
+            dataset_config: Dataset configuration name (optional).
+            data_dir: Data directory for local datasets (optional).
+            dataset_split: Specific split to load (optional).
+            max_num_samples: Maximum number of samples to prepare.
+            shuffle_seed: Seed for dataset shuffling.
+            preprocess_fn: Optional function to preprocess the dataset after loading and before applying the prompt template.
+            prompt_field_swapper: Optional mapping to replace template fields.
+            idx_column: Column name used as unique identifier. Must not exist in the input dataset.
+            task_prefix: Prefix for internal columns and artifact names.
+            sort_by_length: Whether to sort prompts by length.
+            system_message: Optional system message for chat prompts.
+            prepared_hub_id: Optional Hugging Face dataset ID for prepared-data
+                backup and restore. Will be stored in the "prepared_cache" configuration of the repo if provided.
+            force_data_preparation: Whether to rebuild prepared data even when
+                local or Hub artifacts already exist.
+
+        Returns:
+            Tuple of prepared dataset, local prepared-data path when available,
+            and prepared Hugging Face dataset ID when available.
+        """
+        pdout = Path(output_dir)
+        pdout.mkdir(exist_ok=True, parents=True)
+
+        cached_input_path = pdout / f"{task_prefix}cached_input_dataset"
+
+        prompt_field_swapper = prompt_field_swapper or {}
+        for fld, value in prompt_field_swapper.items():
+            prompt_template = prompt_template.replace(
+                f"{{{fld}}}", f"{{{value}}}"
+            )
+
+        # Attempt loading from local cache at
+        # pdout / f"{task_prefix}cached_input_dataset"
+        if (
+            cached_input_path.exists()
+            and cached_input_path.is_dir()
+            and any(cached_input_path.glob("*"))
+        ):
+            if force_data_preparation:
+                shutil.rmtree(cached_input_path)
+            else:
+                cached_ds = Dataset.load_from_disk(cached_input_path)
+                return cached_ds, cached_input_path, prepared_hub_id
+
+        # Attempt loading from the hub
+        if prepared_hub_id:
+            if force_data_preparation:
+                try:
+                    delete_branch(
+                        prepared_hub_id,
+                        branch=CACHED_DATASET_BRANCH,
+                        repo_type="dataset",
+                    )
+                except Exception:
+                    pass
+            else:
+                cached_ds = load_dataset(
+                    prepared_hub_id,
+                    revision=CACHED_DATASET_BRANCH,
+                    split="train",
+                )
+                return cached_ds, None, prepared_hub_id
+
+        # ... and if all of that fails, prepare the dataset from the source
+        _str_formatter = string.Formatter()
+        prompt_fields = tuple(
+            [
+                fld[1]
+                for fld in _str_formatter.parse(prompt_template)
+                if fld[1] is not None and not fld[2]
+            ]
+        )
+
+        prepared_dataset: Dataset = self._load_dataset(
+            prompt_template=prompt_template,
+            idx_column=idx_column,
+            dataset_name=dataset_name,
+            dataset=dataset,
+            dataset_config=dataset_config,
+            data_dir=data_dir,
+            dataset_split=dataset_split,
+            max_num_samples=max_num_samples,
+            shuffle_seed=shuffle_seed,
+            prompt_fields=prompt_fields,
+            task_prefix=task_prefix,
+            sort_by_length=sort_by_length,
+            system_message=system_message,
+            preprocess_fn=preprocess_fn,
+        )
+
+        self._logger.info(
+            f"Saving prepared data to local cache at '{cached_input_path}' for faster resumption on failure..."
+        )
+        prepared_dataset.save_to_disk(cached_input_path)
+        if prepared_hub_id:
+            self._logger.info(
+                f"Uploading prepared data to Hugging Face Hub at '{prepared_hub_id}' for backup and easy restore..."
+            )
+            prepared_dataset.push_to_hub(
+                prepared_hub_id,
+                revision=CACHED_DATASET_BRANCH,
+                split="train",
+                private=True,
+            )
+
+        return prepared_dataset, cached_input_path, prepared_hub_id
+
+    @destroy_on_error
+    def run_annotation(
+        self,
+        output_dir: str | Path,
+        prompt_template: str,
+        *,
+        prepared_dataset: Dataset | None = None,
+        prepared_data_path: str | Path | None = None,
+        prepared_hub_id: str | None = None,
+        resume_from_hub_id: str | None = None,
+        new_hub_id: str | None = None,
+        overwrite: bool = False,
+        dataset_split: str | None = None,
+        dataset_config: str | None = None,
+        keep_columns: str | Iterable[str] | bool | None = None,
+        options: ProviderRuntimeOptions | None = None,
         output_schema: str | dict[str, Any] | None = None,
         idx_column: str = "idx",
         upload_every_n_samples: int | None = 0,
         max_samples_per_output_file: int = 0,
         task_prefix: str = "",
-        sort_by_length: bool
-        | Literal["shortest_first", "longest_first"] = False,
         validate_fn: Callable | None = None,
         postprocess_fn: Callable | None = None,
         num_retries_invalid: int = 5,
         system_message: str | None = None,
         keep_idx_column: bool = False,
     ) -> Dataset:
-        """Annotate an entire dataset using the configured client and prompt.
-
-        Main entry point for dataset annotation. Handles the complete pipeline
-        from dataset loading through model inference to output generation.
+        """Run model generation on already prepared annotation inputs.
 
         Args:
-            output_dir: Directory to save annotation results.
-            prompt_template: Prompt template string. Can contain fields in ``{}``
-                that match dataset column names, e.g. ``"Analyse the following text: {text}"``.
-            dataset_name: Name or path of the dataset to annotate.
-            dataset: Pre-loaded dataset to use instead of loading from name/path.
+            output_dir: Directory where annotation output is written.
+            prompt_template: Prompt template used for warm-up metadata.
+            prepared_dataset: Pre-prepared dataset with messages column.
+            prepared_data_path: Local path to prepared data on disk.
+            prepared_hub_id: Hugging Face dataset ID with prepared data.
             resume_from_hub_id: Optional Hugging Face dataset ID to restore
-                checkpoint files from before resuming locally.
-            new_hub_id: Optional Hugging Face dataset ID for uploads.
+                generation checkpoints from.
+            new_hub_id: Optional Hugging Face dataset ID for generation uploads.
             overwrite: Whether to overwrite existing output directory.
-            dataset_config: Dataset configuration name (optional).
-            data_dir: Data directory for local datasets (optional).
-            dataset_split: Specific split to annotate (optional).
-            keep_columns: Columns to keep in output. ``True`` for all, ``None``/falsy for none.
-            shuffle_seed: Seed for dataset shuffling (optional).
-            options: Runtime options passed to the client for generation.
-            max_num_samples: Maximum number of samples to annotate.
-            cache_input_dataset: Whether to cache the input dataset.
-            use_cached_input_dataset: Whether to use a cached input dataset if available.
-            prompt_field_swapper: Optional mapping to replace template fields.
-            output_schema: Convenience parameter: JSON schema dict or JSON string. When
-                provided, it is injected into ``options.json_schema`` (creating a new
-                :class:`~llm_annotator.clients.base.ProviderRuntimeOptions` if ``options``
-                is ``None``). Raises ``ValueError`` if both ``output_schema`` and
-                ``options.json_schema`` are set.
-            idx_column: Column name to use as unique identifier.
-            upload_every_n_samples: Upload to hub every N samples (0 or None to disable).
-            max_samples_per_output_file: Maximum samples per output file (0 for unlimited).
-            task_prefix: String prefix to use for internal column names and file operations.
-            sort_by_length: Whether to sort the dataset by prompt length for more efficient batching.
+            dataset_split: Dataset split used for skip filtering.
+            dataset_config: Dataset config used for skip filtering.
+            keep_columns: Columns to keep in output. ``True`` for all.
+            options: Runtime options passed to the client.
+            output_schema: Convenience JSON schema input. When provided, it is
+                injected into ``options.json_schema``.
+            idx_column: Column name used as unique identifier.
+            upload_every_n_samples: Upload to Hub every N samples.
+            max_samples_per_output_file: Maximum samples per output file.
+            task_prefix: Prefix for internal columns and file names.
             validate_fn: Optional custom validation function.
-            postprocess_fn: Optional function to postprocess each sample after annotation.
-            num_retries_invalid: Number of retries for samples that produce invalid outputs.
-            system_message: Optional system message to add as "system" role in chat prompts.
-            keep_idx_column: Whether to keep the idx_column in the final dataset.
+            postprocess_fn: Optional postprocessing function that takes in a sample and must return a dict.
+            num_retries_invalid: Number of retries for invalid outputs.
+            system_message: Optional system message for chat prompts.
+            keep_idx_column: Whether to keep idx column in final dataset.
 
         Returns:
-            The concatenated dataset of all annotation results (JSON-invalid samples are NOT removed)
+            Final concatenated annotation dataset.
 
-        Examples:
-            Basic sentiment classification with structured output:
-
-            >>> from llm_annotator import Annotator, OpenAIClient
-            >>>
-            >>> # Define prompt template and output schema
-            >>> output_schema = {
-            ...     "type": "object",
-            ...     "properties": {"sentiment": {"type": "string"}},
-            ... }  # doctest: +SKIP
-            >>> with Annotator(
-            ...     model="meta-llama/Llama-3.2-3B-Instruct",
-            ...     max_model_len=4096,
-            ... ) as anno:  # doctest: +SKIP
-            ...     ds = anno.annotate_dataset(
-            ...         output_dir="outputs/sentiment-imdb",
-            ...         prompt_template="Classify: {text}",
-            ...         dataset_name="stanfordnlp/imdb",
-            ...         dataset_split="test",
-            ...         max_num_samples=100,
-            ...         output_schema=output_schema,
-            ...         keep_columns=["text", "label"],
-            ...         sort_by_length=True,
-            ...     )
-
-            Advanced usage with streaming and Hub uploads:
-
-            >>> with Annotator(
-            ...     model="meta-llama/Llama-3.2-3B-Instruct", verbose=True
-            ... ) as anno:  # doctest: +SKIP
-            ...     ds = anno.annotate_dataset(
-            ...         output_dir="outputs/large-dataset",
-            ...         prompt_template="Translate to French: {text}",
-            ...         dataset_name="wmt14",
-            ...         dataset_config="fr-en",
-            ...         dataset_split="train",
-            ...         streaming=True,
-            ...         max_num_samples=10000,
-            ...         new_hub_id="username/translated-dataset",
-            ...         upload_every_n_samples=1000,
-            ...         cache_input_dataset=True,
-            ...     )
-
-            Using custom validation and postprocessing:
-
-            >>> def validate_translation(sample):  # doctest: +SKIP
-            ...     # Custom validation: check if translation is not empty
-            ...     return bool(sample.get("response", "").strip())
-            >>> def postprocess_sample(sample):  # doctest: +SKIP
-            ...     # Strip whitespace from response
-            ...     if "response" in sample:
-            ...         sample["response"] = sample["response"].strip()
-            ...     return sample
-            >>> with Annotator(
-            ...     model="meta-llama/Llama-3.2-3B-Instruct"
-            ... ) as anno:  # doctest: +SKIP
-            ...     ds = anno.annotate_dataset(
-            ...         output_dir="outputs/validated",
-            ...         prompt_template="Translate: {text}",
-            ...         dataset_name="opus100",
-            ...         dataset_split="train",
-            ...         validate_fn=validate_translation,
-            ...         postprocess_fn=postprocess_sample,
-            ...         num_retries_invalid=3,
-            ...     )
+        Raises:
+            ValueError: If no prepared data source can be resolved.
         """
         if resume_from_hub_id is not None:
             if not resume_from_hub_id.strip() or "/" not in resume_from_hub_id:
@@ -776,19 +778,6 @@ class Annotator:
                 )
 
         upload_every_n_samples = upload_every_n_samples or 0
-
-        prompt_template_prefix = extract_prompt_prefix(prompt_template)
-
-        # If shuffle_seed and sorting by length, warn that shuffling will be
-        # effectively disabled
-        if shuffle_seed is not None and sort_by_length:
-            self._logger.warning(
-                "Warning: 'shuffle_seed' is set but 'sort_by_length' is also set."
-                " After processing the full dataset (sorted by length), the order"
-                " will therefore be restored to the shuffled order, NOT the original order."
-            )
-
-        # Verify 'max_samples_per_output_file'
         if (
             max_samples_per_output_file is not None
             and max_samples_per_output_file < 0
@@ -798,149 +787,17 @@ class Annotator:
             )
         max_samples_per_output_file = max_samples_per_output_file or 0
 
-        # Verify 'upload_every_n_samples' and 'new_hub_id'
         if upload_every_n_samples < 0 or not isinstance(
             upload_every_n_samples, int
         ):
             raise ValueError(
                 "upload_every_n_samples must be a positive integer or 0"
             )
-        elif upload_every_n_samples > 0 and not new_hub_id:
+        if upload_every_n_samples > 0 and not new_hub_id:
             raise ValueError(
                 "If upload_every_n_samples is set, new_hub_id must be provided"
             )
 
-        # Verify and normalize 'keep_columns'
-        if not keep_columns:
-            keep_columns = set()
-        elif isinstance(keep_columns, str):
-            keep_columns = {keep_columns}
-        elif keep_columns is True:
-            # Redundant but makes it clearer that the value can be True
-            keep_columns = True
-        else:
-            try:
-                keep_columns = set(keep_columns)
-            except TypeError as exc:
-                raise TypeError(
-                    "keep_columns must be None, True, a string, or a collection of strings"
-                ) from exc
-
-        # Always keep idx_column
-        if isinstance(keep_columns, set):
-            keep_columns.add(idx_column)
-
-        prompt_field_swapper = prompt_field_swapper or {}
-
-        for fld, value in prompt_field_swapper.items():
-            prompt_template = prompt_template.replace(
-                f"{{{fld}}}", f"{{{value}}}"
-            )
-
-        _str_formatter = string.Formatter()
-        prompt_fields = tuple(
-            [
-                fld[1]
-                for fld in _str_formatter.parse(prompt_template)
-                if fld[1] is not None and not fld[2]
-            ]
-        )
-
-        # Set up output directory
-        pdout = Path(output_dir)
-        if pdout.is_dir() and overwrite:
-            shutil.rmtree(pdout)
-        pdout.mkdir(exist_ok=True, parents=True)
-
-        if resume_from_hub_id:
-            self.pull_checkpoint_from_hub(
-                checkpoint_hub_id=resume_from_hub_id,
-                dir_path=pdout,
-                task_prefix=task_prefix,
-            )
-
-        pdout.joinpath("_version.json").write_text(
-            json.dumps(get_lib_versions(), indent=4), encoding="utf-8"
-        )
-
-        def _serialize():
-            _client_params: dict[str, Any] = {}
-            _seen_params: set[str] = set()
-            for _cls in type(self.client).__mro__:
-                _init = vars(_cls).get("__init__")
-                if _init is None:
-                    continue
-                for _pname in inspect.signature(_init).parameters:
-                    if _pname == "self" or _pname in _seen_params:
-                        continue
-                    _seen_params.add(_pname)
-                    if hasattr(self.client, _pname):
-                        _client_params[_pname] = getattr(self.client, _pname)
-                    elif hasattr(self.client, f"_{_pname}"):
-                        _client_params[_pname] = getattr(
-                            self.client, f"_{_pname}"
-                        )
-
-            return {
-                "init": {
-                    **{
-                        f.name: getattr(self, f.name)
-                        for f in dataclasses.fields(self)
-                        if f.name != "client" and f.init
-                    },
-                    "client": {
-                        "type": type(self.client).__name__,
-                        **_client_params,
-                    },
-                },
-                "annotate_dataset": {
-                    "output_dir": str(output_dir),
-                    "prompt_template": prompt_template,
-                    "dataset_name": dataset_name,
-                    "dataset": repr(dataset) if dataset is not None else None,
-                    "resume_from_hub_id": resume_from_hub_id,
-                    "new_hub_id": new_hub_id,
-                    "overwrite": overwrite,
-                    "dataset_config": dataset_config,
-                    "data_dir": data_dir,
-                    "dataset_split": dataset_split,
-                    "keep_columns": sorted(str(x) for x in keep_columns)
-                    if isinstance(keep_columns, set)
-                    else keep_columns,
-                    "shuffle_seed": shuffle_seed,
-                    "options": asdict(options)
-                    if options is not None
-                    else None,
-                    "max_num_samples": max_num_samples,
-                    "cache_input_dataset": cache_input_dataset,
-                    "use_cached_input_dataset": use_cached_input_dataset,
-                    "prompt_field_swapper": prompt_field_swapper,
-                    "output_schema": output_schema,
-                    "idx_column": idx_column,
-                    "upload_every_n_samples": upload_every_n_samples,
-                    "max_samples_per_output_file": max_samples_per_output_file,
-                    "task_prefix": task_prefix,
-                    "sort_by_length": sort_by_length,
-                    "validate_fn": getattr(validate_fn, "__qualname__", None),
-                    "postprocess_fn": getattr(
-                        postprocess_fn, "__qualname__", None
-                    ),
-                    "num_retries_invalid": num_retries_invalid,
-                    "system_message": system_message,
-                    "keep_idx_column": keep_idx_column,
-                },
-            }
-
-        pdout.joinpath("_annotator_config.json").write_text(
-            json.dumps(_serialize(), indent=4),
-            encoding="utf-8",
-        )
-
-        # Push initial empty dir with versions file to hub
-        if new_hub_id:
-            self.push_dir_to_hub(pdout, new_hub_id=new_hub_id)
-
-        # Inject output_schema into options if provided
         if output_schema is not None:
             if isinstance(output_schema, str):
                 output_schema = json.loads(output_schema)
@@ -950,60 +807,191 @@ class Annotator:
                 raise ValueError(
                     "Provide 'output_schema' OR set 'options.json_schema', not both."
                 )
+            # Inject the output_schema into options for use in _process_output
             options = dataclasses.replace(
                 options or ProviderRuntimeOptions(),
                 json_schema=output_schema,
             )
 
-        dataset, processed_n_samples = self._load_dataset(
-            prompt_template=prompt_template,
-            idx_column=idx_column,
-            pdout=pdout,
-            dataset_name=dataset_name,
-            dataset=dataset,
-            dataset_config=dataset_config,
-            data_dir=data_dir,
-            dataset_split=dataset_split,
-            max_num_samples=max_num_samples,
-            shuffle_seed=shuffle_seed,
-            cache_input_dataset=cache_input_dataset,
-            use_cached_input_dataset=use_cached_input_dataset,
-            prompt_fields=prompt_fields,
-            task_prefix=task_prefix,
-            sort_by_length=sort_by_length,
-            system_message=system_message,
-        )
-        if len(dataset) > 0:
-            pfout = self.get_pfout_name(
-                pdout=pdout,
-                max_samples_per_output_file=max_samples_per_output_file,
-                processed_n_samples=processed_n_samples,
-            )
-            fhout = pfout.open("a", encoding="utf-8")
+        if not keep_columns:
+            keep_columns = set()
+        elif isinstance(keep_columns, str):
+            keep_columns = {keep_columns}
+        elif keep_columns is True:
+            keep_columns = True
+        else:
+            try:
+                keep_columns = set(keep_columns)
+            except TypeError as exc:
+                raise TypeError(
+                    "keep_columns must be None, True, a string, or a collection of strings"
+                ) from exc
 
-            self.client.warm_up(
-                system_message=system_message,
-                prompt_prefix=prompt_template_prefix,
-                options=options,
-            )
+        if isinstance(keep_columns, set):
+            keep_columns.add(idx_column)
 
-            total_num_batches = ceil(len(dataset) / self.batch_size)
-            for batch in tqdm(
-                dataset.iter(self.batch_size),
-                total=total_num_batches,
-                desc=f"Annotating (max_bs={self.batch_size})",
-                unit="batch",
-            ):
-                results = self._process_batch(
-                    batch=batch,
-                    options=options,
-                    task_prefix=task_prefix,
-                    validate_fn=validate_fn,
-                    postprocess_fn=postprocess_fn,
+        pdout = Path(output_dir)
+
+        if prepared_dataset is None and prepared_hub_id:
+            try:
+                prepared_dataset = load_dataset(
+                    prepared_hub_id,
+                    revision=CACHED_DATASET_BRANCH,
+                    split="train",
+                )
+            except Exception as exc:
+                self._logger.warning(
+                    f"Failed to load prepared dataset from Hub ID '{prepared_hub_id}' with revision '{CACHED_DATASET_BRANCH}'."
+                    f" This might be because the dataset or revision does not exist, or due to network issues. Error: {exc}"
                 )
 
-                if num_retries_invalid > 0:
-                    # Identify invalid samples
+        prepared_path = (
+            Path(prepared_data_path) if prepared_data_path else None
+        )
+        if prepared_dataset is None and prepared_data_path:
+            try:
+                prepared_dataset = Dataset.load_from_disk(prepared_path)
+            except Exception as exc:
+                self._logger.warning(
+                    f"Failed to load prepared dataset from local path '{prepared_data_path}'."
+                    f" This might be because the file does not exist or is not a valid dataset. Error: {exc}"
+                )
+
+        if prepared_dataset is None:
+            raise ValueError(
+                "No prepared data found. Provide 'prepared_dataset', "
+                "'prepared_data_path' (locally saved dataset), or 'prepared_hub_id' (cloud-saved dataset)."
+            )
+
+        if idx_column not in prepared_dataset.column_names:
+            raise ValueError(
+                f"Expected index column '{idx_column}' not found in prepared dataset."
+                " This column is required for tracking processed samples and resuming on failure."
+                " Please ensure the prepared dataset includes the index column with name matching 'idx_column' argument."
+            )
+
+        # Only empty the output directory after potentially reading the cached input
+        if pdout.is_dir() and overwrite:
+            # Remove everything except the prepared data
+            for item in pdout.glob("*"):
+                if item.is_dir() and item != prepared_data_path:
+                    shutil.rmtree(item)
+                else:
+                    item.unlink()
+
+        pdout.mkdir(exist_ok=True, parents=True)
+
+        # Add version info
+        pdout.joinpath("_version.json").write_text(
+            json.dumps(get_lib_versions(), indent=4), encoding="utf-8"
+        )
+
+        # Get indices from the local
+        skip_idxs = self._get_skip_idxs(
+            pdout=pdout,
+            idx_column=idx_column,
+            dataset_split=dataset_split,
+            dataset_config=dataset_config,
+        )
+        processed_n_samples = len(skip_idxs)
+
+        if processed_n_samples == len(prepared_dataset):
+            self._logger.info(
+                "All samples in the prepared dataset have already been processed according to existing output files."
+            )
+            return self._post_annotate(
+                pdout=pdout,
+                idx_column=idx_column,
+                new_hub_id=new_hub_id,
+                keep_idx_column=keep_idx_column,
+            )
+
+        if skip_idxs:
+            prepared_dataset = prepared_dataset.filter(
+                lambda sample_idxs: [
+                    sidx not in skip_idxs for sidx in sample_idxs
+                ],
+                num_proc=self.num_proc,
+                input_columns=[idx_column],
+                batched=True,
+                desc="Filtering done idxs",
+            )
+            if self.verbose:
+                self._logger.info(
+                    f"Skipping {len(skip_idxs):,} already-processed samples"
+                )
+
+        prompt_template_prefix = extract_prompt_prefix(prompt_template)
+
+        if new_hub_id:
+            self.push_dir_to_hub(pdout, new_hub_id=new_hub_id)
+
+        pfout = self.get_pfout_name(
+            pdout=pdout,
+            max_samples_per_output_file=max_samples_per_output_file,
+            processed_n_samples=processed_n_samples,
+        )
+        fhout = pfout.open("a", encoding="utf-8")
+
+        self.client.warm_up(
+            system_message=system_message,
+            prompt_prefix=prompt_template_prefix,
+            options=options,
+        )
+
+        total_num_batches = ceil(len(prepared_dataset) / self.batch_size)
+        for batch in tqdm(
+            prepared_dataset.iter(self.batch_size),
+            total=total_num_batches,
+            desc=f"Annotating (max_bs={self.batch_size})",
+            unit="batch",
+        ):
+            results = self._process_batch(
+                batch=batch,
+                options=options,
+                task_prefix=task_prefix,
+                validate_fn=validate_fn,
+                postprocess_fn=postprocess_fn,
+            )
+
+            if num_retries_invalid > 0:
+                invalid_indices = [
+                    idx
+                    for idx, res in enumerate(results)
+                    if (
+                        (
+                            f"{task_prefix}valid" in res
+                            and not res[f"{task_prefix}valid"]
+                        )
+                        or (
+                            f"{task_prefix}valid_fields" in res
+                            and not res[f"{task_prefix}valid_fields"]
+                        )
+                    )
+                ]
+
+                n_retries = 0
+                while invalid_indices and n_retries < num_retries_invalid:
+                    n_retries += 1
+                    if self.verbose:
+                        self._logger.info(
+                            f"Retrying {len(invalid_indices):,} invalid samples (attempt {n_retries}/{num_retries_invalid})..."
+                        )
+
+                    retry_batch = {
+                        k: [v[i] for i in invalid_indices]
+                        for k, v in batch.items()
+                    }
+                    retry_results = self._process_batch(
+                        batch=retry_batch,
+                        options=options,
+                        task_prefix=task_prefix,
+                        validate_fn=validate_fn,
+                    )
+
+                    for local_idx, global_idx in enumerate(invalid_indices):
+                        results[global_idx] = retry_results[local_idx]
+
                     invalid_indices = [
                         idx
                         for idx, res in enumerate(results)
@@ -1019,101 +1007,57 @@ class Annotator:
                         )
                     ]
 
-                    n_retries = 0
-                    while invalid_indices and n_retries < num_retries_invalid:
-                        n_retries += 1
-                        if self.verbose:
-                            self._logger.info(
-                                f"Retrying {len(invalid_indices):,} invalid samples (attempt {n_retries}/{num_retries_invalid})..."
-                            )
-
-                        retry_batch = {
-                            k: [v[i] for i in invalid_indices]
-                            for k, v in batch.items()
-                        }
-                        retry_results = self._process_batch(
-                            batch=retry_batch,
-                            options=options,
-                            task_prefix=task_prefix,
-                            validate_fn=validate_fn,
-                        )
-
-                        # Update results with retried outputs
-                        for local_idx, global_idx in enumerate(
+                    if self.verbose:
+                        if (
                             invalid_indices
+                            and n_retries == num_retries_invalid
                         ):
-                            results[global_idx] = retry_results[local_idx]
-
-                        # Identify remaining invalid samples
-                        invalid_indices = [
-                            idx
-                            for idx, res in enumerate(results)
-                            if (
-                                (
-                                    f"{task_prefix}valid" in res
-                                    and not res[f"{task_prefix}valid"]
-                                )
-                                or (
-                                    f"{task_prefix}valid_fields" in res
-                                    and not res[f"{task_prefix}valid_fields"]
-                                )
+                            self._logger.warning(
+                                f"After {n_retries}/{num_retries_invalid} attempts, {len(invalid_indices):,} samples are still invalid. Skipping..."
                             )
-                        ]
 
-                        if self.verbose:
-                            if (
-                                invalid_indices
-                                and n_retries == num_retries_invalid
-                            ):
-                                self._logger.warning(
-                                    f"After {n_retries}/{num_retries_invalid} attempts, {len(invalid_indices):,} samples are still invalid. Skipping..."
-                                )
+            batch_size = len(batch[idx_column])
+            if keep_columns is True:
+                inputs = [
+                    {k: v[i] for k, v in batch.items()}
+                    for i in range(batch_size)
+                ]
+            else:
+                inputs = [
+                    {
+                        k: v[i]
+                        for k, v in batch.items()
+                        if k in keep_columns  # type: ignore[operator]
+                    }
+                    for i in range(batch_size)
+                ]
 
-                batch_size = len(batch[idx_column])
-                if keep_columns is True:
-                    # Keep all columns
-                    inputs = [
-                        {k: v[i] for k, v in batch.items()}
-                        for i in range(batch_size)
-                    ]
-                else:
-                    inputs = [
-                        {
-                            k: v[i]
-                            for k, v in batch.items()
-                            if k in keep_columns  # type: ignore[operator]
-                        }
-                        for i in range(batch_size)
-                    ]
+            for result_idx, res in enumerate(results):
+                inp = inputs[result_idx]
+                data_sample = {**inp, **res}
+                fhout.write(json.dumps(data_sample) + "\n")
+                fhout.flush()
+                processed_n_samples += 1
 
-                # Iterate over results and write them out in order
-                for result_idx, res in enumerate(results):
-                    inp = inputs[result_idx]
-                    data_sample = {**inp, **res}
-                    fhout.write(json.dumps(data_sample) + "\n")
-                    fhout.flush()
-                    processed_n_samples += 1
+                if (
+                    upload_every_n_samples > 0
+                    and processed_n_samples % upload_every_n_samples == 0
+                ):
+                    fhout.close()
+                    remove_empty_jsonl_files(pdout)
+                    if new_hub_id:
+                        self.push_dir_to_hub(pdout, new_hub_id=new_hub_id)
+                    pfout = self.get_pfout_name(
+                        pdout=pdout,
+                        max_samples_per_output_file=max_samples_per_output_file,
+                        processed_n_samples=processed_n_samples,
+                    )
+                    fhout = pfout.open("a", encoding="utf-8")
 
-                    # Handle hub upload checkpointing and output file rotation
-                    if (
-                        upload_every_n_samples > 0
-                        and processed_n_samples % upload_every_n_samples == 0
-                    ):
-                        fhout.close()
-                        remove_empty_jsonl_files(pdout)
-                        if new_hub_id:
-                            self.push_dir_to_hub(pdout, new_hub_id=new_hub_id)
-                        pfout = self.get_pfout_name(
-                            pdout=pdout,
-                            max_samples_per_output_file=max_samples_per_output_file,
-                            processed_n_samples=processed_n_samples,
-                        )
-                        fhout = pfout.open("a", encoding="utf-8")
-
-            fhout.close()
-            remove_empty_jsonl_files(pdout)
-            if new_hub_id and upload_every_n_samples > 0:
-                self.push_dir_to_hub(pdout, new_hub_id=new_hub_id)
+        fhout.close()
+        remove_empty_jsonl_files(pdout)
+        if new_hub_id and upload_every_n_samples > 0:
+            self.push_dir_to_hub(pdout, new_hub_id=new_hub_id)
 
         return self._post_annotate(
             pdout=pdout,
@@ -1122,12 +1066,147 @@ class Annotator:
             keep_idx_column=keep_idx_column,
         )
 
+    @destroy_on_error
+    def annotate_dataset(
+        self,
+        output_dir: str | Path,
+        prompt_template: str | None = None,
+        *,
+        full_prompt_template: str | None = None,
+        dataset_name: str | None = None,
+        dataset: Dataset | None = None,
+        dataset_config: str | None = None,
+        data_dir: str | None = None,
+        dataset_split: str | None = None,
+        max_num_samples: int | None = None,
+        shuffle_seed: int | None = None,
+        preprocess_fn: Callable | None = None,
+        prompt_field_swapper: dict[str, str] | None = None,
+        idx_column: str = "idx",
+        task_prefix: str = "",
+        sort_by_length: bool
+        | Literal["shortest_first", "longest_first"] = False,
+        system_message: str | None = None,
+        prepared_hub_id: str | None = None,
+        force_data_preparation: bool = False,
+        new_hub_id: str | None = None,
+        overwrite: bool = False,
+        keep_columns: str | Iterable[str] | bool | None = None,
+        options: ProviderRuntimeOptions | None = None,
+        output_schema: str | dict[str, Any] | None = None,
+        upload_every_n_samples: int | None = 0,
+        max_samples_per_output_file: int = 0,
+        validate_fn: Callable | None = None,
+        postprocess_fn: Callable | None = None,
+        num_retries_invalid: int = 5,
+        keep_idx_column: bool = False,
+    ) -> Dataset:
+        """Annotate an existing dataset in one call.
+
+        This is a convenience wrapper around :meth:`prepare_data` and
+        :meth:`run_annotation` for callers that prefer a single entry point.
+
+        Args:
+            output_dir: Directory where annotation output is written.
+            prompt_template: Prompt template with dataset fields. Defaults to
+                ``full_prompt_template`` when provided.
+            full_prompt_template: Backwards-compatible alias for
+                ``prompt_template``.
+            dataset_name: Name or path of the dataset to load.
+            dataset: Pre-loaded dataset to annotate instead of loading one.
+            dataset_config: Dataset configuration name.
+            data_dir: Data directory for local datasets.
+            dataset_split: Dataset split to load.
+            max_num_samples: Maximum number of samples to annotate.
+            shuffle_seed: Seed for dataset shuffling.
+            preprocess_fn: Optional preprocessing callback.
+            prompt_field_swapper: Optional mapping that renames prompt fields.
+            idx_column: Column name used as the stable sample identifier.
+            task_prefix: Prefix for internal column names and output files.
+            sort_by_length: Whether to sort prompts by length.
+            system_message: Optional system message for the chat prompt.
+            prepared_hub_id: Optional Hub dataset ID for prepared-data cache.
+            force_data_preparation: Rebuild prepared data even if cached.
+            new_hub_id: Optional Hub dataset ID for annotation outputs.
+            overwrite: Whether to overwrite the output directory.
+            keep_columns: Columns to keep in the final dataset.
+            options: Runtime options passed to the client.
+            output_schema: Optional JSON schema for structured output.
+            upload_every_n_samples: Upload checkpoint cadence.
+            max_samples_per_output_file: Maximum samples per output file.
+            validate_fn: Optional validation callback.
+            postprocess_fn: Optional postprocessing callback.
+            num_retries_invalid: Number of retries for invalid outputs.
+            keep_idx_column: Whether to keep the index column in the result.
+
+        Returns:
+            The concatenated annotation dataset.
+
+        Raises:
+            TypeError: If no prompt template is provided.
+        """
+        if prompt_template is None:
+            prompt_template = full_prompt_template
+        elif (
+            full_prompt_template is not None
+            and full_prompt_template != prompt_template
+        ):
+            raise ValueError(
+                "Provide only one of 'prompt_template' or 'full_prompt_template'."
+            )
+
+        if prompt_template is None:
+            raise TypeError(
+                "'prompt_template' or 'full_prompt_template' must be provided."
+            )
+
+        prepared_dataset, _, _ = self.prepare_data(
+            output_dir=output_dir,
+            prompt_template=prompt_template,
+            dataset_name=dataset_name,
+            dataset=dataset,
+            dataset_config=dataset_config,
+            data_dir=data_dir,
+            dataset_split=dataset_split,
+            max_num_samples=max_num_samples,
+            shuffle_seed=shuffle_seed,
+            preprocess_fn=preprocess_fn,
+            prompt_field_swapper=prompt_field_swapper,
+            idx_column=idx_column,
+            task_prefix=task_prefix,
+            sort_by_length=sort_by_length,
+            system_message=system_message,
+            prepared_hub_id=prepared_hub_id,
+            force_data_preparation=force_data_preparation,
+        )
+
+        return self.run_annotation(
+            output_dir=output_dir,
+            prompt_template=prompt_template,
+            prepared_dataset=prepared_dataset,
+            new_hub_id=new_hub_id,
+            overwrite=overwrite,
+            keep_columns=keep_columns,
+            options=options,
+            output_schema=output_schema,
+            idx_column=idx_column,
+            upload_every_n_samples=upload_every_n_samples,
+            max_samples_per_output_file=max_samples_per_output_file,
+            task_prefix=task_prefix,
+            validate_fn=validate_fn,
+            postprocess_fn=postprocess_fn,
+            num_retries_invalid=num_retries_invalid,
+            system_message=system_message,
+            keep_idx_column=keep_idx_column,
+        )
+
+    @destroy_on_error
     def generate_dataset(
         self,
         output_dir: str | Path,
         prompts: str | Sequence[str],
         *,
-        resume_from_hub_id: str | None = None,
+        prompt_prefix: str | None = None,
         new_hub_id: str | None = None,
         overwrite: bool = False,
         options: ProviderRuntimeOptions | None = None,
@@ -1140,104 +1219,64 @@ class Annotator:
         validate_fn: Callable | None = None,
         postprocess_fn: Callable | None = None,
         num_retries_invalid: int = 5,
-        system_message: str | None = None,
+        keep_idx_column: bool = False,
     ) -> Dataset:
-        """Generate a new dataset from scratch using LLM completions.
-
-        Main entry point for from-scratch data generation. Unlike ``annotate_dataset``,
-        this method creates a new dataset by generating completions for given prompts
-        rather than annotating an existing dataset.
+        """Generate a new dataset from prompts.
 
         Args:
-            output_dir: Directory to save annotation results.
-            prompts: a single prompt that will be used `max_num_samples` times (`max_num_samples`
-                must be given), or a sequence of prompts to generate outputs for, in which cases
-                `max_num_samples` will be ignored.
-            resume_from_hub_id: Optional Hugging Face dataset ID to restore
-                checkpoint files from before resuming locally.
-            new_hub_id: Optional Hugging Face dataset ID for uploads.
-            overwrite: Whether to overwrite existing output directory.
-            options: Runtime options passed to the client for generation.
-            max_num_samples: Maximum number of samples to annotate. If 'prompts' is a sequence,
-                'max_num_samples' will be ignored.
-            output_schema: JSON schema as a dictionary or string (optional).
-            idx_column: Column name to use as unique identifier.
-            upload_every_n_samples: Upload to hub every N samples (0 or None to disable).
-            max_samples_per_output_file: Maximum samples per output file (0 for unlimited).
-            task_prefix: String prefix to use for internal column names and file operations.
-            validate_fn: Optional custom validation function.
-            postprocess_fn: Optional function to postprocess each sample after annotation.
-            num_retries_invalid: Number of retries for samples that produce invalid outputs.
-            system_message: Optional system message to add as "system" role in chat prompts.
+            output_dir: Directory where annotation output is written.
+            prompts: A single prompt or a sequence of prompts.
+            prompt_prefix: Optional shared prefix used for prefix caching.
+            new_hub_id: Optional Hub dataset ID for annotation outputs.
+            overwrite: Whether to overwrite the output directory.
+            options: Runtime options passed to the client.
+            max_num_samples: Number of times to repeat a single prompt.
+            output_schema: Optional JSON schema for structured output.
+            idx_column: Column name used as the stable sample identifier.
+            upload_every_n_samples: Upload checkpoint cadence.
+            max_samples_per_output_file: Maximum samples per output file.
+            task_prefix: Prefix for internal column names and output files.
+            validate_fn: Optional validation callback.
+            postprocess_fn: Optional postprocessing callback.
+            num_retries_invalid: Number of retries for invalid outputs.
+            keep_idx_column: Whether to keep the index column in the result.
 
         Returns:
-            The concatenated dataset of all annotation results (JSON-invalid samples are NOT removed)
+            The concatenated annotation dataset.
 
-        Examples:
-            Generate multiple samples from a single prompt:
-
-            >>> from llm_annotator import Annotator
-            >>>
-            >>> with Annotator(
-            ...     model="meta-llama/Llama-3.2-3B-Instruct",
-            ...     max_model_len=2048,
-            ... ) as anno:  # doctest: +SKIP
-            ...     ds = anno.generate_dataset(
-            ...         output_dir="outputs/creative-stories",
-            ...         prompts="Generate a short story about a robot learning to paint.",
-            ...         max_num_samples=100,
-            ...         sampling_params={
-            ...             "temperature": 1.0,
-            ...             "top_p": 0.95,
-            ...             "max_tokens": 512,
-            ...         },
-            ...     )
-
-            Generate from a list of different prompts:
-
-            >>> from llm_annotator import Annotator, OpenAIClient
-            >>> client = OpenAIClient(model="gpt-4o-mini")  # doctest: +SKIP
-            >>> with Annotator(client=client) as anno:  # doctest: +SKIP
-            ...     ds = anno.generate_dataset(
-            ...         output_dir="outputs/seasonal-haikus",
-            ...         prompts=[
-            ...             "Write a haiku about spring.",
-            ...             "Write a haiku about summer.",
-            ...         ],
-            ...     )
-
-            Generate with structured output schema:
-
-            >>> with Annotator(client=client) as anno:  # doctest: +SKIP
-            ...     ds = anno.generate_dataset(
-            ...         output_dir="outputs/ner-structured",
-            ...         prompts="Generate a sentence with named entities.",
-            ...         max_num_samples=500,
-            ...         output_schema={
-            ...             "type": "object",
-            ...             "properties": {"sentence": {"type": "string"}},
-            ...         },
-            ...     )
+        Raises:
+            ValueError: If no prompts are provided.
         """
-
         if isinstance(prompts, str):
-            prompts = [prompts] * (max_num_samples or 1)
+            if max_num_samples is None:
+                max_num_samples = 1
+            prompt_list = [prompts] * max_num_samples
+        else:
+            prompt_list = list(prompts)
+            max_num_samples = len(prompt_list)
 
-        max_num_samples = len(prompts)
+        if not prompt_list:
+            raise ValueError("At least one prompt must be provided.")
 
-        dataset = Dataset.from_dict(
-            {idx_column: list(range(max_num_samples)), "prompt": prompts}
+        prompt_dataset = Dataset.from_dict({"prompt": prompt_list})
+        prompt_template = f"{prompt_prefix or ''}{{prompt}}"
+
+        prepared_dataset, _, _ = self.prepare_data(
+            output_dir=output_dir,
+            prompt_template=prompt_template,
+            dataset=prompt_dataset,
+            max_num_samples=max_num_samples,
+            idx_column=idx_column,
+            task_prefix=task_prefix,
         )
 
-        return self.annotate_dataset(
+        return self.run_annotation(
             output_dir=output_dir,
-            prompt_template="{prompt}",
-            dataset=dataset,
-            resume_from_hub_id=resume_from_hub_id,
+            prompt_template=prompt_template,
+            prepared_dataset=prepared_dataset,
             new_hub_id=new_hub_id,
             overwrite=overwrite,
             options=options,
-            max_num_samples=max_num_samples,
             output_schema=output_schema,
             idx_column=idx_column,
             upload_every_n_samples=upload_every_n_samples,
@@ -1246,7 +1285,7 @@ class Annotator:
             validate_fn=validate_fn,
             postprocess_fn=postprocess_fn,
             num_retries_invalid=num_retries_invalid,
-            system_message=system_message,
+            keep_idx_column=keep_idx_column,
         )
 
     def _post_annotate(
@@ -1327,60 +1366,15 @@ class Annotator:
             return pdout.joinpath(f"{stem}_{count_idx}.jsonl")
 
     @retry()
-    def pull_checkpoint_from_hub(
-        self,
-        checkpoint_hub_id: str,
-        dir_path: Path | str,
-        *,
-        task_prefix: str = "",
-    ) -> None:
-        """Restore local checkpoint files from the backup branch on HF Hub.
-
-        Args:
-            checkpoint_hub_id: Hugging Face dataset ID to pull from.
-            dir_path: Local output directory where checkpoint files are restored.
-            task_prefix: Prefix used for branch naming.
-
-        Raises:
-            ValueError: If the hub download fails or no JSONL files are restored.
-        """
-        revision = f"{task_prefix}jsonl_upload"
-        try:
-            snapshot_download(
-                repo_id=checkpoint_hub_id,
-                repo_type="dataset",
-                revision=revision,
-                local_dir=str(dir_path),
-                allow_patterns=["*.jsonl", "*.json"],
-                ignore_patterns=[
-                    f"{task_prefix}cached_input_dataset/*",
-                    ".cache/*",
-                ],
-            )
-        except Exception as exc:
-            raise ValueError(
-                "Could not restore checkpoint files from HF Hub dataset "
-                f"'{checkpoint_hub_id}' (revision='{revision}')."
-            ) from exc
-
-        if self.verbose:
-            if not any(Path(dir_path).glob("*.jsonl")):
-                self._logger.warning(
-                    "No checkpoint files were restored from the HF Hub. Please check if the provided 'checkpoint_hub_id' is correct and contains the expected files."
-                )
-            else:
-                self._logger.info(
-                    "Restored checkpoint files from the HF Hub: "
-                    f"https://huggingface.co/datasets/{checkpoint_hub_id}/tree/{revision}"
-                )
-
-    @retry()
     def push_dir_to_hub(
         self,
         dir_path: Path | str,
         new_hub_id: str | None = None,
         *,
         task_prefix: str = "",
+        revision: str | None = None,
+        allow_patterns: list[str] | None = None,
+        ignore_patterns: list[str] | None = None,
     ) -> None:
         """Upload the output directory to Hugging Face Hub.
 
@@ -1391,6 +1385,10 @@ class Annotator:
             dir_path: Path to the directory containing annotation files.
             new_hub_id: Optional Hugging Face dataset ID to override the instance's new_hub_id.
             task_prefix: String prefix to use for branch naming.
+            revision: Optional explicit branch name. Defaults to
+                ``{task_prefix}jsonl_upload``.
+            allow_patterns: Optional include patterns for upload.
+            ignore_patterns: Optional ignore patterns for upload.
 
         Raises:
             Exception: If upload fails after retries (handled by @retry decorator).
@@ -1400,13 +1398,20 @@ class Annotator:
                 "'new_hub_id' must be set to push data to the HuggingFace Hub"
             )
 
+        revision = revision or f"{task_prefix}jsonl_upload"
+        allow_patterns = allow_patterns or ["*.jsonl", "*.json"]
+        ignore_patterns = ignore_patterns or [
+            f"{task_prefix}cached_input_dataset/*",
+            ".cache/*",
+        ]
+
         create_repo(
             new_hub_id, repo_type="dataset", exist_ok=True, private=True
         )
         create_branch(
             new_hub_id,
             repo_type="dataset",
-            branch=f"{task_prefix}jsonl_upload",
+            branch=revision,
             exist_ok=True,
         )
 
@@ -1414,21 +1419,17 @@ class Annotator:
             repo_id=new_hub_id,
             repo_type="dataset",
             folder_path=str(dir_path),
-            allow_patterns=[
-                "*.jsonl",
-                "*.json",
-            ],  # Include data files (jsonl) and config files (json)
-            ignore_patterns=[
-                f"{task_prefix}cached_input_dataset/*",
-                ".cache/*",
-            ],  # Ignore cached input dataset
+            allow_patterns=allow_patterns,
+            ignore_patterns=ignore_patterns,
             private=True,
-            revision=f"{task_prefix}jsonl_upload",
+            revision=revision,
             print_report=False,
         )
         if self.verbose:
-            url = f"https://huggingface.co/datasets/{new_hub_id}/tree/{task_prefix}jsonl_upload"
-            self._logger.info(f"Backed-up data to the HF Hub: {url}")
+            self._logger.info(
+                "Backed-up data to the HF Hub:"
+                f" https://huggingface.co/datasets/{new_hub_id}/tree/{revision}"
+            )
 
 
 __all__ = ["Annotator", "destroy_on_error"]

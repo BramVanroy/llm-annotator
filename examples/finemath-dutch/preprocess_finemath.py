@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pathlib import Path
 
 import numpy as np
@@ -10,7 +12,12 @@ from llm_annotator.utils import get_hf_username
 CURR_DIR = Path(__file__).parent
 
 
-def main(args=None):
+def main(args: list[str] | None = None) -> None:
+    """Preprocess finemath for the Dutch translation example.
+
+    Args:
+        args: Optional command-line arguments.
+    """
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -40,7 +47,7 @@ def main(args=None):
         default=None,
         help="HF Hub dataset ID to push filtered dataset to.",
     )
-    args = parser.parse_args(args)
+    parsed_args = parser.parse_args(args)
 
     hf_user = get_hf_username()
 
@@ -48,9 +55,11 @@ def main(args=None):
         encoding="utf-8"
     )
     ds = load_dataset(
-        args.dataset, args.dataset_config, split=args.dataset_split
+        parsed_args.dataset,
+        parsed_args.dataset_config,
+        split=parsed_args.dataset_split,
     )
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+    tokenizer = AutoTokenizer.from_pretrained(parsed_args.tokenizer)
 
     def count_tokens_with_template(texts):
         prompted_texts = [
@@ -70,7 +79,7 @@ def main(args=None):
         batched=True,
         batch_size=1000,
         input_columns=["text"],
-        num_proc=args.num_proc,
+        num_proc=parsed_args.num_proc,
     )
 
     # Print distribution of token counts (e.g., mean, min, max, 95th percentile, etc.)
@@ -87,13 +96,15 @@ def main(args=None):
     print(f"99.99th percentile: {np.percentile(token_counts, 99.99)}")
 
     ds = ds.filter(
-        lambda num_tokens: num_tokens <= args.token_limit,
+        lambda num_tokens: num_tokens <= parsed_args.token_limit,
         input_columns=["num_tokens"],
-        num_proc=args.num_proc,
+        num_proc=parsed_args.num_proc,
     ).remove_columns(["num_tokens"])
 
-    hub_id = args.hub_id or (
-        f"{hf_user}/finemath-4plus-lte{args.token_limit}" if hf_user else None
+    hub_id = parsed_args.hub_id or (
+        f"{hf_user}/finemath-4plus-lte{parsed_args.token_limit}"
+        if hf_user
+        else None
     )
     if hub_id:
         ds.push_to_hub(hub_id, private=False)

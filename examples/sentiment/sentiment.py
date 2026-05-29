@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import random
 import shutil
 
@@ -5,7 +7,12 @@ from llm_annotator import Annotator, VLLMOfflineClient
 from llm_annotator.utils import get_hf_username
 
 
-def main(args=None):
+def main(args: list[str] | None = None) -> None:
+    """Run the sentiment annotation example.
+
+    Args:
+        args: Optional command-line arguments.
+    """
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -25,9 +32,15 @@ def main(args=None):
     parser.add_argument(
         "--hub-id", default=None, help="HF Hub dataset ID to push to."
     )
-    args = parser.parse_args(args)
-    if args.max_num_samples == -1:
-        args.max_num_samples = None
+    parser.add_argument(
+        "--force-data-preparation",
+        action="store_true",
+        default=False,
+        help="Force regeneration of prepared data.",
+    )
+    parsed_args = parser.parse_args(args)
+    if parsed_args.max_num_samples == -1:
+        parsed_args.max_num_samples = None
 
     hf_user = get_hf_username()
     prompt_prefix = """Analyze the sentiment of the following movie review and classify it as positive or negative.
@@ -49,6 +62,8 @@ Classification:"""
         "required": ["sentiment"],
     }
 
+    # You can add a function that determines whether output was valid
+    # The column `valid` highlights which samples were valid
     def random_validitity(sample):
         return random.random() < 0.5
 
@@ -59,31 +74,38 @@ Classification:"""
         return sample
 
     client = VLLMOfflineClient(
-        model=args.model,
-        max_model_len=args.max_model_len,
+        model=parsed_args.model,
+        max_model_len=parsed_args.max_model_len,
     )
-    hub_id = args.hub_id or (f"{hf_user}/sentiment-imdb" if hf_user else None)
+    hub_id = parsed_args.hub_id or (
+        f"{hf_user}/sentiment-imdb" if hf_user else None
+    )
     with Annotator(client=client, verbose=True) as anno:
-        ds = anno.annotate_dataset(
-            output_dir=args.output_dir,
+        prepared_dataset, _, _ = anno.prepare_data(
+            output_dir=parsed_args.output_dir,
             prompt_template=prompt_template,
             dataset_name="stanfordnlp/imdb",
             dataset_split="test",
+            max_num_samples=parsed_args.max_num_samples,
+            sort_by_length=True,  # Sort by prompt length for more efficient batching -- final dataset will be re-ordered to original
+            prepared_hub_id=hub_id,
+            force_data_preparation=parsed_args.force_data_preparation,
+        )
+
+        ds = anno.run_annotation(
+            output_dir=parsed_args.output_dir,
+            prompt_template=prompt_template,
+            prepared_dataset=prepared_dataset,
             new_hub_id=hub_id,
-            max_num_samples=args.max_num_samples,
-            cache_input_dataset=False,  # `True` is generally useful, not for demo purposes
             output_schema=output_schema,
             keep_columns=["text", "label"],  # Keep all original columns
-            # Backup to HF every 100 samples (in separate backup branch).
-            # In practice, set to a higher value (e.g., 1000+)
             upload_every_n_samples=100,
-            sort_by_length=True,  # Sort by prompt length for more efficient batching -- final dataset will be re-ordered to original
-            # validate_fn=random_validitity,
             num_retries_invalid=3,
             postprocess_fn=postprocess_fn,
+            # validate_fn=random_validitity,
         )
     print(ds)
-    shutil.rmtree(args.output_dir)
+    shutil.rmtree(parsed_args.output_dir)
 
 
 if __name__ == "__main__":

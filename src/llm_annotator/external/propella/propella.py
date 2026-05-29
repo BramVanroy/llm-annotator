@@ -2,7 +2,7 @@ import json
 from copy import deepcopy
 from enum import Enum
 from pathlib import Path
-from typing import Any, List, Type, Union, cast
+from typing import Any, Type, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -630,16 +630,14 @@ class CountryRelevanceSpecial(str, Enum):
 def create_annotation_response_model(
     one_sentence_description_max_length: int = ONE_SENTENCE_DESCRIPTION_MAX_LENGTH,
 ) -> Type[BaseModel]:
-    """
-    Factory function to create an AnnotationResponse model with configurable max_length
-    for the one_sentence_description field.
+    """Create the annotation response model.
 
     Args:
-        one_sentence_description_max_length: Maximum length for the one_sentence_description field.
-                                             Defaults to ONE_SENTENCE_DESCRIPTION_MAX_LENGTH (200).
+        one_sentence_description_max_length: Maximum length for the
+            ``one_sentence_description`` field.
 
     Returns:
-        A Pydantic model class with the specified configuration.
+        A configured Pydantic model class.
     """
 
     class _AnnotationResponse(BaseModel):
@@ -674,7 +672,7 @@ def create_annotation_response_model(
         )
 
         # Property 5: Content Type (multi-select)
-        content_type: List[ContentType] = Field(
+        content_type: list[ContentType] = Field(
             ...,
             description="Primary purpose and type of content - always return an array (one or more types)",
             min_length=1,
@@ -682,7 +680,7 @@ def create_annotation_response_model(
         )
 
         # Property 6: Business Sector (multi-select)
-        business_sector: List[BusinessSector] = Field(
+        business_sector: list[BusinessSector] = Field(
             ...,
             description="Industry sector(s) - always return an array (one or more sectors)",
             min_length=1,
@@ -690,7 +688,7 @@ def create_annotation_response_model(
         )
 
         # Property 7: Technical Content (multi-select)
-        technical_content: List[TechnicalContent] = Field(
+        technical_content: list[TechnicalContent] = Field(
             ...,
             description="Type and intensity of specialized technical knowledge - always return an array (one or more types)",
             min_length=1,
@@ -750,7 +748,7 @@ def create_annotation_response_model(
         )
 
         # Property 17: Regional Relevance (multi-select)
-        regional_relevance: List[RegionalRelevance] = Field(
+        regional_relevance: list[RegionalRelevance] = Field(
             ...,
             description="Primary regional, cultural, or geopolitical sphere(s) - always return an array (one or multiple regions)",
             min_length=1,
@@ -758,13 +756,11 @@ def create_annotation_response_model(
         )
 
         # Property 18: Country Relevance (multi-select)
-        country_relevance: List[Union[Country, CountryRelevanceSpecial]] = (
-            Field(
-                ...,
-                description="Specific country/countries the content mentions or is relevant for (or special values for supranational/non-country-specific) - always return an array (one or more countries/special values)",
-                min_length=1,
-                max_length=10,
-            )
+        country_relevance: list[Country | CountryRelevanceSpecial] = Field(
+            ...,
+            description="Specific country/countries the content mentions or is relevant for (or special values for supranational/non-country-specific) - always return an array (one or more countries/special values)",
+            min_length=1,
+            max_length=10,
         )
 
         model_config = ConfigDict(
@@ -801,11 +797,13 @@ def create_annotation_response_model(
 
 
 def flatten_model_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    """Inline all #/$defs/... references and remove $defs from a Pydantic JSON Schema.
+    """Inline local ``$defs`` references in a JSON Schema.
 
-    - Recursively resolves $ref entries that point into local $defs
-    - Preserves sibling constraints next to $ref by shallow-merging into the resolved target
-    - Drops any nested $defs occurrences
+    Args:
+        schema: JSON Schema produced by Pydantic.
+
+    Returns:
+        A copy of ``schema`` with local ``$defs`` inlined and removed.
     """
     schema_copy = deepcopy(schema)
     defs = schema_copy.pop("$defs", {})
@@ -851,24 +849,22 @@ def get_annotation_response_schema(
     flatten: bool = True,
     as_string: bool = False,
     minify: bool = True,
-    one_sentence_description_max_length=ONE_SENTENCE_DESCRIPTION_MAX_LENGTH,
+    one_sentence_description_max_length: int = ONE_SENTENCE_DESCRIPTION_MAX_LENGTH,
     compact_whitespace: bool = True,
-) -> Union[dict, str]:
-    """
-    Build the JSON Schema for `AnnotationResponse` with an option to avoid large country enums.
+) -> dict[str, Any] | str:
+    """Build the JSON Schema for annotation responses.
 
-    - If `use_country_enum` is True (default), the schema uses enum definitions for
-      `country_relevance` items as generated by Pydantic.
-    - If `use_country_enum` is False, `country_relevance` becomes a list of strings
-      (no enum) while the property's description still contains the full list of
-      valid values. This avoids very large enum blocks for APIs that do not support them.
-    - If `flatten` is True (default), inline all local $defs via `flatten_model_json_schema`.
-    - If `as_string` is True, return the schema as a JSON string. When `as_string`
-      is True and `minify` is True (default), emit compact JSON with no extra
-      whitespace to reduce token usage. If `minify` is False, pretty-print with indentation.
-    - If `compact_whitespace` is True (default), adds x-guidance directive to enforce
-      compact JSON output with no tabs, newlines, or extra whitespace between tokens.
-      This prevents models from generating whitespace-heavy malformed JSON.
+    Args:
+        use_country_enum: Whether to emit the full country enum in the schema.
+        flatten: Whether to inline local ``$defs`` references.
+        as_string: Whether to serialize the schema as JSON text.
+        minify: When ``as_string`` is true, emit compact JSON without spacing.
+        one_sentence_description_max_length: Maximum length for the one-sentence
+            description field.
+        compact_whitespace: Whether to add an ``x-guidance`` whitespace hint.
+
+    Returns:
+        The schema as a dictionary or JSON string.
     """
     schema = create_annotation_response_model(
         one_sentence_description_max_length
@@ -927,6 +923,7 @@ TRUNCATION_TAG = "<truncated_content>"
 
 
 def truncate_content(content: str, max_content_chars: int) -> str:
+    """Truncate content and append the truncation marker when needed."""
     if max_content_chars > 0 and len(content) > max_content_chars:
         return f"{content[:max_content_chars]}\n{TRUNCATION_TAG}"
     return content
@@ -940,7 +937,16 @@ property_descriptions = ROOT_PATH.joinpath(
 
 def create_messages(
     document_text: str, max_content_chars: int = 50_000
-) -> list[dict]:
+) -> list[dict[str, str]]:
+    """Build chat messages for the generic Propella prompt.
+
+    Args:
+        document_text: Input document text.
+        max_content_chars: Maximum number of characters to keep.
+
+    Returns:
+        A two-message chat prompt.
+    """
     document_text = truncate_content(document_text, max_content_chars)
     user_prompt = USER_PROMPT.format(content=document_text)
 
@@ -961,7 +967,16 @@ annotator_system_prompt = ANNOTATOR_SYSTEM_PROMPT.format(
 
 def create_annotator_messages(
     document_text: str, max_content_chars: int = 50_000
-) -> list[dict]:
+) -> list[dict[str, str]]:
+    """Build chat messages for the canonical Propella annotator prompt.
+
+    Args:
+        document_text: Input document text.
+        max_content_chars: Maximum number of characters to keep.
+
+    Returns:
+        A two-message chat prompt.
+    """
     document_text = truncate_content(document_text, max_content_chars)
     user_prompt = ANNOTATOR_USER_PROMPT.format(content=document_text)
 

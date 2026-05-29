@@ -19,11 +19,14 @@ It supports multiple providers through pluggable clients:
 
 Key capabilities:
 
+- **Staged pipeline**:  `prepare_data` + `run_annotation` separates expensive
+  template application and sorting from model inference, enabling SLURM and
+  cluster restart workflows.
 - Resumable processing with JSONL checkpoints.
 - Annotation of existing datasets and generation from scratch.
 - Structured outputs via JSON schema.
 - Retry and validation hooks for robust pipelines.
-- Optional Hugging Face Hub upload cadence.
+- Optional Hugging Face Hub upload cadence for both prepared data and outputs.
 - Context-manager cleanup of client resources.
 
 It is not intended for parallel, multi-node, multi-instance generation.
@@ -65,12 +68,13 @@ variables and provider-specific setup notes.
 
 ## Usage
 
+### One-step convenience
+
 Annotate an existing dataset:
 
 ```python
 from llm_annotator import Annotator, VLLMOfflineClient
 
-# Use a local vLLM model
 client = VLLMOfflineClient(
     model="meta-llama/Llama-3.2-3B-Instruct",
     max_model_len=4096,
@@ -101,12 +105,54 @@ with Annotator(client=client) as anno:
     )
 ```
 
+### Two-step staged workflow
+
+For large datasets or cluster (SLURM) environments, split the pipeline
+explicitly into a preparation step and a generation step. `prepare_data`
+applies prompt templates, optional sorting, and saves the prepared
+artifacts locally and to Hugging Face Hub. `run_annotation` then handles
+only model inference. If generation fails, re-run `run_annotation` with
+`prepared_hub_id` pointing to the Hub backup:  preparation is skipped.
+
+```python
+from llm_annotator import Annotator, VLLMOfflineClient
+
+client = VLLMOfflineClient(
+    model="meta-llama/Llama-3.2-3B-Instruct",
+    max_model_len=4096,
+)
+
+HUB_ID = "my-org/imdb-prepared"  # Hub repo for prepared data backup
+
+with Annotator(client=client, verbose=True) as anno:
+    # Step 1: prepare data (reuses local cache or Hub backup if available)
+    prepared_dataset, local_path, hub_id = anno.prepare_data(
+        output_dir="outputs/imdb-sentiment",
+        prompt_template="Classify the sentiment of this text: {text}",
+        dataset_name="stanfordnlp/imdb",
+        dataset_split="test",
+        max_num_samples=100,
+        sort_by_length=True,
+        prepared_hub_id=HUB_ID,
+    )
+
+    # Step 2: run generation against the prepared data
+    ds = anno.run_annotation(
+        output_dir="outputs/imdb-sentiment",
+        prompt_template="Classify the sentiment of this text: {text}",
+        prepared_dataset=prepared_dataset,
+        new_hub_id="my-org/imdb-annotated",
+        upload_every_n_samples=500,
+    )
+```
+
+To force a fresh preparation (ignoring any cached or Hub-stored artifacts),
+pass `force_data_preparation=True` to `prepare_data` or to `annotate_dataset`.
+
 See the documentation for more examples, including:
 - Structured output with JSON schemas
 - Custom validation and post-processing
-- Large-scale streaming annotation
 - Generating datasets from scratch
-- Multi-GPU support
 
 Or check out the [examples/](examples/) directory for complete working examples.
 

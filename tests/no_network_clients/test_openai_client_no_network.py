@@ -42,6 +42,60 @@ def test_openai_generate_builds_payload_and_parses_response(
     assert response.num_output_tokens == 7
 
 
+def test_openai_runtime_options_to_payload() -> None:
+    # Verifies optional OpenAI runtime fields are emitted in the payload.
+    payload = OpenAIRuntimeOptions(
+        max_tokens=12,
+        frequency_penalty=0.5,
+        reasoning_effort="high",
+        temperature=0.2,
+        top_p=0.8,
+        presence_penalty=1.5,
+    ).to_payload()
+
+    assert payload == {
+        "max_completion_tokens": 12,
+        "frequency_penalty": 0.5,
+        "reasoning_effort": "high",
+        "temperature": 0.2,
+        "top_p": 0.8,
+        "presence_penalty": 1.5,
+    }
+
+
+def test_openai_process_response_stop_reason_error(
+    fake_openai_module: dict[str, Any],
+) -> None:
+    # Verifies stop-reason failures are converted to error responses.
+    _ = fake_openai_module
+    from openai.types.chat.chat_completion import ChatCompletion
+
+    client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(
+        model="gpt-test", on_error="ignore"
+    )
+    completion = ChatCompletion.model_validate(
+        {
+            "choices": [
+                {
+                    "finish_reason": "length",
+                    "message": {
+                        "role": "assistant",
+                        "content": " hello ",
+                    },
+                }
+            ],
+            "usage": {"completion_tokens": 4},
+            "model": "fake-model",
+        }
+    )
+
+    response = client._process_response(completion)
+
+    assert response.text == "hello"
+    assert response.error is not None
+    assert response.stop_reason == "length"
+
+
 def test_openai_generate_request_error_returns_error_response(
     fake_openai_module: dict[str, Any],
 ) -> None:
@@ -196,6 +250,98 @@ def test_batch_api_happy_path(
     assert batch_call["endpoint"] == "/v1/chat/completions"
     assert batch_call["completion_window"] == "24h"
     assert batch_call["input_file_id"] == "file-fake"
+
+
+def test_batch_api_missing_result_and_blank_lines(
+    fake_openai_module: dict[str, Any],
+) -> None:
+    # Verifies missing batch results become error responses and blank lines are ignored.
+    fake_openai_module["batch_output_content"] = "\n" + _make_batch_output(
+        ("request-1", "second")
+    )
+
+    client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(
+        model="gpt-test", on_error="ignore"
+    )
+    responses = client.batch_generate(
+        messages=[
+            [{"role": "user", "content": "msg0"}],
+            [{"role": "user", "content": "msg1"}],
+        ],
+        use_batch_api=True,
+        poll_interval=0.0,
+    )
+
+    assert len(responses) == 2
+    assert responses[0].error is not None
+    assert responses[1].text == "second"
+
+
+def test_batch_api_bad_status_and_processing_error(
+    fake_openai_module: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Verifies bad status codes and response parsing failures are surfaced as errors.
+    fake_openai_module["batch_output_content"] = "\n".join(
+        [
+            json.dumps(
+                {
+                    "id": "resp-r0",
+                    "custom_id": "request-0",
+                    "response": {
+                        "status_code": 500,
+                        "body": {},
+                    },
+                    "error": None,
+                }
+            ),
+            json.dumps(
+                {
+                    "id": "resp-r1",
+                    "custom_id": "request-1",
+                    "response": {
+                        "status_code": 200,
+                        "body": {
+                            "model": "fake-model",
+                            "choices": [
+                                {
+                                    "finish_reason": "stop",
+                                    "message": {
+                                        "role": "assistant",
+                                        "content": "hello",
+                                    },
+                                }
+                            ],
+                            "usage": {"completion_tokens": 3},
+                        },
+                    },
+                    "error": None,
+                }
+            ),
+        ]
+    )
+
+    client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(
+        model="gpt-test", on_error="ignore"
+    )
+    monkeypatch.setattr(
+        client,
+        "_process_response",
+        lambda response: (_ for _ in ()).throw(RuntimeError("bad completion")),
+    )
+
+    responses = client.batch_generate(
+        messages=[
+            [{"role": "user", "content": "hi"}],
+            [{"role": "user", "content": "there"}],
+        ],
+        use_batch_api=True,
+        poll_interval=0.0,
+    )
+
+    assert len(responses) == 2
+    assert responses[0].error is not None
+    assert responses[1].error is not None
 
 
 def test_batch_api_preserves_order(

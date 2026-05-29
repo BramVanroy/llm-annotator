@@ -101,7 +101,11 @@ def configure_logging(
 
 
 def set_log_level(level: int | str) -> None:
-    """Update the package logger level."""
+    """Update the package logger level.
+
+    Args:
+        level: Logging level as an integer or a standard level name.
+    """
     get_logger().setLevel(_coerce_level(level))
 
 

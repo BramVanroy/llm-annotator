@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 import types
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from datasets import Dataset
 
-from llm_annotator.annotator import Annotator
+from llm_annotator.annotator import Annotator, destroy_on_error
 from llm_annotator.clients.base import (
     Client,
     Provider,
@@ -122,7 +122,6 @@ def test_load_dataset_validation_errors(
     with pytest.raises(ValueError, match="Provide only one"):
         dummy_annotator._load_dataset(
             prompt_template="{text}",
-            pdout=tmp_path,
             idx_column="idx",
             dataset=ds,
             dataset_name="x",
@@ -131,14 +130,12 @@ def test_load_dataset_validation_errors(
     with pytest.raises(ValueError, match="must be provided"):
         dummy_annotator._load_dataset(
             prompt_template="{text}",
-            pdout=tmp_path,
             idx_column="idx",
         )
 
     with pytest.raises(ValueError, match="positive integer"):
         dummy_annotator._load_dataset(
             prompt_template="{text}",
-            pdout=tmp_path,
             idx_column="idx",
             dataset=ds,
             max_num_samples=0,
@@ -152,19 +149,15 @@ def test_create_messages_with_and_without_system(
     sample = {"text": "hello"}
     with_system = dummy_annotator._create_messages(
         sample,
-        idx=4,
         prompt_fields=("text",),
         prompt_template="Say {text}",
-        idx_column="idx",
         task_prefix="",
         system_message="sys",
     )
     no_system = dummy_annotator._create_messages(
         sample,
-        idx=5,
         prompt_fields=("text",),
         prompt_template="Say {text}",
-        idx_column="idx",
         task_prefix="",
         system_message=None,
     )
@@ -240,14 +233,23 @@ def test_process_batch_validate_and_postprocess(
     _ = capsys.readouterr()
 
 
-def test_annotate_dataset_retries_invalid(
+def test_run_annotation_retries_invalid(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # Verifies annotate_dataset retry loop re-processes invalid outputs.
+    # Verifies run_annotation retry loop re-processes invalid outputs.
     annotator = Annotator(
         client=DummyClient(on_error="ignore"), batch_size=2, verbose=False
     )
-    ds = Dataset.from_dict({"text": ["a", "b"]})
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": [0, 1],
+            "text": ["a", "b"],
+            "messages": [
+                [{"role": "user", "content": "Q: a"}],
+                [{"role": "user", "content": "Q: b"}],
+            ],
+        }
+    )
 
     calls = {"n": 0}
 
@@ -284,11 +286,10 @@ def test_annotate_dataset_retries_invalid(
 
     monkeypatch.setattr(Annotator, "_process_batch", _fake_process_batch)
 
-    out = annotator.annotate_dataset(
+    out = annotator.run_annotation(
         output_dir=tmp_path / "out",
         prompt_template="Q: {text}",
-        dataset=ds,
-        validate_fn=lambda x: x["response"] == "good",
+        prepared_dataset=prepared_ds,
         num_retries_invalid=2,
     )
 
@@ -296,125 +297,101 @@ def test_annotate_dataset_retries_invalid(
     assert calls["n"] >= 2
 
 
-def test_annotate_dataset_guard_rails(tmp_path: Path) -> None:
+def test_run_annotation_guard_rails(tmp_path: Path) -> None:
     annotator = Annotator(client=DummyClient())
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": [0],
+            "messages": [[{"role": "user", "content": "Q: a"}]],
+        }
+    )
     with pytest.raises(ValueError, match="new_hub_id must be provided"):
         # Because upload_every_n_samples is set, new_hub_id must be provided.
-        annotator.annotate_dataset(
+        annotator.run_annotation(
             output_dir=tmp_path / "x2",
             prompt_template="{text}",
-            dataset=Dataset.from_dict({"text": ["a"]}),
+            prepared_dataset=prepared_ds,
             upload_every_n_samples=10,
         )
 
 
-def test_annotate_dataset_resume_from_hub_id_validation(
+def test_run_annotation_resume_from_hub_id_validation(
     tmp_path: Path,
 ) -> None:
     # Verifies resume_from_hub_id format and overwrite guard rails.
     annotator = Annotator(client=DummyClient())
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": [0],
+            "messages": [[{"role": "user", "content": "Q: a"}]],
+        }
+    )
 
     with pytest.raises(ValueError, match="must be a Hugging Face dataset ID"):
-        annotator.annotate_dataset(
+        annotator.run_annotation(
             output_dir=tmp_path / "bad-id",
             prompt_template="{text}",
-            dataset=Dataset.from_dict({"text": ["a"]}),
+            prepared_dataset=prepared_ds,
             resume_from_hub_id="invalid-id",
         )
 
     with pytest.raises(ValueError, match="overwrite=True"):
-        annotator.annotate_dataset(
+        annotator.run_annotation(
             output_dir=tmp_path / "overwrite",
             prompt_template="{text}",
-            dataset=Dataset.from_dict({"text": ["a"]}),
+            prepared_dataset=prepared_ds,
             resume_from_hub_id="owner/name",
             overwrite=True,
         )
 
 
-def test_generate_dataset_forwards_to_annotate(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    # Verifies generate_dataset builds prompt dataset and forwards expected args.
+def test_prepare_data_uses_local_cache(tmp_path: Path) -> None:
+    # Verifies prepare_data loads from the on-disk cached_input_dataset on repeat runs.
     annotator = Annotator(client=DummyClient())
-    captured: dict[str, Any] = {}
+    ds = Dataset.from_dict({"text": ["a", "b"]})
 
-    def _fake_annotate_dataset(
-        self: Annotator, *args: Any, **kwargs: Any
-    ) -> Dataset:
-        _ = self
-        _ = args
-        captured.update(kwargs)
-        return Dataset.from_dict({"response": ["ok"]})
-
-    monkeypatch.setattr(Annotator, "annotate_dataset", _fake_annotate_dataset)
-    result = annotator.generate_dataset(
-        output_dir=tmp_path / "g",
-        prompts="hello",
-        max_num_samples=3,
-        resume_from_hub_id="owner/name",
-    )
-
-    assert len(result) == 1
-    assert captured["prompt_template"] == "{prompt}"
-    assert len(captured["dataset"]) == 3
-    assert captured["resume_from_hub_id"] == "owner/name"
-
-
-def test_pull_checkpoint_from_hub_calls_snapshot_download(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    # Verifies pull_checkpoint_from_hub downloads from the jsonl_upload branch.
-    annotator = Annotator(client=DummyClient())
-    captured: dict[str, Any] = {}
-
-    def _fake_snapshot_download(**kwargs: Any) -> str:
-        captured.update(kwargs)
-        (tmp_path / "out.jsonl").write_text('{"idx": 0}\n', encoding="utf-8")
-        return str(tmp_path)
-
-    monkeypatch.setattr(
-        "llm_annotator.annotator.snapshot_download", _fake_snapshot_download
-    )
-
-    annotator.pull_checkpoint_from_hub(
-        checkpoint_hub_id="me/data",
-        dir_path=tmp_path,
-    )
-
-    assert captured["repo_id"] == "me/data"
-    assert captured["repo_type"] == "dataset"
-    assert captured["revision"] == "jsonl_upload"
-
-
-def test_annotate_dataset_resumes_from_downloaded_checkpoint(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    # Verifies resume_from_hub_id checkpoint files are used by skip-index resume logic.
-    annotator = Annotator(client=DummyClient())
-
-    def _fake_pull(
-        self: Annotator,
-        checkpoint_hub_id: str,
-        dir_path: Path | str,
-        *,
-        task_prefix: str = "",
-    ) -> None:
-        _ = self
-        _ = checkpoint_hub_id
-        _ = task_prefix
-        p_out = Path(dir_path)
-        (p_out / "restored.jsonl").write_text(
-            '{"idx": 0, "response": "from_hub"}\n', encoding="utf-8"
-        )
-
-    monkeypatch.setattr(Annotator, "pull_checkpoint_from_hub", _fake_pull)
-
-    done = annotator.annotate_dataset(
+    first_ds, first_path, _ = annotator.prepare_data(
         output_dir=tmp_path / "out",
         prompt_template="Q: {text}",
-        dataset=Dataset.from_dict({"text": ["a", "b"]}),
-        resume_from_hub_id="me/data",
+        dataset=ds,
+    )
+    assert first_path is not None
+
+    cached_ds, cached_path, _ = annotator.prepare_data(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+    )
+
+    assert cached_path is not None
+    assert first_path == cached_path
+    assert len(first_ds) == len(cached_ds)
+
+
+def test_run_annotation_skips_existing_indices_from_output(
+    tmp_path: Path,
+) -> None:
+    # Verifies existing jsonl output rows are respected by skip-index resume logic.
+    annotator = Annotator(client=DummyClient())
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": [0, 1],
+            "text": ["a", "b"],
+            "messages": [
+                [{"role": "user", "content": "Q: a"}],
+                [{"role": "user", "content": "Q: b"}],
+            ],
+        }
+    )
+
+    (tmp_path / "out").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "out" / "restored.jsonl").write_text(
+        '{"idx": 0, "response": "from_out"}\n', encoding="utf-8"
+    )
+
+    done = annotator.run_annotation(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        prepared_dataset=prepared_ds,
         keep_idx_column=True,
     )
 
@@ -480,21 +457,27 @@ def test_push_dir_to_hub_calls_hf_helpers(
 def test_destroy_on_error_calls_client_destroy(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # Verifies destroy_on_error wrapper triggers client cleanup on pipeline exceptions.
+    # Verifies destroy_on_error wrapper triggers client cleanup on run_annotation exceptions.
     client = DummyClient()
     annotator = Annotator(client=client)
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": [0],
+            "messages": [[{"role": "user", "content": "Q: a"}]],
+        }
+    )
 
-    def _boom(self: Annotator, **_kwargs: Any) -> tuple[Dataset, int]:
+    def _boom(self: Annotator, **_kwargs: Any) -> list[dict[str, Any]]:
         _ = self
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(Annotator, "_load_dataset", _boom)
+    monkeypatch.setattr(Annotator, "_process_batch", _boom)
 
     with pytest.raises(RuntimeError, match="boom"):
-        annotator.annotate_dataset(
+        annotator.run_annotation(
             output_dir=tmp_path / "x",
-            prompt_template="{text}",
-            dataset=Dataset.from_dict({"text": ["a"]}),
+            prompt_template="Q: {text}",
+            prepared_dataset=prepared_ds,
         )
 
     assert client.destroy_called == 1
@@ -535,7 +518,7 @@ def test_annotator_smoke_with_all_client_types(client_cls: type[Any]) -> None:
 
 
 def test_load_dataset_with_dataset_name_split_selection(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Verifies _load_dataset defaults to the only split when dataset_name is provided.
     annotator = Annotator(client=DummyClient(), verbose=False)
@@ -549,23 +532,19 @@ def test_load_dataset_with_dataset_name_split_selection(
         lambda *args, **kwargs: Dataset.from_dict({"text": ["a", "b"]}),
     )
 
-    loaded, skipped = annotator._load_dataset(
+    loaded = annotator._load_dataset(
         prompt_template="Q: {text}",
-        pdout=tmp_path / "out",
         idx_column="idx",
         dataset_name="dummy/name",
         prompt_fields=("text",),
-        cache_input_dataset=False,
-        use_cached_input_dataset=False,
     )
 
     assert len(loaded) == 2
-    assert skipped == 0
     assert "messages" in loaded.column_names
 
 
 def test_load_dataset_split_validation_errors(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Verifies _load_dataset raises on ambiguous or unknown dataset split names.
     annotator = Annotator(client=DummyClient(), verbose=False)
@@ -578,117 +557,389 @@ def test_load_dataset_split_validation_errors(
     with pytest.raises(ValueError, match="multiple splits"):
         annotator._load_dataset(
             prompt_template="Q: {text}",
-            pdout=tmp_path / "o1",
             idx_column="idx",
             dataset_name="dummy/name",
             prompt_fields=("text",),
-            cache_input_dataset=False,
-            use_cached_input_dataset=False,
         )
 
     with pytest.raises(ValueError, match="does not have a split"):
         annotator._load_dataset(
             prompt_template="Q: {text}",
-            pdout=tmp_path / "o2",
             idx_column="idx",
             dataset_name="dummy/name",
             dataset_split="validation",
             prompt_fields=("text",),
-            cache_input_dataset=False,
-            use_cached_input_dataset=False,
         )
 
 
-def test_annotate_dataset_output_schema_validation(tmp_path: Path) -> None:
+def test_run_annotation_output_schema_validation(tmp_path: Path) -> None:
     # Verifies output_schema normalization and conflict checks with options.json_schema.
     annotator = Annotator(client=DummyClient(), verbose=False)
     ds = Dataset.from_dict({"text": ["a"]})
+    prepared_ds, _, _ = annotator.prepare_data(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        dataset=ds,
+    )
 
     with pytest.raises(TypeError, match="decode to a dictionary"):
-        annotator.annotate_dataset(
+        annotator.run_annotation(
             output_dir=tmp_path / "a",
             prompt_template="Q: {text}",
-            dataset=ds,
+            prepared_dataset=prepared_ds,
             output_schema="[]",
         )
 
     with pytest.raises(ValueError, match="Provide 'output_schema' OR set"):
-        annotator.annotate_dataset(
+        annotator.run_annotation(
             output_dir=tmp_path / "b",
             prompt_template="Q: {text}",
-            dataset=ds,
+            prepared_dataset=prepared_ds,
             options=ProviderRuntimeOptions(json_schema={"type": "object"}),
             output_schema={"type": "object"},
         )
 
 
-def test_annotate_dataset_keep_columns_type_error(tmp_path: Path) -> None:
+def test_run_annotation_keep_columns_type_error(tmp_path: Path) -> None:
     # Verifies keep_columns validation rejects unsupported non-iterable objects.
     annotator = Annotator(client=DummyClient(), verbose=False)
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": [0],
+            "messages": [[{"role": "user", "content": "Q: a"}]],
+        }
+    )
 
     with pytest.raises(TypeError, match="keep_columns must be"):
-        annotator.annotate_dataset(
+        annotator.run_annotation(
             output_dir=tmp_path / "x",
             prompt_template="Q: {text}",
-            dataset=Dataset.from_dict({"text": ["a"]}),
+            prepared_dataset=prepared_ds,
             keep_columns=1,
         )
 
 
-def test_annotator_config_file_written(tmp_path: Path) -> None:
-    # Verifies _annotator_config.json is created and contains correct init and
-    # annotate_dataset sections.
+def test_run_annotation_writes_version_file(tmp_path: Path) -> None:
+    # Verifies _version.json is created in output_dir at runtime.
     annotator = Annotator(client=DummyClient(), batch_size=4, num_proc=2)
-    annotator.annotate_dataset(
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": [0, 1],
+            "messages": [
+                [{"role": "user", "content": "Q: a"}],
+                [{"role": "user", "content": "Q: b"}],
+            ],
+        }
+    )
+    annotator.run_annotation(
         output_dir=tmp_path / "out",
         prompt_template="Q: {text}",
-        dataset=Dataset.from_dict({"text": ["a", "b"]}),
+        prepared_dataset=prepared_ds,
     )
 
-    config_path = tmp_path / "out" / "_annotator_config.json"
-    assert config_path.exists()
-    config = json.loads(config_path.read_text(encoding="utf-8"))
-
-    assert config["init"]["client"]["type"] == "DummyClient"
-    assert config["init"]["client"]["model"] == "dummy"
-    assert config["init"]["client"]["on_error"] == "raise"
-    assert config["init"]["client"]["max_workers"] == 4
-    assert config["init"]["batch_size"] == 4
-    assert config["init"]["num_proc"] == 2
-    assert config["init"]["verbose"] is False
-    assert "annotate_dataset" in config
+    version_path = tmp_path / "out" / "_version.json"
+    assert version_path.exists()
+    version_data = json.loads(version_path.read_text(encoding="utf-8"))
+    assert "python" in version_data
+    assert "llm_annotator" in version_data
 
 
-def test_annotator_config_annotate_dataset_fields(tmp_path: Path) -> None:
-    # Verifies annotate_dataset section captures all passed arguments correctly.
+def test_run_annotation_keep_columns_and_validation_fields(
+    tmp_path: Path,
+) -> None:
+    # Verifies run_annotation preserves requested columns and writes validation metadata.
     def my_validator(sample: dict) -> bool:
         return bool(sample.get("response"))
 
     options = ProviderRuntimeOptions(max_tokens=64)
     annotator = Annotator(client=DummyClient())
-    annotator.annotate_dataset(
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": [0],
+            "text": ["a"],
+            "messages": [[{"role": "user", "content": "Q: a"}]],
+        }
+    )
+    done = annotator.run_annotation(
         output_dir=tmp_path / "out",
         prompt_template="Q: {text}",
-        dataset=Dataset.from_dict({"text": ["a"]}),
+        prepared_dataset=prepared_ds,
         keep_columns=["text"],
         options=options,
         validate_fn=my_validator,
         num_retries_invalid=0,
         system_message="You are helpful.",
+        keep_idx_column=True,
     )
 
-    config = json.loads(
-        (tmp_path / "out" / "_annotator_config.json").read_text(
-            encoding="utf-8"
+    assert done.column_names == [
+        "idx",
+        "text",
+        "response",
+        "finish_reason",
+        "num_tokens",
+        "error",
+        "error_type",
+        "valid",
+    ]
+    assert done["valid"] == [True]
+
+
+def test_destroy_on_error_appends_cleanup_failure_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Verifies cleanup failures add a note to the original exception.
+    annotator = Annotator(client=DummyClient())
+
+    class NoteError(RuntimeError):
+        pass
+
+    @destroy_on_error
+    def _boom(self: Annotator) -> None:
+        err = NoteError("boom")
+        err.add_note("original note")
+        raise err
+
+    def _failing_destroy(self: Annotator) -> None:
+        _ = self
+        raise RuntimeError("cleanup failed")
+
+    monkeypatch.setattr(Annotator, "destroy", _failing_destroy)
+
+    with pytest.raises(NoteError) as excinfo:
+        _boom(annotator)
+
+    assert any(
+        note.startswith("Cleanup failed: RuntimeError('cleanup failed')")
+        for note in excinfo.value.__notes__
+    )
+
+
+def test_annotator_context_manager_calls_destroy() -> None:
+    # Verifies __enter__ returns self and __exit__ always destroys the client.
+    client = DummyClient()
+    annotator = Annotator(client=client)
+
+    with annotator as entered:
+        assert entered is annotator
+
+    assert client.destroy_called == 1
+
+
+def test_load_dataset_handles_loaded_vllm_pipeline_and_sorting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Verifies the offline-vLLM multiprocessing guard and preprocessing branches.
+    class FakeVLLMOfflineClient:
+        def __init__(self) -> None:
+            self._pipeline_loaded = True
+
+    monkeypatch.setattr(
+        "llm_annotator.annotator.VLLMOfflineClient",
+        FakeVLLMOfflineClient,
+    )
+
+    annotator = Annotator(
+        client=cast(Client[Any], FakeVLLMOfflineClient()),
+        num_proc=2,
+        verbose=True,
+    )
+    dataset = Dataset.from_dict({"text": ["bbb", "a", "cc"]})
+
+    def _preprocess(*, dataset: Dataset) -> Dataset:
+        return dataset.add_column("extra", list(range(len(dataset))))
+
+    loaded = annotator._load_dataset(
+        prompt_template="Q: {text}",
+        idx_column="idx",
+        dataset=dataset,
+        prompt_fields=("text",),
+        preprocess_fn=_preprocess,
+        shuffle_seed=1,
+        max_num_samples=2,
+        sort_by_length="shortest_first",
+        system_message="sys",
+        task_prefix="pre_",
+    )
+
+    assert annotator.num_proc is None
+    assert "pre_messages" in loaded.column_names
+    assert "pre_messages_chars" not in loaded.column_names
+
+
+def test_prepare_data_uses_prepared_hub_and_force_rebuild(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Verifies prepared Hub restore and force-rebuild behavior.
+    annotator = Annotator(client=DummyClient())
+    dataset = Dataset.from_dict({"text": ["a", "b"]})
+
+    monkeypatch.setattr(
+        "llm_annotator.annotator.load_dataset",
+        lambda *args, **kwargs: dataset,
+    )
+
+    cached_ds, cached_path, cached_hub_id = annotator.prepare_data(
+        output_dir=tmp_path / "hub-cache",
+        prompt_template="Q: {text}",
+        prepared_hub_id="owner/prepared",
+    )
+
+    assert cached_ds is dataset
+    assert cached_path is None
+    assert cached_hub_id == "owner/prepared"
+
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "llm_annotator.annotator.delete_branch",
+        lambda *args, **kwargs: calls.append((args[0], kwargs["branch"])),
+    )
+    monkeypatch.setattr(
+        Annotator,
+        "_load_dataset",
+        lambda self, **kwargs: dataset,
+    )
+    monkeypatch.setattr(
+        Dataset,
+        "push_to_hub",
+        lambda *args, **kwargs: None,
+    )
+
+    rebuilt_ds, rebuilt_path, rebuilt_hub_id = annotator.prepare_data(
+        output_dir=tmp_path / "force-rebuild",
+        prompt_template="Q: {text}",
+        prepared_hub_id="owner/prepared",
+        force_data_preparation=True,
+    )
+
+    assert rebuilt_ds is dataset
+    assert rebuilt_path is not None
+    assert rebuilt_hub_id == "owner/prepared"
+    assert calls == [("owner/prepared", "prepared_cache")]
+
+
+def test_run_annotation_validation_and_short_circuit_paths(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Verifies validation failures, missing prepared data, and all-processed short-circuit paths.
+    annotator = Annotator(client=DummyClient())
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": [0],
+            "text": ["a"],
+            "messages": [[{"role": "user", "content": "Q: a"}]],
+        }
+    )
+
+    with pytest.raises(ValueError, match="max_samples_per_output_file"):
+        annotator.run_annotation(
+            output_dir=tmp_path / "bad-max",
+            prompt_template="Q: {text}",
+            prepared_dataset=prepared_ds,
+            max_samples_per_output_file=-1,
         )
-    )
-    ad = config["annotate_dataset"]
 
-    assert ad["keep_columns"] == ["idx", "text"]
-    assert ad["options"] == {"max_tokens": 64, "json_schema": None}
-    assert (
-        ad["validate_fn"]
-        == "test_annotator_config_annotate_dataset_fields.<locals>.my_validator"
+    with pytest.raises(ValueError, match="upload_every_n_samples"):
+        annotator.run_annotation(
+            output_dir=tmp_path / "bad-upload",
+            prompt_template="Q: {text}",
+            prepared_dataset=prepared_ds,
+            upload_every_n_samples=1.5,
+            new_hub_id="owner/output",
+        )
+
+    with pytest.raises(TypeError, match="decode to a dictionary"):
+        annotator.run_annotation(
+            output_dir=tmp_path / "bad-schema",
+            prompt_template="Q: {text}",
+            prepared_dataset=prepared_ds,
+            output_schema="[]",
+        )
+
+    with pytest.raises(TypeError, match="keep_columns must be"):
+        annotator.run_annotation(
+            output_dir=tmp_path / "bad-columns",
+            prompt_template="Q: {text}",
+            prepared_dataset=prepared_ds,
+            keep_columns=1,
+        )
+
+    prepared_missing_idx = Dataset.from_dict(
+        {"messages": [[{"role": "user", "content": "Q: a"}]]}
     )
-    assert ad["system_message"] == "You are helpful."
-    assert ad["num_retries_invalid"] == 0
+    with pytest.raises(ValueError, match="Expected index column"):
+        annotator.run_annotation(
+            output_dir=tmp_path / "missing-idx",
+            prompt_template="Q: {text}",
+            prepared_dataset=prepared_missing_idx,
+        )
+
+    monkeypatch.setattr(
+        "llm_annotator.annotator.load_dataset",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("missing hub")
+        ),
+    )
+    monkeypatch.setattr(
+        Dataset,
+        "load_from_disk",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("missing disk")
+        ),
+    )
+
+    with pytest.raises(ValueError, match="No prepared data found"):
+        annotator.run_annotation(
+            output_dir=tmp_path / "missing-prepared",
+            prompt_template="Q: {text}",
+            prepared_hub_id="owner/prepared",
+        )
+
+    output_dir = tmp_path / "complete"
+    output_dir.mkdir()
+    (output_dir / "existing.jsonl").write_text(
+        '{"idx": 0, "response": "done"}\n',
+        encoding="utf-8",
+    )
+
+    completed = annotator.run_annotation(
+        output_dir=output_dir,
+        prompt_template="Q: {text}",
+        prepared_dataset=prepared_ds,
+    )
+
+    assert len(completed) == 1
+    assert completed["response"] == ["done"]
+
+
+def test_run_annotation_keeps_all_columns_when_requested(
+    tmp_path: Path,
+) -> None:
+    # Verifies keep_columns=True preserves the full prepared batch payload.
+    annotator = Annotator(client=DummyClient())
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": [0],
+            "text": ["a"],
+            "messages": [[{"role": "user", "content": "Q: a"}]],
+        }
+    )
+
+    done = annotator.run_annotation(
+        output_dir=tmp_path / "keep-all",
+        prompt_template="Q: {text}",
+        prepared_dataset=prepared_ds,
+        keep_columns=True,
+        keep_idx_column=True,
+    )
+
+    assert done.column_names == [
+        "idx",
+        "text",
+        "messages",
+        "response",
+        "finish_reason",
+        "num_tokens",
+        "error",
+        "error_type",
+    ]

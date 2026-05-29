@@ -8,7 +8,7 @@ from collections.abc import Callable
 from importlib.metadata import version
 from os import PathLike
 from pathlib import Path
-from typing import Generator
+from typing import Any, Generator
 
 from huggingface_hub import whoami
 from tqdm import tqdm
@@ -218,8 +218,22 @@ def remove_empty_jsonl_files(pdout: Path) -> list[Path]:
     return sorted(files_removed)
 
 
-def ensure_returns_bool(func, *args, **kwargs):
-    """Ensure that the given function returns a boolean value. If not, raise a TypeError."""
+def ensure_returns_bool(
+    func: Callable[..., Any], *args: Any, **kwargs: Any
+) -> bool:
+    """Ensure that a callable returns a boolean value.
+
+    Args:
+        func: Callable to invoke.
+        *args: Positional arguments forwarded to ``func``.
+        **kwargs: Keyword arguments forwarded to ``func``.
+
+    Returns:
+        The boolean result returned by ``func``.
+
+    Raises:
+        TypeError: If ``func`` does not return a boolean.
+    """
     result = func(*args, **kwargs)
     if not isinstance(result, bool):
         raise TypeError(
@@ -228,8 +242,22 @@ def ensure_returns_bool(func, *args, **kwargs):
     return result
 
 
-def ensure_returns_dict(func, *args, **kwargs):
-    """Ensure that the given function returns a dict value. If not, raise a TypeError."""
+def ensure_returns_dict(
+    func: Callable[..., Any], *args: Any, **kwargs: Any
+) -> dict[str, Any]:
+    """Ensure that a callable returns a dictionary.
+
+    Args:
+        func: Callable to invoke.
+        *args: Positional arguments forwarded to ``func``.
+        **kwargs: Keyword arguments forwarded to ``func``.
+
+    Returns:
+        The dictionary result returned by ``func``.
+
+    Raises:
+        TypeError: If ``func`` does not return a dictionary.
+    """
     result = func(*args, **kwargs)
     if not isinstance(result, dict):
         raise TypeError(

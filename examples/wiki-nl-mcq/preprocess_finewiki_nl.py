@@ -1,15 +1,30 @@
+from __future__ import annotations
+
 from datasets import load_dataset
 
 from llm_annotator.utils import get_hf_username
 
 
-def is_stub(wikitext: str):
+def is_stub(wikitext: str) -> bool:
+    """Return ``True`` when a Wikipedia article is a stub page.
+
+    Args:
+        wikitext: Raw page text.
+
+    Returns:
+        Whether the page looks like a stub.
+    """
     # Thanks to Edwin Rijgersberg for spotting this pattern of stubs!
     # E.g. overview pages like https://nl.wikipedia.org/wiki/Categorie:Wikipedia:Beginnetje_biologie
     return r"{{beginnetje" in wikitext.lower()
 
 
-def main(args=None):
+def main(args: list[str] | None = None) -> None:
+    """Filter the Dutch Wikipedia source dataset for the MCQ example.
+
+    Args:
+        args: Optional command-line arguments.
+    """
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -19,7 +34,7 @@ def main(args=None):
     parser.add_argument(
         "--hub-id", default=None, help="HF Hub dataset ID to push to."
     )
-    args = parser.parse_args(args)
+    parsed_args = parser.parse_args(args)
 
     hf_user = get_hf_username()
 
@@ -36,11 +51,11 @@ def main(args=None):
             and not is_stub(wikitext)
         ),
         input_columns=["text", "wikitext"],
-        num_proc=args.num_workers,
+        num_proc=parsed_args.num_workers,
     )
     print(ds)
 
-    hub_id = args.hub_id or (
+    hub_id = parsed_args.hub_id or (
         f"{hf_user}/finewiki-nl-30-to-24k-tokens" if hf_user else None
     )
     if hub_id:

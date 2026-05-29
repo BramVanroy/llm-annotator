@@ -1,4 +1,8 @@
+from __future__ import annotations
+
 from pathlib import Path
+
+from datasets import Dataset
 
 from llm_annotator import (
     Annotator,
@@ -10,7 +14,12 @@ from llm_annotator import (
 CURR_DIR = Path(__file__).parent
 
 
-def main(args=None):
+def main(args: list[str] | None = None) -> None:
+    """Generate a NER dataset from scratch.
+
+    Args:
+        args: Optional command-line arguments.
+    """
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -35,34 +44,58 @@ def main(args=None):
         default=None,
         help="Output directory. Defaults to outputs/ner-from_scratch-{n}.",
     )
-    args = parser.parse_args(args)
-    if args.max_num_samples == -1:
-        args.max_num_samples = None
+    parser.add_argument(
+        "--hub-id",
+        default=None,
+        help="Optional HF Hub dataset ID for prepared and generated artifacts.",
+    )
+    parser.add_argument(
+        "--force-data-preparation",
+        action="store_true",
+        default=False,
+        help="Force regeneration of prepared data.",
+    )
+    parsed_args = parser.parse_args(args)
+    if parsed_args.max_num_samples == -1:
+        parsed_args.max_num_samples = None
 
     prompt = CURR_DIR.joinpath("prompt_template.md").read_text(
         encoding="utf-8"
     )
-    n = args.max_num_samples
+    n = parsed_args.max_num_samples
     n_str = str(n) if n is not None else "full"
-    output_dir = args.output_dir or f"outputs/ner-from_scratch-{n_str}"
+    output_dir = parsed_args.output_dir or f"outputs/ner-from_scratch-{n_str}"
+    prompts = [prompt] * (n or 1)
+    prompt_dataset = Dataset.from_dict(
+        {"idx": list(range(len(prompts))), "prompt": prompts}
+    )
     extra_vllm_kwargs = {"limit_mm_per_prompt": {"image": 0, "audio": 0}}
     options = VLLMOfflineRuntimeOptions(
-        temperature=args.temperature,
-        top_p=args.top_p,
-        top_k=args.top_k,
-        max_tokens=args.max_tokens,
+        temperature=parsed_args.temperature,
+        top_p=parsed_args.top_p,
+        top_k=parsed_args.top_k,
+        max_tokens=parsed_args.max_tokens,
     )
     client = VLLMOfflineClient(
-        model=args.model,
-        max_model_len=args.max_model_len,
+        model=parsed_args.model,
+        max_model_len=parsed_args.max_model_len,
         gpu_memory_utilization=0.90,
         extra_vllm_kwargs=extra_vllm_kwargs,
     )
     with Annotator(client=client, verbose=True) as anno:
-        anno.generate_dataset(
+        prepared_dataset, _, _ = anno.prepare_data(
             output_dir=output_dir,
-            prompts=prompt,
-            max_num_samples=n,
+            prompt_template="{prompt}",
+            dataset=prompt_dataset,
+            prepared_hub_id=parsed_args.hub_id,
+            force_data_preparation=parsed_args.force_data_preparation,
+        )
+
+        anno.run_annotation(
+            output_dir=output_dir,
+            prompt_template="{prompt}",
+            prepared_dataset=prepared_dataset,
+            new_hub_id=parsed_args.hub_id,
             upload_every_n_samples=None,
             options=options,
         )

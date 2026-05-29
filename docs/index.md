@@ -37,7 +37,9 @@ uv add "llm-annotator[anthropic]"
 
 ## Quickstart
 
-Annotate a dataset:
+### One-step convenience
+
+Annotate a dataset end-to-end with a single call:
 
 ```python
 from llm_annotator import Annotator, VLLMOfflineClient
@@ -57,7 +59,7 @@ with Annotator(client=client) as anno:
     )
 ```
 
-Generate a dataset from prompts:
+Generate a dataset from scratch:
 
 ```python
 from llm_annotator import Annotator, OpenAIClient
@@ -72,9 +74,57 @@ with Annotator(client=client) as anno:
     )
 ```
 
+### Two-step staged workflow
+
+For large datasets or SLURM-style pipelines, separate data preparation
+from model inference. `prepare_data` handles template application and
+optional sorting, then uploads the result to Hugging Face Hub. On
+inference failures, `run_annotation` can reload the prepared data from
+Hub without repeating the expensive preparation step.
+
+```python
+from llm_annotator import Annotator, VLLMOfflineClient
+
+client = VLLMOfflineClient(
+    model="meta-llama/Llama-3.2-3B-Instruct",
+    max_model_len=4096,
+)
+
+HUB_ID = "my-org/imdb-prepared"
+
+with Annotator(client=client, verbose=True) as anno:
+    # Step 1: prepare:  reuses local cache, falls back to Hub, builds
+    # from source if neither exists.
+    prepared_dataset, local_path, hub_id = anno.prepare_data(
+        output_dir="outputs/imdb-sentiment",
+        prompt_template="Classify the sentiment: {text}",
+        dataset_name="stanfordnlp/imdb",
+        dataset_split="test",
+        max_num_samples=100,
+        sort_by_length=True,
+        prepared_hub_id=HUB_ID,         # back up prepared data to Hub
+    )
+
+    # Step 2: run generation against the prepared data.
+    # If this step fails, re-run it with prepared_hub_id=HUB_ID and the
+    # same output_dir:  the prepared data is restored from Hub automatically.
+    ds = anno.run_annotation(
+        output_dir="outputs/imdb-sentiment",
+        prompt_template="Classify the sentiment: {text}",
+        prepared_dataset=prepared_dataset,
+        new_hub_id="my-org/imdb-annotated",
+        upload_every_n_samples=500,
+    )
+```
+
+To force a fresh preparation even when local or Hub artifacts exist, pass
+`force_data_preparation=True` to `prepare_data` (or to `annotate_dataset`).
+
 ## Why use it
 
-- Resume interrupted runs from JSONL checkpoints.
+- Staged `prepare_data` + `run_annotation` pipeline for SLURM and
+  cluster workflows:  expensive data preparation is done once and stored.
+- Resume interrupted generation runs from JSONL checkpoints.
 - Validate and post-process outputs with custom callables.
 - Enforce structured responses through JSON schemas.
 - Upload incrementally to the Hugging Face Hub.

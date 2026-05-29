@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 from pathlib import Path
 
@@ -14,7 +16,12 @@ logger = get_logger(__name__)
 CURR_DIR = Path(__file__).parent
 
 
-def main(args=None):
+def main(args: list[str] | None = None) -> None:
+    """Run the finemath-to-Dutch annotation example.
+
+    Args:
+        args: Optional command-line arguments.
+    """
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -53,13 +60,21 @@ def main(args=None):
         default=None,
         help="JSON string for speculative decoding config.",
     )
-    args = parser.parse_args(args)
-    if args.max_num_samples == -1:
-        args.max_num_samples = None
+    parser.add_argument(
+        "--force-data-preparation",
+        action="store_true",
+        default=False,
+        help="Force regeneration of prepared data.",
+    )
+    parsed_args = parser.parse_args(args)
+    if parsed_args.max_num_samples == -1:
+        parsed_args.max_num_samples = None
 
-    if args.speculative_config is not None:
+    if parsed_args.speculative_config is not None:
         try:
-            args.speculative_config = json.loads(args.speculative_config)
+            parsed_args.speculative_config = json.loads(
+                parsed_args.speculative_config
+            )
         except json.JSONDecodeError as exc:
             raise ValueError("Invalid JSON for --speculative-config") from exc
 
@@ -67,8 +82,8 @@ def main(args=None):
 
     if (
         hf_user is None
-        and args.hub_id is not None
-        and "{hf_user}" in args.hub_id
+        and parsed_args.hub_id is not None
+        and "{hf_user}" in parsed_args.hub_id
     ):
         logger.warning(
             "You are not logged into Hugging Face so uploading is disabled."
@@ -79,9 +94,9 @@ def main(args=None):
         encoding="utf-8"
     )
 
-    num_samples = args.max_num_samples
+    num_samples = parsed_args.max_num_samples
     n_str = str(num_samples) if num_samples is not None else "full"
-    hub_id = args.hub_id
+    hub_id = parsed_args.hub_id
     if hub_id is not None:
         if hf_user is None:
             hub_id = None
@@ -91,19 +106,19 @@ def main(args=None):
         hub_id = f"{hf_user}/finemath-dutch-{n_str}"
 
     options = VLLMOfflineRuntimeOptions(
-        temperature=args.temperature,
-        top_p=args.top_p,
-        top_k=args.top_k,
-        max_tokens=args.max_tokens,
-        repetition_penalty=args.repetition_penalty,
-        chat_template_kwargs={"enable_thinking": args.enable_thinking},
+        temperature=parsed_args.temperature,
+        top_p=parsed_args.top_p,
+        top_k=parsed_args.top_k,
+        max_tokens=parsed_args.max_tokens,
+        repetition_penalty=parsed_args.repetition_penalty,
+        chat_template_kwargs={"enable_thinking": parsed_args.enable_thinking},
     )
     client = VLLMOfflineClient(
-        model=args.model,
-        max_model_len=args.max_model_len,
-        max_num_seqs=args.max_num_seqs,
-        batch_size=args.max_num_seqs,
-        speculative_config=args.speculative_config,
+        model=parsed_args.model,
+        max_model_len=parsed_args.max_model_len,
+        max_num_seqs=parsed_args.max_num_seqs,
+        batch_size=parsed_args.max_num_seqs,
+        speculative_config=parsed_args.speculative_config,
     )
 
     if num_samples is None:
@@ -112,15 +127,23 @@ def main(args=None):
         upload_every_n_samples = max(1, num_samples // 4)
 
     with Annotator(
-        client=client, verbose=True, batch_size=args.max_num_seqs
+        client=client, verbose=True, batch_size=parsed_args.max_num_seqs
     ) as anno:
-        anno.annotate_dataset(
+        prepared_dataset, _, _ = anno.prepare_data(
             output_dir=f"outputs/finemath-dutch-{num_samples}",
             prompt_template=prompt_template,
-            dataset_name=args.dataset,
-            dataset_split=args.dataset_split,
-            new_hub_id=hub_id,
+            dataset_name=parsed_args.dataset,
+            dataset_split=parsed_args.dataset_split,
             max_num_samples=num_samples,
+            prepared_hub_id=hub_id,
+            force_data_preparation=parsed_args.force_data_preparation,
+        )
+
+        anno.run_annotation(
+            output_dir=f"outputs/finemath-dutch-{num_samples}",
+            prompt_template=prompt_template,
+            prepared_dataset=prepared_dataset,
+            new_hub_id=hub_id,
             keep_columns=True,
             upload_every_n_samples=upload_every_n_samples,
             options=options,
