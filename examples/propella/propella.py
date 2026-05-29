@@ -88,7 +88,7 @@ def main(args=None):
         default=-1,
         help="Number of samples to process. Use -1 for full split.",
     )
-    args.add_argument(
+    parser.add_argument(
         "--sort-by-length",
         action="store_true",
         default=False,
