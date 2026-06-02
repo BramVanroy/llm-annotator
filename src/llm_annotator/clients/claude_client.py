@@ -334,9 +334,7 @@ def _extract_system_instruction(
     return messages, system_instruction
 
 
-def _sanitize_schema(
-    schema: dict[str, Any],
-) -> dict[str, Any]:
+def _sanitize_schema(schema: dict[str, Any]) -> dict[str, Any]:
     """Claude does not support all JSON Schema features.
     - Claude does not support integer min/max values. Remove them.
 
@@ -346,27 +344,31 @@ def _sanitize_schema(
     Returns:
         The sanitized JSON schema compatible with Claude.
     """
-    schema = copy.deepcopy(schema)
-    if schema.get("type") == "integer":
-        schema = {
-            k: v for k, v in schema.items() if k not in {"minimum", "maximum"}
-        }
+    sanitized = copy.deepcopy(schema)
 
-    if schema.get("type") == "object":
-        properties = schema.get("properties", {})
-        for prop_schema in properties.values():
-            _sanitize_schema(prop_schema)
+    def walk(s: Any):
+        if not isinstance(s, dict):
+            return
 
-    if schema.get("type") == "array":
-        items = schema.get("items")
-        if isinstance(items, dict):
-            _sanitize_schema(items)
-        elif isinstance(items, list):
-            for item_schema in items:
-                if isinstance(item_schema, dict):
-                    _sanitize_schema(item_schema)
+        # Remove min/max for integers
+        if s.get("type") == "integer":
+            s.pop("minimum", None)
+            s.pop("maximum", None)
 
-    return schema
+        if s.get("type") == "object" and "properties" in s:
+            for prop_schema in s["properties"].values():
+                walk(prop_schema)
+
+        if s.get("type") == "array" and "items" in s:
+            items = s["items"]
+            if isinstance(items, dict):
+                walk(items)
+            elif isinstance(items, list):
+                for item_schema in items:
+                    walk(item_schema)
+
+    walk(sanitized)
+    return sanitized
 
 
 __all__ = ["ClaudeClient", "ClaudeRuntimeOptions"]
