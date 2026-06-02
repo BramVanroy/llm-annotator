@@ -1425,6 +1425,10 @@ openai = [
     { name = "openai" },
 ]
 vllm = [
+    { name = "mistral-common" },
+    { name = "vllm" },
+]
+vllm-flashinfer = [
     { name = "flashinfer-cubin" },
     { name = "flashinfer-jit-cache" },
     { name = "flashinfer-python" },
@@ -1463,15 +1467,17 @@ requires-dist = [
     { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.102.0,<1" },
     { name = "colorama", specifier = ">=0.4.6,<1" },
     { name = "datasets", specifier = ">=4.8.5,<5" },
-    { name = "flashinfer-cubin", marker = "extra == 'vllm'", specifier = "==0.6.8.post1" },
-    { name = "flashinfer-jit-cache", marker = "extra == 'vllm'", specifier = "==0.6.8.post1", index = "https://flashinfer.ai/whl/cu130/" },
-    { name = "flashinfer-python", marker = "extra == 'vllm'", specifier = "==0.6.8.post1" },
+    { name = "flashinfer-cubin", marker = "extra == 'vllm-flashinfer'", specifier = "==0.6.8.post1" },
+    { name = "flashinfer-jit-cache", marker = "extra == 'vllm-flashinfer'", specifier = "==0.6.8.post1", index = "https://flashinfer.ai/whl/cu130/" },
+    { name = "flashinfer-python", marker = "extra == 'vllm-flashinfer'", specifier = "==0.6.8.post1" },
     { name = "mistral-common", marker = "extra == 'vllm'", specifier = ">=1.11.2,<2" },
+    { name = "mistral-common", marker = "extra == 'vllm-flashinfer'", specifier = ">=1.11.2,<2" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=2.36.0,<3" },
     { name = "pydantic", specifier = ">=2.13.0,<3" },
     { name = "vllm", marker = "extra == 'vllm'", specifier = "==0.21.0" },
+    { name = "vllm", marker = "extra == 'vllm-flashinfer'", specifier = "==0.21.0" },
 ]
-provides-extras = ["anthropic", "openai", "vllm"]
+provides-extras = ["anthropic", "openai", "vllm", "vllm-flashinfer"]
 
 [package.metadata.requires-dev]
 dev = [

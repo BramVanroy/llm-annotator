@@ -31,6 +31,7 @@ Install provider extras when needed:
 
 ```bash
 uv add "llm-annotator[vllm]"
+uv add "llm-annotator[vllm-flashinfer]"  # Faster if your hardware supports it
 uv add "llm-annotator[openai]"
 uv add "llm-annotator[anthropic]"
 ```

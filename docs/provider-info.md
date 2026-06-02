@@ -7,7 +7,7 @@ configure authentication for each provider.
 
 | Provider | Extra to install | Client class | Default auth source |
 | --- | --- | --- | --- |
-| vLLM (offline) | `llm-annotator[vllm]` | `VLLMOfflineClient` | No API key. Runs local model weights. |
+| vLLM (offline) | `llm-annotator[vllm]` or `llm-annotator[vllm-flashinfer]` | `VLLMOfflineClient` | No API key. Runs local model weights. |
 | vLLM server (OpenAI-compatible) | `llm-annotator[vllm]` | `VLLMClient` | No API key by default (`api_key="EMPTY"`). |
 | OpenAI | `llm-annotator[openai]` | `OpenAIClient` | `OPENAI_API_KEY` |
 | Anthropic Claude | `llm-annotator[anthropic]` | `ClaudeClient` | `ANTHROPIC_API_KEY` |
@@ -16,6 +16,7 @@ configure authentication for each provider.
 
 ```bash
 uv add "llm-annotator[vllm]"
+uv add "llm-annotator[vllm-flashinfer]"  # Faster if your hardware supports it
 uv add "llm-annotator[openai]"
 uv add "llm-annotator[anthropic]"
 ```
