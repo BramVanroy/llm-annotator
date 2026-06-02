@@ -271,10 +271,15 @@ def get_lib_versions() -> dict[str, str]:
 
     ver = {
         "python": ".".join(str(part) for part in sys.version_info[:3]),
-        "vllm": version("vllm"),
-        "torch": version("torch"),
-        "transformers": version("transformers"),
     }
+
+    libraries = ("transformers", "torch", "vllm", "openai", "anthropic")
+
+    for lib in libraries:
+        try:
+            ver[lib] = version(lib)
+        except Exception:
+            ver[lib] = "not installed"
 
     try:
         # May fail if llm-annotator is not installed, which can happen eg in containers
