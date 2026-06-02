@@ -134,17 +134,15 @@ def test_claude_process_response_handles_mixed_blocks_and_error(
     assert parsed.stop_reason == "max_tokens"
 
 
-def test_claude_generate_request_error_returns_error_response(
+def test_claude_generate_request_error_raises(
     fake_anthropic_module: dict[str, Any],
 ) -> None:
-    # Verifies Claude request failures return structured error responses.
+    # Verifies Claude request failures are re-raised directly.
     fake_anthropic_module["create_raises"] = RuntimeError("api down")
     client = ClaudeClient(model="claude-test", on_error="ignore")
 
-    response = client.generate(messages=[{"role": "user", "content": "hi"}])
-
-    assert response.error is not None
-    assert response.error_type == "ProviderError"
+    with pytest.raises(RuntimeError, match="api down"):
+        client.generate(messages=[{"role": "user", "content": "hi"}])
 
 
 def test_claude_batch_generate_handles_worker_failures(

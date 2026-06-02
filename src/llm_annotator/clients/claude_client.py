@@ -13,6 +13,7 @@ from llm_annotator.clients.base import (
     Response,
 )
 from llm_annotator.clients.exceptions import ProviderError
+from llm_annotator.utils import add_schema_additional_properties_false
 
 
 @dataclass(slots=True, frozen=True)
@@ -174,13 +175,16 @@ class ClaudeClient(Client[ClaudeRuntimeOptions]):
 
                 request_payload["output_config"]["format"] = {
                     "type": "json_schema",
-                    "schema": options.json_schema,
+                    "schema": add_schema_additional_properties_false(
+                        options.json_schema
+                    ),
                 }
 
             request_payload.update(gen_kwargs or {})
             response = self._client.messages.create(**request_payload)
         except Exception as exc:
-            return self._handle_error(exc, context="Claude request failed")
+            # API errors specifically can always be raised
+            raise exc
         else:
             try:
                 return self._process_response(response=response)

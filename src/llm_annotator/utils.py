@@ -1,9 +1,7 @@
-import functools
 import hashlib
 import json
 import re
 import sys
-import time
 from collections.abc import Callable
 from importlib.metadata import version
 from os import PathLike
@@ -71,53 +69,6 @@ def convert_int_to_annotated_str(num: int) -> str:
         return f"{numstr}K"
     else:
         return str(num)
-
-
-def retry(num_retries: int = 3, sleep_time_s: int = 1) -> Callable:
-    """Return a decorator that retries a callable on failure with exponential back-off.
-
-    Useful for network operations such as uploading data to Hugging Face Hub.
-    The wait time doubles after each failed attempt.
-
-    Args:
-        num_retries: Maximum number of retry attempts before re-raising the exception.
-        sleep_time_s: Initial wait time in seconds before the first retry.
-
-    Returns:
-        A decorator that wraps a callable with automatic retry logic.
-    """
-
-    def decorator(func):
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            retries_left = num_retries
-            current_sleep_time = sleep_time_s
-            while True:
-                try:
-                    return func(*args, **kwargs)
-                except Exception as exc:
-                    if retries_left <= 0:
-                        LOGGER.error(
-                            "Function %s failed after %d retries.",
-                            func.__name__,
-                            num_retries,
-                        )
-                        raise exc
-
-                    LOGGER.warning(
-                        "Function %s failed with %s. Retrying in %ss... (%d retries left)",
-                        func.__name__,
-                        exc,
-                        current_sleep_time,
-                        retries_left,
-                    )
-                    time.sleep(current_sleep_time)
-                    retries_left -= 1
-                    current_sleep_time *= 2
-
-        return wrapper
-
-    return decorator
 
 
 def yield_jsonl_robust(
@@ -336,7 +287,31 @@ def extract_prompt_prefix(prompt: str) -> str:
     return re.split(_PLACEHOLDER_RE, prompt, maxsplit=1)[0]
 
 
+def add_schema_additional_properties_false(schema: Any) -> Any:
+    """Recursively set ``additionalProperties: false`` on all object schemas.
+
+    Claude requires this on every object type in the schema; without it the
+    API returns a 400 error.
+
+    Args:
+        schema: A JSON-schema dict (or any nested value).
+
+    Returns:
+        A new schema dict with ``additionalProperties`` set to ``False`` on
+        every sub-schema whose ``type`` is ``"object"``.
+    """
+    if not isinstance(schema, dict):
+        return schema
+    schema = {
+        k: add_schema_additional_properties_false(v) for k, v in schema.items()
+    }
+    if schema.get("type") == "object":
+        schema.setdefault("additionalProperties", False)
+    return schema
+
+
 __all__ = [
+    "add_schema_additional_properties_false",
     "convert_int_to_annotated_str",
     "count_lines",
     "ensure_returns_bool",
@@ -346,6 +321,5 @@ __all__ = [
     "get_hf_username",
     "get_lib_versions",
     "remove_empty_jsonl_files",
-    "retry",
     "yield_jsonl_robust",
 ]

@@ -34,7 +34,6 @@ from llm_annotator.utils import (
     extract_prompt_prefix,
     get_lib_versions,
     remove_empty_jsonl_files,
-    retry,
 )
 
 
@@ -1320,7 +1319,6 @@ class Annotator:
             count_idx = processed_n_samples // max_samples_per_output_file
             return pdout.joinpath(f"{stem}_{count_idx}.jsonl")
 
-    @retry()
     def push_dir_to_hub(
         self,
         dir_path: Path | str,
@@ -1344,9 +1342,6 @@ class Annotator:
                 ``{task_prefix}jsonl_upload``.
             allow_patterns: Optional include patterns for upload.
             ignore_patterns: Optional ignore patterns for upload.
-
-        Raises:
-            Exception: If upload fails after retries (handled by @retry decorator).
         """
         if not new_hub_id:
             raise ValueError(

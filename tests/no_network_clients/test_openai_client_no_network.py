@@ -96,19 +96,17 @@ def test_openai_process_response_stop_reason_error(
     assert response.stop_reason == "length"
 
 
-def test_openai_generate_request_error_returns_error_response(
+def test_openai_generate_request_error_raises(
     fake_openai_module: dict[str, Any],
 ) -> None:
-    # Verifies provider request errors are converted to error responses.
+    # Verifies provider request failures are re-raised directly.
     fake_openai_module["create_raises"] = RuntimeError("api down")
     client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(
         model="gpt-test", on_error="ignore"
     )
 
-    response = client.generate(messages=[{"role": "user", "content": "hi"}])
-
-    assert response.error is not None
-    assert response.error_type == "ProviderError"
+    with pytest.raises(RuntimeError, match="api down"):
+        client.generate(messages=[{"role": "user", "content": "hi"}])
 
 
 def test_openai_batch_generate_preserves_input_order(

@@ -33,54 +33,6 @@ def test_convert_int_to_annotated_str(num: int, expected: str) -> None:
     assert utils.convert_int_to_annotated_str(num) == expected
 
 
-def test_retry_succeeds_without_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Verifies retry wrapper returns immediately on first success without sleeping.
-    sleeps: list[int] = []
-
-    monkeypatch.setattr(utils.time, "sleep", lambda x: sleeps.append(int(x)))
-
-    @utils.retry(num_retries=2, sleep_time_s=1)
-    def _f() -> str:
-        return "ok"
-
-    assert _f() == "ok"
-    assert sleeps == []
-
-
-def test_retry_uses_exponential_backoff(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Verifies retry sleep times double after each transient failure.
-    sleeps: list[int] = []
-    attempts = {"n": 0}
-
-    monkeypatch.setattr(utils.time, "sleep", lambda x: sleeps.append(int(x)))
-
-    @utils.retry(num_retries=3, sleep_time_s=1)
-    def _f() -> str:
-        attempts["n"] += 1
-        if attempts["n"] < 3:
-            raise RuntimeError("boom")
-        return "ok"
-
-    assert _f() == "ok"
-    assert sleeps == [1, 2]
-
-
-def test_retry_raises_after_exhaustion(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Verifies original exception is re-raised after retries are exhausted.
-    monkeypatch.setattr(utils.time, "sleep", lambda _x: None)
-
-    @utils.retry(num_retries=1, sleep_time_s=1)
-    def _f() -> None:
-        raise ValueError("always")
-
-    with pytest.raises(ValueError, match="always"):
-        _f()
-
-
 def test_yield_jsonl_robust_handles_keep_columns_dedup_and_corrupt_lines(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -182,3 +134,44 @@ def test_get_hf_username(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_extract_prompt_prefix(prompt: str, expected: str) -> None:
     # Verifies prompt prefix extraction before the first template placeholder.
     assert utils.extract_prompt_prefix(prompt) == expected
+
+
+def test_add_schema_additional_properties_false() -> None:
+    # Verifies object schemas are closed recursively while preserving existing settings.
+    schema = {
+        "type": "object",
+        "properties": {
+            "child": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                },
+            },
+            "locked": {
+                "type": "object",
+                "properties": {
+                    "score": {"type": "integer"},
+                },
+                "additionalProperties": True,
+            },
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "label": {"type": "string"},
+                    },
+                },
+            },
+        },
+    }
+
+    updated = utils.add_schema_additional_properties_false(schema)
+
+    assert updated["additionalProperties"] is False
+    assert updated["properties"]["child"]["additionalProperties"] is False
+    assert (
+        updated["properties"]["items"]["items"]["additionalProperties"]
+        is False
+    )
+    assert updated["properties"]["locked"]["additionalProperties"] is True

@@ -15,6 +15,7 @@ from llm_annotator.clients.base import (
     Response,
 )
 from llm_annotator.clients.exceptions import ProviderError
+from llm_annotator.utils import add_schema_additional_properties_false
 
 
 if TYPE_CHECKING:
@@ -178,7 +179,9 @@ class OpenAIClient(Client[T_OpenAIOptions]):
                 "type": "json_schema",
                 "json_schema": {
                     "name": "response",
-                    "schema": options.json_schema,
+                    "schema": add_schema_additional_properties_false(
+                        options.json_schema
+                    ),
                     "strict": True,
                 },
             }
@@ -361,14 +364,17 @@ class OpenAIClient(Client[T_OpenAIOptions]):
                     "type": "json_schema",
                     "json_schema": {
                         "name": "response",
-                        "schema": resolved.json_schema,
+                        "schema": add_schema_additional_properties_false(
+                            resolved.json_schema
+                        ),
                         "strict": True,
                     },
                 }
             request_payload.update(gen_kwargs or {})
             response = self._client.chat.completions.create(**request_payload)
         except Exception as exc:
-            return self._handle_error(exc, context="OpenAI request failed")
+            # API errors specifically can always be raised
+            raise exc
         else:
             try:
                 return self._process_response(response=response)
