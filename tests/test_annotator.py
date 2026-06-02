@@ -8,7 +8,11 @@ from typing import Any, cast
 import pytest
 from datasets import Dataset
 
-from llm_annotator.annotator import Annotator, destroy_on_error
+from llm_annotator.annotator import (
+    Annotator,
+    _create_messages,
+    destroy_on_error,
+)
 from llm_annotator.clients.base import (
     Client,
     Provider,
@@ -142,19 +146,17 @@ def test_load_dataset_validation_errors(
         )
 
 
-def test_create_messages_with_and_without_system(
-    dummy_annotator: Annotator,
-) -> None:
+def test_create_messages_with_and_without_system() -> None:
     # Verifies message construction branches for system and non-system prompts.
     sample = {"text": "hello"}
-    with_system = dummy_annotator._create_messages(
+    with_system = _create_messages(
         sample,
         prompt_fields=("text",),
         prompt_template="Say {text}",
         task_prefix="",
         system_message="sys",
     )
-    no_system = dummy_annotator._create_messages(
+    no_system = _create_messages(
         sample,
         prompt_fields=("text",),
         prompt_template="Say {text}",

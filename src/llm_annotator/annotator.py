@@ -339,7 +339,7 @@ class Annotator:
             dataset = preprocess_fn(dataset=dataset)
 
         dataset = dataset.map(
-            self._create_messages,
+            _create_messages,
             num_proc=self.num_proc,
             fn_kwargs={
                 "prompt_fields": prompt_fields,
@@ -373,51 +373,6 @@ class Annotator:
             ).remove_columns([f"{task_prefix}messages_chars"])
 
         return dataset
-
-    def _create_messages(
-        self,
-        sample: dict,
-        prompt_fields: Iterable[str],
-        prompt_template: str,
-        task_prefix: str,
-        system_message: str | None = None,
-    ) -> dict[str, Any]:
-        """Restructure the sample into a "messages" format. Fills in the prompt template with values from the sample,
-        based on the prompt_fields.
-
-        Args:
-            sample: The dataset sample to process.
-            prompt_fields: Fields required by the prompt template.
-            prompt_template: The prompt template string with placeholders.
-            task_prefix: String prefix to use for internal column names.
-            system_message: Optional system message to add as "system" role in chat prompts.
-
-        Returns:
-            A dictionary with the filled-in prompt and the sample index.
-        """
-        if system_message is not None:
-            return {
-                f"{task_prefix}messages": [
-                    {"role": "system", "content": system_message},
-                    {
-                        "role": "user",
-                        "content": prompt_template.format(
-                            **{fld: sample[fld] for fld in prompt_fields}
-                        ),
-                    },
-                ]
-            }
-        else:
-            return {
-                f"{task_prefix}messages": [
-                    {
-                        "role": "user",
-                        "content": prompt_template.format(
-                            **{fld: sample[fld] for fld in prompt_fields}
-                        ),
-                    }
-                ]
-            }
 
     def _process_output(
         self,
@@ -1430,6 +1385,51 @@ class Annotator:
                 "Backed-up data to the HF Hub:"
                 f" https://huggingface.co/datasets/{new_hub_id}/tree/{revision}"
             )
+
+
+def _create_messages(
+    sample: dict,
+    prompt_fields: Iterable[str],
+    prompt_template: str,
+    task_prefix: str,
+    system_message: str | None = None,
+) -> dict[str, Any]:
+    """Restructure the sample into a "messages" format. Fills in the prompt template with values from the sample,
+    based on the prompt_fields.
+
+    Args:
+        sample: The dataset sample to process.
+        prompt_fields: Fields required by the prompt template.
+        prompt_template: The prompt template string with placeholders.
+        task_prefix: String prefix to use for internal column names.
+        system_message: Optional system message to add as "system" role in chat prompts.
+
+    Returns:
+        A dictionary with the filled-in prompt and the sample index.
+    """
+    if system_message is not None:
+        return {
+            f"{task_prefix}messages": [
+                {"role": "system", "content": system_message},
+                {
+                    "role": "user",
+                    "content": prompt_template.format(
+                        **{fld: sample[fld] for fld in prompt_fields}
+                    ),
+                },
+            ]
+        }
+    else:
+        return {
+            f"{task_prefix}messages": [
+                {
+                    "role": "user",
+                    "content": prompt_template.format(
+                        **{fld: sample[fld] for fld in prompt_fields}
+                    ),
+                }
+            ]
+        }
 
 
 __all__ = ["Annotator", "destroy_on_error"]
