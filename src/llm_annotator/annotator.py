@@ -356,7 +356,9 @@ class Annotator:
                 )
             dataset = dataset.map(
                 lambda msgs: {
-                    f"{task_prefix}messages_chars": len(json.dumps(msgs))
+                    f"{task_prefix}messages_chars": len(
+                        json.dumps(msgs, default=str)
+                    )
                 },
                 num_proc=self.num_proc,
                 input_columns=[f"{task_prefix}messages"],
@@ -837,7 +839,8 @@ class Annotator:
 
         # Add version info
         pdout.joinpath("_version.json").write_text(
-            json.dumps(get_lib_versions(), indent=4), encoding="utf-8"
+            json.dumps(get_lib_versions(), indent=4, default=str),
+            encoding="utf-8",
         )
 
         # Get indices from the local
@@ -989,7 +992,7 @@ class Annotator:
             for result_idx, res in enumerate(results):
                 inp = inputs[result_idx]
                 data_sample = {**inp, **res}
-                fhout.write(json.dumps(data_sample) + "\n")
+                fhout.write(json.dumps(data_sample, default=str) + "\n")
                 fhout.flush()
                 processed_n_samples += 1
 
