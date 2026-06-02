@@ -310,9 +310,50 @@ def add_schema_additional_properties_false(schema: Any) -> Any:
     return schema
 
 
+def is_in_range(
+    value: int | float,
+    min_value: int | float | None,
+    max_value: int | float | None,
+) -> bool:
+    """Check if a numeric value falls within an optional range (inclusive). Utility function
+    that models can use for validation.
+
+    Args:
+        value: The numeric value to check.
+        min_value: The minimum allowed value (inclusive), or None for no minimum.
+        max_value: The maximum allowed value (inclusive), or None for no maximum.
+
+    Returns:
+        True if the value is within the range, False otherwise.
+    """
+    if min_value is not None and value < min_value:
+        return False
+    if max_value is not None and value > max_value:
+        return False
+    return True
+
+
+def is_length(
+    text: str, min_length: int | None, max_length: int | None
+) -> bool:
+    """Check if the length of a text string falls within an optional range. Utility function
+    that models can use for validation.
+
+    Args:
+        text: The text string to check.
+        min_length: The minimum allowed length (inclusive), or None for no minimum.
+        max_length: The maximum allowed length (inclusive), or None for no maximum.
+    Returns:
+        True if the text length is within the range, False otherwise.
+    """
+    length = len(text)
+    return is_in_range(length, min_length, max_length)
+
+
 __all__ = [
     "add_schema_additional_properties_false",
     "convert_int_to_annotated_str",
+    "is_in_range",
     "count_lines",
     "ensure_returns_bool",
     "ensure_returns_dict",

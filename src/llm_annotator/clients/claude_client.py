@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -173,11 +174,12 @@ class ClaudeClient(Client[ClaudeRuntimeOptions]):
                 if "output_config" not in request_payload:
                     request_payload["output_config"] = {}
 
+                schema = _sanitize_schema(
+                    add_schema_additional_properties_false(options.json_schema)
+                )
                 request_payload["output_config"]["format"] = {
                     "type": "json_schema",
-                    "schema": add_schema_additional_properties_false(
-                        options.json_schema
-                    ),
+                    "schema": schema,
                 }
 
             request_payload.update(gen_kwargs or {})
@@ -330,6 +332,41 @@ def _extract_system_instruction(
     messages = messages[1:] if system_instruction else messages
 
     return messages, system_instruction
+
+
+def _sanitize_schema(
+    schema: dict[str, Any],
+) -> dict[str, Any]:
+    """Claude does not support all JSON Schema features.
+    - Claude does not support integer min/max values. Remove them.
+
+    Args:
+        schema: The original JSON schema.
+
+    Returns:
+        The sanitized JSON schema compatible with Claude.
+    """
+    schema = copy.deepcopy(schema)
+    if schema.get("type") == "integer":
+        schema = {
+            k: v for k, v in schema.items() if k not in {"minimum", "maximum"}
+        }
+
+    if schema.get("type") == "object":
+        properties = schema.get("properties", {})
+        for prop_schema in properties.values():
+            _sanitize_schema(prop_schema)
+
+    if schema.get("type") == "array":
+        items = schema.get("items")
+        if isinstance(items, dict):
+            _sanitize_schema(items)
+        elif isinstance(items, list):
+            for item_schema in items:
+                if isinstance(item_schema, dict):
+                    _sanitize_schema(item_schema)
+
+    return schema
 
 
 __all__ = ["ClaudeClient", "ClaudeRuntimeOptions"]
