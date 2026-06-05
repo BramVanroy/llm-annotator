@@ -72,7 +72,7 @@ class Client(ABC, Generic[T_Options]):
     def __init__(
         self,
         model: str,
-        max_workers: int = 4,
+        max_workers: int | None = None,
         on_error: OnError = "warn",
     ) -> None:
         """Initialize a provider client.

@@ -15,6 +15,7 @@ from llm_annotator.clients.base import (
     Response,
 )
 from llm_annotator.clients.exceptions import ProviderError
+from llm_annotator.logging_utils import get_logger
 from llm_annotator.utils import add_schema_additional_properties_false
 
 
@@ -22,6 +23,9 @@ if TYPE_CHECKING:
     from openai.types.chat.chat_completion import ChatCompletion
 
 from dataclasses import dataclass
+
+
+logger = get_logger(__name__)
 
 
 @dataclass(slots=True, frozen=True)
@@ -73,7 +77,7 @@ class OpenAIClient(Client[T_OpenAIOptions]):
     def __init__(
         self,
         model: str,
-        max_workers: int = 4,
+        max_workers: int | None = None,
         base_url: str | None = None,
         api_key: str | None = None,
         on_error: OnError = "warn",
@@ -83,7 +87,7 @@ class OpenAIClient(Client[T_OpenAIOptions]):
         Args:
             model: OpenAI model identifier.
             max_workers: Maximum number of concurrent worker threads for ``batch_generate``. Lower this value if
-                you are getting rate limited.
+                you are getting rate limited. If set to None, 1 or lower, multithreading will be disabled.
             base_url: Base URL for the OpenAI API endpoint.
             api_key: OpenAI API key. If omitted, the SDK will use
                 ``OPENAI_API_KEY`` from the environment.
@@ -245,6 +249,9 @@ class OpenAIClient(Client[T_OpenAIOptions]):
         # Poll until the batch reaches a terminal state.
         terminal_statuses = {"completed", "failed", "expired", "cancelled"}
         while batch.status not in terminal_statuses:
+            logger.info(
+                f"Batch {batch_id} status: {batch.status}. Polling again in {poll_interval} seconds..."
+            )
             time.sleep(poll_interval)
             batch = self._client.batches.retrieve(batch_id)
 
@@ -424,30 +431,47 @@ class OpenAIClient(Client[T_OpenAIOptions]):
                 messages, resolved, gen_kwargs, poll_interval
             )
 
-        from concurrent.futures import ThreadPoolExecutor
+        if self.max_workers and self.max_workers > 1:
+            self.max_workers = min(self.max_workers, len(messages))
+            from concurrent.futures import ThreadPoolExecutor
 
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = [
-                executor.submit(
-                    self.generate,
-                    messages=msgs,
-                    options=options,
-                    gen_kwargs=gen_kwargs,
-                )
-                for msgs in messages
-            ]
-
-        responses: list[Response] = []
-        for idx, future in enumerate(futures):
-            try:
-                responses.append(future.result())
-            except Exception as exc:
-                responses.append(
-                    self._handle_error(
-                        exc,
-                        context=f"OpenAI batch request failed at index {idx}",
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                futures = [
+                    executor.submit(
+                        self.generate,
+                        messages=msgs,
+                        options=options,
+                        gen_kwargs=gen_kwargs,
                     )
-                )
+                    for msgs in messages
+                ]
+
+            responses: list[Response] = []
+            for idx, future in enumerate(futures):
+                try:
+                    responses.append(future.result())
+                except Exception as exc:
+                    responses.append(
+                        self._handle_error(
+                            exc,
+                            context=f"OpenAI request failed at index {idx}",
+                        )
+                    )
+        else:
+            responses = []
+            for idx, msgs in enumerate(messages):
+                try:
+                    response = self.generate(
+                        messages=msgs, options=options, gen_kwargs=gen_kwargs
+                    )
+                    responses.append(response)
+                except Exception as exc:
+                    responses.append(
+                        self._handle_error(
+                            exc,
+                            context=f"OpenAI request failed at index {idx}",
+                        )
+                    )
         return responses
 
     def _handle_stop_reason(
