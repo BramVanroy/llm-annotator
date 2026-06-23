@@ -9,22 +9,6 @@ from __future__ import annotations
 from datasets import Dataset, load_dataset
 
 
-def is_stub(titles: list[str]) -> list[bool]:
-    """Return ``True`` when a Wikipedia article is a stub page.
-
-    Args:
-        wikitexts: Raw page texts.
-        titles: The titles of the pages.
-
-    Returns:
-        Whether the pages look like a stub.
-    """
-    # E.g. overview pages like https://nl.wikipedia.org/wiki/Categorie:Wikipedia:Beginnetje_biologie
-    return [
-        title.startswith("Categorie:Wikipedia:Beginnetje") for title in titles
-    ]
-
-
 def is_list(titles: list[str]) -> list[bool]:
     """Return ``True`` when a Wikipedia article is a list page.
 
@@ -52,25 +36,8 @@ def filter_dataset(
     ds: Dataset, num_proc: int | None, hub_id: str | None = None
 ) -> None:
     num_before = len(ds)
-    ds_stubs = ds.filter(
-        is_stub,
-        input_columns=["title"],
-        batched=True,
-        num_proc=num_proc,
-    )
-    ds_stubs.push_to_hub(f"{hub_id}-stubs", private=True)
 
     print(f"Filtering dataset of {num_before:,} articles...")
-    ds = ds.filter(
-        lambda titles: [not is_text_stub for is_text_stub in is_stub(titles)],
-        input_columns=["title"],
-        batched=True,
-        num_proc=num_proc,
-    )
-    num_after_stub = len(ds)
-    print(
-        f"Filtered {num_before - num_after_stub:,} stub pages, {num_after_stub:,} remaining."
-    )
 
     ds = ds.filter(
         lambda titles: [not is_text_list for is_text_list in is_list(titles)],
@@ -80,7 +47,7 @@ def filter_dataset(
     )
     num_after_list = len(ds)
     print(
-        f"Filtered {num_after_stub - num_after_list:,} list pages, {num_after_list:,} remaining."
+        f"Filtered {num_before - num_after_list:,} list pages, {num_after_list:,} remaining."
     )
 
     ds = ds.filter(
