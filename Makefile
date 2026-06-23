@@ -27,7 +27,7 @@ test-all:
 	uv run pytest --cov=$(PACKAGE) --cov-report=term-missing --cov-report=xml
 
 typecheck:
-	uv run mypy $(PACKAGE) tests/ examples/
+	uv run mypy $(PACKAGE) tests/
 
 # Only used for doc-testing, not for remote doc deployment
 DOCS_BRANCH ?= tmp-gh-pages

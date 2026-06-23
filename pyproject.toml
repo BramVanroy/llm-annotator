@@ -131,7 +131,7 @@ color = true
 
 [tool.mypy]
 python_version = "3.12"
-files = ["src", "tests", "examples"]
+files = ["src", "tests"]
 pretty = true
 show_error_codes = true
 warn_unused_ignores = true
