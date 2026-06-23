@@ -1,3 +1,9 @@
+# /// script
+# dependencies = [
+#   "datasets>=4.8.5,<5",
+# ]
+# ///
+
 from __future__ import annotations
 
 from datasets import Dataset, load_dataset
