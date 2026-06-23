@@ -76,31 +76,52 @@ def _explode_text_into_sections(examples) -> dict[list]:
     """
     all_keys = list(examples.keys())
     data = {k: [] for k in all_keys}
-    data["heading"] = []
+    data["section_heading"] = []
+    data["article_text"] = []
+    data["section_idx"] = []
 
     for sample_idx, text in enumerate(examples["text"]):
         current_section = []
-        heading = ""
+        section_title = ""
+        section_idx = -1
         for line in text.splitlines():
             if line.startswith("# "):
-                heading = line[2:].strip()
                 continue
             if line.startswith("## "):
                 if current_section:
                     for k in all_keys:
                         if k != "text":
                             data[k].append(examples[k][sample_idx])
-                    data["heading"].append(heading)
+                        else:
+                            data["article_text"].append(
+                                examples[k][sample_idx]
+                            )
+
                     data["text"].append("\n".join(current_section))
+                    data["section_idx"].append(section_idx)
+                    data["section_heading"].append(section_title)
+
                     current_section = []
-            current_section.append(line)
+
+                section_title = line[3:].strip()
+                section_idx += 1
+                # Do not include section heading in the section text
+                continue
+
+            # Do not include the first section (before the first level-2 heading) in the output
+            if section_idx > 0:
+                current_section.append(line)
 
         if current_section:
             for k in all_keys:
                 if k != "text":
                     data[k].append(examples[k][sample_idx])
-            data["heading"].append(heading)
+                else:
+                    data["article_text"].append(examples[k][sample_idx])
+
             data["text"].append("\n".join(current_section))
+            data["section_idx"].append(section_idx)
+            data["section_heading"].append(section_title)
 
     return data
 
