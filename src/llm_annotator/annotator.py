@@ -610,12 +610,16 @@ class Annotator:
                 except Exception:
                     pass
             else:
-                cached_ds = load_dataset(
-                    prepared_hub_id,
-                    revision=CACHED_DATASET_BRANCH,
-                    split="train",
-                )
-                return cached_ds, None, prepared_hub_id
+                try:
+                    cached_ds = load_dataset(
+                        prepared_hub_id,
+                        revision=CACHED_DATASET_BRANCH,
+                        split="train",
+                    )
+                except Exception:
+                    pass
+                else:
+                    return cached_ds, None, prepared_hub_id
 
         # ... and if all of that fails, prepare the dataset from the source
         _str_formatter = string.Formatter()
