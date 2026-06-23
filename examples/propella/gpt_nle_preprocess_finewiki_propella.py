@@ -3,7 +3,7 @@ from __future__ import annotations
 from datasets import Dataset, load_dataset
 
 
-def is_stub(wikitexts: list[str], titles: list[str]) -> list[bool]:
+def is_stub(titles: list[str]) -> list[bool]:
     """Return ``True`` when a Wikipedia article is a stub page.
 
     Args:
@@ -15,8 +15,7 @@ def is_stub(wikitexts: list[str], titles: list[str]) -> list[bool]:
     """
     # E.g. overview pages like https://nl.wikipedia.org/wiki/Categorie:Wikipedia:Beginnetje_biologie
     return [
-        r"{{beginnetje" in wikitext.lower() or title.startswith("Categorie:")
-        for wikitext, title in zip(wikitexts, titles)
+        title.startswith("Categorie:Wikipedia:Beginnetje") for title in titles
     ]
 
 
@@ -48,8 +47,8 @@ def filter_dataset(
 ) -> None:
     num_before = len(ds)
     ds_stubs = ds.filter(
-        lambda wikitexts, titles: is_stub(wikitexts, titles),
-        input_columns=["wikitext", "title"],
+        is_stub,
+        input_columns=["title"],
         batched=True,
         num_proc=num_proc,
     )
@@ -57,10 +56,8 @@ def filter_dataset(
 
     print(f"Filtering dataset of {num_before:,} articles...")
     ds = ds.filter(
-        lambda wikitexts, titles: [
-            not is_text_stub for is_text_stub in is_stub(wikitexts, titles)
-        ],
-        input_columns=["wikitext", "title"],
+        lambda titles: [not is_text_stub for is_text_stub in is_stub(titles)],
+        input_columns=["title"],
         batched=True,
         num_proc=num_proc,
     )
