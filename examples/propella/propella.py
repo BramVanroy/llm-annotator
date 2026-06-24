@@ -144,11 +144,6 @@ def main(args: list[str] | None = None) -> None:
         extra_vllm_kwargs=extra_vllm_kwargs,
     )
 
-    if parsed_args.max_num_samples is None:
-        upload_every_n_samples = 2_500
-    else:
-        upload_every_n_samples = max(1, parsed_args.max_num_samples // 4)
-
     kwargs = {
         "client": client,
         "verbose": True,
@@ -180,10 +175,11 @@ def main(args: list[str] | None = None) -> None:
             prepared_dataset=prepared_dataset,
             new_hub_id=hub_id,
             keep_columns=True,
-            upload_every_n_samples=upload_every_n_samples,
+            upload_every_n_samples=10_000,
             options=options,
             output_schema=output_schema,
             system_message=system_message,
+            max_samples_per_output_file=1000,
         )
 
 
