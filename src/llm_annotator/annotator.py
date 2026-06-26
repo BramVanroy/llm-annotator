@@ -4,16 +4,17 @@ import dataclasses
 import json
 import shutil
 import string
+from collections import Counter
 from dataclasses import dataclass, field
 from functools import wraps
 from math import ceil
 from os import cpu_count
 from pathlib import Path
 from typing import Any, Callable, Iterable, Literal, Sequence
+from typing import Counter as CounterType
 
 from datasets import (
     Dataset,
-    concatenate_datasets,
     get_dataset_split_names,
     load_dataset,
 )
@@ -21,6 +22,7 @@ from huggingface_hub import (
     create_branch,
     create_repo,
     delete_branch,
+    upload_folder,
     upload_large_folder,
 )
 from tqdm import tqdm
@@ -41,7 +43,10 @@ from llm_annotator.utils import (
 # but at least 1 at most 8 to avoid overloading the system
 DEFAULT_CPU_COUNT = min(8, max(1, (cpu_count() or 1) - 1))
 
-CACHED_DATASET_BRANCH = "prepared_cache"
+PREPARED_DS_BRANCH_SUFF = "prepared_dataset"
+PREPARED_DS_LOCAL_SUBDIR = "prepared_dataset"
+PROGRESS_BACKUP_BRANCH_SUFF = "progress_backup"
+PROGRESS_DS_LOCAL_SUBDIR = "progress_backup"
 
 
 def destroy_on_error(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -86,7 +91,7 @@ class Annotator:
 
         * :meth:`prepare_data`. Apply prompt templates, sorting, and caching
             without running inference. Backs prepared artifacts up to Hugging Face
-            Hub if ``prepared_hub_id`` is provided.
+            Hub if ``hub_id`` is provided.
         * :meth:`run_annotation`. Run inference only, consuming data returned by
             :meth:`prepare_data` or loaded from a local path or Hub repo.
         * :meth:`annotate_dataset`. Convenience wrapper that calls
@@ -96,7 +101,7 @@ class Annotator:
 
     The staged :meth:`prepare_data` + :meth:`run_annotation` pattern is
     recommended for large-scale or cluster (SLURM) workflows. When
-    ``prepared_hub_id`` is provided, prepared artifacts are stored on
+    ``hub_id`` is provided, prepared artifacts are stored on
     Hugging Face Hub and restored automatically on the next call, so a
     failed generation job can be restarted without repeating the
     preparation step.
@@ -162,7 +167,7 @@ class Annotator:
     def _get_skip_idxs(
         self,
         *,
-        pdout: Path,
+        process_pdout: Path,
         idx_column: str,
         dataset_split: str | None = None,
         dataset_config: str | None = None,
@@ -179,8 +184,8 @@ class Annotator:
             Set of indices that have already been processed.
         """
         ids_done = set()
-        if pdout.exists() and pdout.is_dir():
-            for pfin in pdout.glob("*.jsonl"):
+        if process_pdout.exists() and process_pdout.is_dir():
+            for pfin in process_pdout.glob("*.jsonl"):
                 if pfin.stat().st_size == 0:
                     continue
                 ds = Dataset.from_json(str(pfin))
@@ -540,7 +545,8 @@ class Annotator:
         sort_by_length: bool
         | Literal["shortest_first", "longest_first"] = False,
         system_message: str | None = None,
-        prepared_hub_id: str | None = None,
+        hub_id: str | None = None,
+        keep_columns: str | Iterable[str] | bool | None = None,
         force_data_preparation: bool = False,
     ) -> tuple[Dataset, Path | None, str | None]:
         """Prepare input data for annotation without running generation.
@@ -548,6 +554,11 @@ class Annotator:
         The method reuses local prepared data first, then optionally restores
         prepared data from Hugging Face Hub, and finally falls back to building
         the prepared dataset from source.
+
+        Only the columns required for inference are retained in the cached
+        artifact: ``idx_column`` and ``{task_prefix}messages``. Pass
+        ``keep_columns`` to preserve additional source columns (e.g. those
+        needed by ``run_annotation``'s ``keep_columns`` argument).
 
         Args:
             output_dir: Directory where prepared artifacts are stored.
@@ -559,25 +570,29 @@ class Annotator:
             dataset_split: Specific split to load (optional).
             max_num_samples: Maximum number of samples to prepare.
             shuffle_seed: Seed for dataset shuffling.
-            preprocess_fn: Optional function to preprocess the dataset after loading and before applying the prompt template.
+            preprocess_fn: Optional function to preprocess the dataset after loading and before ap  plying the prompt template.
             prompt_field_swapper: Optional mapping to replace template fields.
             idx_column: Column name used as unique identifier. Must not exist in the input dataset.
             task_prefix: Prefix for internal columns and artifact names.
             sort_by_length: Whether to sort prompts by length.
             system_message: Optional system message for chat prompts.
-            prepared_hub_id: Optional Hugging Face dataset ID for prepared-data
-                backup and restore. Will be stored in the "prepared_cache" configuration of the repo if provided.
+            hub_id: Optional Hugging Face dataset ID used for both prepared-data
+                backup and restore. Will be stored in the ``CACHED_DATASET_BRANCH`` configuration of the repo if provided.
+            keep_columns: Source columns to retain in the cached artifact in
+                addition to the essential ``idx_column`` and messages column.
+                ``True`` keeps all columns (logs a size warning). ``None`` or
+                an empty collection keeps only the essential columns.
             force_data_preparation: Whether to rebuild prepared data even when
                 local or Hub artifacts already exist.
 
         Returns:
             Tuple of prepared dataset, local prepared-data path when available,
-            and prepared Hugging Face dataset ID when available.
+            and Hugging Face dataset ID when available.
         """
         pdout = Path(output_dir)
         pdout.mkdir(exist_ok=True, parents=True)
 
-        cached_input_path = pdout / f"{task_prefix}cached_input_dataset"
+        prepared_data_path = pdout / f"{task_prefix}{PREPARED_DS_LOCAL_SUBDIR}"
 
         prompt_field_swapper = prompt_field_swapper or {}
         for fld, value in prompt_field_swapper.items():
@@ -586,25 +601,25 @@ class Annotator:
             )
 
         # Attempt loading from local cache at
-        # pdout / f"{task_prefix}cached_input_dataset"
+        # pdout / f"{task_prefix}{PREPARED_DS_LOCAL_SUBDIR}"
         if (
-            cached_input_path.exists()
-            and cached_input_path.is_dir()
-            and any(cached_input_path.glob("*"))
+            prepared_data_path.exists()
+            and prepared_data_path.is_dir()
+            and any(prepared_data_path.glob("*"))
         ):
             if force_data_preparation:
-                shutil.rmtree(cached_input_path)
+                shutil.rmtree(prepared_data_path, ignore_errors=True)
             else:
-                cached_ds = Dataset.load_from_disk(cached_input_path)
-                return cached_ds, cached_input_path, prepared_hub_id
+                cached_ds = Dataset.load_from_disk(prepared_data_path)
+                return cached_ds, prepared_data_path, hub_id
 
         # Attempt loading from the hub
-        if prepared_hub_id:
+        if hub_id:
             if force_data_preparation:
                 try:
                     delete_branch(
-                        prepared_hub_id,
-                        branch=CACHED_DATASET_BRANCH,
+                        hub_id,
+                        branch=f"{task_prefix}{PREPARED_DS_BRANCH_SUFF}",
                         repo_type="dataset",
                     )
                 except Exception:
@@ -612,14 +627,18 @@ class Annotator:
             else:
                 try:
                     cached_ds = load_dataset(
-                        prepared_hub_id,
-                        revision=CACHED_DATASET_BRANCH,
+                        hub_id,
+                        revision=f"{task_prefix}{PREPARED_DS_BRANCH_SUFF}",
                         split="train",
                     )
                 except Exception:
                     pass
                 else:
-                    return cached_ds, None, prepared_hub_id
+                    self._logger.info(
+                        f"Restoring prepared data from Hub to local cache at '{prepared_data_path}'..."
+                    )
+                    cached_ds.save_to_disk(prepared_data_path)
+                    return cached_ds, prepared_data_path, hub_id
 
         # ... and if all of that fails, prepare the dataset from the source
         _str_formatter = string.Formatter()
@@ -648,22 +667,42 @@ class Annotator:
             preprocess_fn=preprocess_fn,
         )
 
+        essential_cols = {idx_column, f"{task_prefix}messages"}
+        if keep_columns is True:
+            self._logger.warning(
+                "keep_columns=True: the full prepared dataset will be cached, which may use significant disk space."
+            )
+        else:
+            if isinstance(keep_columns, str):
+                essential_cols.add(keep_columns)
+            elif keep_columns:
+                essential_cols |= set(keep_columns)
+            cols_to_drop = [
+                c
+                for c in prepared_dataset.column_names
+                if c not in essential_cols
+            ]
+            if cols_to_drop:
+                prepared_dataset = prepared_dataset.remove_columns(
+                    cols_to_drop
+                )
+
         self._logger.info(
-            f"Saving prepared data to local cache at '{cached_input_path}' for faster resumption on failure..."
+            f"Saving prepared data to local cache at '{prepared_data_path}' for faster resumption on failure..."
         )
-        prepared_dataset.save_to_disk(cached_input_path)
-        if prepared_hub_id:
+        prepared_dataset.save_to_disk(prepared_data_path)
+        if hub_id:
             self._logger.info(
-                f"Uploading prepared data to Hugging Face Hub at '{prepared_hub_id}' for backup and easy restore..."
+                f"Uploading prepared data to Hugging Face Hub at '{hub_id}' for backup and easy restore..."
             )
             prepared_dataset.push_to_hub(
-                prepared_hub_id,
-                revision=CACHED_DATASET_BRANCH,
+                hub_id,
+                revision=f"{task_prefix}{PREPARED_DS_BRANCH_SUFF}",
                 split="train",
                 private=True,
             )
 
-        return prepared_dataset, cached_input_path, prepared_hub_id
+        return prepared_dataset, prepared_data_path, hub_id
 
     @destroy_on_error
     def run_annotation(
@@ -673,9 +712,7 @@ class Annotator:
         *,
         prepared_dataset: Dataset | None = None,
         prepared_data_path: str | Path | None = None,
-        prepared_hub_id: str | None = None,
-        resume_from_hub_id: str | None = None,
-        new_hub_id: str | None = None,
+        hub_id: str | None = None,
         overwrite: bool = False,
         dataset_split: str | None = None,
         dataset_config: str | None = None,
@@ -683,8 +720,8 @@ class Annotator:
         options: ProviderRuntimeOptions | None = None,
         output_schema: str | dict[str, Any] | None = None,
         idx_column: str = "idx",
-        upload_every_n_samples: int | None = 0,
-        max_samples_per_output_file: int = 0,
+        upload_every_n_samples: int | None = 10_000,
+        max_samples_per_output_file: int = 1000,
         task_prefix: str = "",
         validate_fn: Callable | None = None,
         postprocess_fn: Callable | None = None,
@@ -699,11 +736,12 @@ class Annotator:
             prompt_template: Prompt template used for warm-up metadata.
             prepared_dataset: Pre-prepared dataset with messages column.
             prepared_data_path: Local path to prepared data on disk.
-            prepared_hub_id: Hugging Face dataset ID with prepared data.
-            resume_from_hub_id: Optional Hugging Face dataset ID to restore
-                generation checkpoints from.
-            new_hub_id: Optional Hugging Face dataset ID for generation uploads.
-            overwrite: Whether to overwrite existing output directory.
+            hub_id: Hugging Face dataset ID used for prepared-data cache and
+                JSONL progress backup.
+            overwrite: Whether to overwrite existing output directory EXCEPT
+                for the prepared data cache (which is preserved to allow resuming).
+                If you want to overwrite the prepared data cache, delete it manually or set
+                ``force_data_preparation=True`` in :meth:`prepare_data`.
             dataset_split: Dataset split used for skip filtering.
             dataset_config: Dataset config used for skip filtering.
             keep_columns: Columns to keep in output. ``True`` for all.
@@ -726,17 +764,6 @@ class Annotator:
         Raises:
             ValueError: If no prepared data source can be resolved.
         """
-        if resume_from_hub_id is not None:
-            if not resume_from_hub_id.strip() or "/" not in resume_from_hub_id:
-                raise ValueError(
-                    "'resume_from_hub_id' must be a Hugging Face dataset ID like "
-                    "'owner/name'."
-                )
-            if overwrite:
-                raise ValueError(
-                    "Cannot set 'overwrite=True' when 'resume_from_hub_id' is set."
-                )
-
         upload_every_n_samples = upload_every_n_samples or 0
         if (
             max_samples_per_output_file is not None
@@ -753,10 +780,8 @@ class Annotator:
             raise ValueError(
                 "upload_every_n_samples must be a positive integer or 0"
             )
-        if upload_every_n_samples > 0 and not new_hub_id:
-            raise ValueError(
-                "If upload_every_n_samples is set, new_hub_id must be provided"
-            )
+        if upload_every_n_samples > 0 and not hub_id:
+            upload_every_n_samples = 0
 
         if output_schema is not None:
             if isinstance(output_schema, str):
@@ -790,20 +815,7 @@ class Annotator:
         if isinstance(keep_columns, set):
             keep_columns.add(idx_column)
 
-        pdout = Path(output_dir)
-
-        if prepared_dataset is None and prepared_hub_id:
-            try:
-                prepared_dataset = load_dataset(
-                    prepared_hub_id,
-                    revision=CACHED_DATASET_BRANCH,
-                    split="train",
-                )
-            except Exception as exc:
-                self._logger.warning(
-                    f"Failed to load prepared dataset from Hub ID '{prepared_hub_id}' with revision '{CACHED_DATASET_BRANCH}'."
-                    f" This might be because the dataset or revision does not exist, or due to network issues. Error: {exc}"
-                )
+        root_pdout = Path(output_dir)
 
         prepared_path = (
             Path(prepared_data_path) if prepared_data_path else None
@@ -817,10 +829,24 @@ class Annotator:
                     f" This might be because the file does not exist or is not a valid dataset. Error: {exc}"
                 )
 
+        if prepared_dataset is None and hub_id:
+            try:
+                prepared_dataset = load_dataset(
+                    hub_id,
+                    revision=f"{task_prefix}{PREPARED_DS_BRANCH_SUFF}",
+                    split="train",
+                )
+            except Exception as exc:
+                self._logger.warning(
+                    f"Failed to load prepared dataset from Hub ID '{hub_id}' with revision '{PREPARED_DS_BRANCH_SUFF}'."
+                    f" This might be because the dataset or revision does not exist, or due to network issues. Error: {exc}"
+                )
+
         if prepared_dataset is None:
             raise ValueError(
                 "No prepared data found. Provide 'prepared_dataset', "
-                "'prepared_data_path' (locally saved dataset), or 'prepared_hub_id' (cloud-saved dataset)."
+                "'prepared_data_path' (locally saved dataset), or 'hub_id' (cloud-saved dataset)."
+                " If needed, first run 'prepare_data' to create the prepared dataset."
             )
 
         if idx_column not in prepared_dataset.column_names:
@@ -831,25 +857,27 @@ class Annotator:
             )
 
         # Only empty the output directory after potentially reading the cached input
-        if pdout.is_dir() and overwrite:
+        # To overwrite the cached prepared dataset, the user must explicitly delete
+        # the prepared data directory or set force_data_preparation=True in prepare_data.
+        if root_pdout.is_dir() and overwrite:
             # Remove everything except the prepared data
-            for item in pdout.glob("*"):
-                if item.is_dir() and item != prepared_data_path:
-                    shutil.rmtree(item)
+            for item in root_pdout.glob("*"):
+                if item.is_dir():
+                    if (
+                        prepared_path is None
+                        or item.resolve() != prepared_path.resolve()
+                    ):
+                        shutil.rmtree(item, ignore_errors=True)
                 else:
                     item.unlink()
 
-        pdout.mkdir(exist_ok=True, parents=True)
-
-        # Add version info
-        pdout.joinpath("_version.json").write_text(
-            json.dumps(get_lib_versions(), indent=4, default=str),
-            encoding="utf-8",
-        )
+        root_pdout.mkdir(exist_ok=True, parents=True)
+        process_pdout = root_pdout / f"{task_prefix}{PROGRESS_DS_LOCAL_SUBDIR}"
+        process_pdout.mkdir(exist_ok=True, parents=True)
 
         # Get indices from the local
         skip_idxs = self._get_skip_idxs(
-            pdout=pdout,
+            process_pdout=process_pdout,
             idx_column=idx_column,
             dataset_split=dataset_split,
             dataset_config=dataset_config,
@@ -861,10 +889,11 @@ class Annotator:
                 "All samples in the prepared dataset have already been processed according to existing output files."
             )
             return self._post_annotate(
-                pdout=pdout,
+                process_pdout=process_pdout,
                 idx_column=idx_column,
-                new_hub_id=new_hub_id,
+                hub_id=hub_id,
                 keep_idx_column=keep_idx_column,
+                task_prefix=task_prefix,
             )
 
         if skip_idxs:
@@ -884,11 +913,8 @@ class Annotator:
 
         prompt_template_prefix = extract_prompt_prefix(prompt_template)
 
-        if new_hub_id:
-            self.push_dir_to_hub(pdout, new_hub_id=new_hub_id)
-
         pfout = self.get_pfout_name(
-            pdout=pdout,
+            process_pdout=process_pdout,
             max_samples_per_output_file=max_samples_per_output_file,
             processed_n_samples=processed_n_samples,
         )
@@ -974,7 +1000,8 @@ class Annotator:
                             and n_retries == num_retries_invalid
                         ):
                             self._logger.warning(
-                                f"After {n_retries}/{num_retries_invalid} attempts, {len(invalid_indices):,} samples are still invalid. Skipping..."
+                                f"After {n_retries}/{num_retries_invalid} attempts, {len(invalid_indices):,}"
+                                " samples are still invalid. Skipping..."
                             )
 
             batch_size = len(batch[idx_column])
@@ -1005,26 +1032,27 @@ class Annotator:
                     and processed_n_samples % upload_every_n_samples == 0
                 ):
                     fhout.close()
-                    remove_empty_jsonl_files(pdout)
-                    if new_hub_id:
-                        self.push_dir_to_hub(pdout, new_hub_id=new_hub_id)
+                    remove_empty_jsonl_files(process_pdout)
+                    if hub_id:
+                        self.push_progress_to_hub(process_pdout, hub_id=hub_id)
                     pfout = self.get_pfout_name(
-                        pdout=pdout,
+                        process_pdout=process_pdout,
                         max_samples_per_output_file=max_samples_per_output_file,
                         processed_n_samples=processed_n_samples,
                     )
                     fhout = pfout.open("a", encoding="utf-8")
 
         fhout.close()
-        remove_empty_jsonl_files(pdout)
-        if new_hub_id and upload_every_n_samples > 0:
-            self.push_dir_to_hub(pdout, new_hub_id=new_hub_id)
+        remove_empty_jsonl_files(process_pdout)
+        if hub_id and upload_every_n_samples > 0:
+            self.push_progress_to_hub(process_pdout, hub_id=hub_id)
 
         return self._post_annotate(
-            pdout=pdout,
+            process_pdout=process_pdout,
             idx_column=idx_column,
-            new_hub_id=new_hub_id,
+            hub_id=hub_id,
             keep_idx_column=keep_idx_column,
+            task_prefix=task_prefix,
         )
 
     @destroy_on_error
@@ -1048,15 +1076,14 @@ class Annotator:
         sort_by_length: bool
         | Literal["shortest_first", "longest_first"] = False,
         system_message: str | None = None,
-        prepared_hub_id: str | None = None,
+        hub_id: str | None = None,
         force_data_preparation: bool = False,
-        new_hub_id: str | None = None,
         overwrite: bool = False,
         keep_columns: str | Iterable[str] | bool | None = None,
         options: ProviderRuntimeOptions | None = None,
         output_schema: str | dict[str, Any] | None = None,
-        upload_every_n_samples: int | None = 0,
-        max_samples_per_output_file: int = 0,
+        upload_every_n_samples: int | None = 10_000,
+        max_samples_per_output_file: int = 1000,
         validate_fn: Callable | None = None,
         postprocess_fn: Callable | None = None,
         num_retries_invalid: int = 5,
@@ -1086,10 +1113,12 @@ class Annotator:
             task_prefix: Prefix for internal column names and output files.
             sort_by_length: Whether to sort prompts by length.
             system_message: Optional system message for the chat prompt.
-            prepared_hub_id: Optional Hub dataset ID for prepared-data cache.
+            hub_id: Optional Hub dataset ID for prepared-data cache and
+                JSONL progress backup.
             force_data_preparation: Rebuild prepared data even if cached.
-            new_hub_id: Optional Hub dataset ID for annotation outputs.
-            overwrite: Whether to overwrite the output directory.
+            overwrite: Whether to overwrite the output directory EXCEPT for the prepared data cache
+                (which is preserved to allow resuming). If you want to overwrite the prepared data cache,
+                delete it manually or set ``force_data_preparation=True``.
             keep_columns: Columns to keep in the final dataset.
             options: Runtime options passed to the client.
             output_schema: Optional JSON schema for structured output.
@@ -1137,7 +1166,8 @@ class Annotator:
             task_prefix=task_prefix,
             sort_by_length=sort_by_length,
             system_message=system_message,
-            prepared_hub_id=prepared_hub_id,
+            hub_id=hub_id,
+            keep_columns=keep_columns,
             force_data_preparation=force_data_preparation,
         )
 
@@ -1145,7 +1175,7 @@ class Annotator:
             output_dir=output_dir,
             prompt_template=prompt_template,
             prepared_dataset=prepared_dataset,
-            new_hub_id=new_hub_id,
+            hub_id=hub_id,
             overwrite=overwrite,
             keep_columns=keep_columns,
             options=options,
@@ -1168,14 +1198,15 @@ class Annotator:
         prompts: str | Sequence[str],
         *,
         prompt_prefix: str | None = None,
-        new_hub_id: str | None = None,
+        hub_id: str | None = None,
+        force_data_preparation: bool = False,
         overwrite: bool = False,
         options: ProviderRuntimeOptions | None = None,
         max_num_samples: int | None = None,
         output_schema: str | dict[str, Any] | None = None,
         idx_column: str = "idx",
-        upload_every_n_samples: int | None = 0,
-        max_samples_per_output_file: int = 0,
+        upload_every_n_samples: int | None = 10_000,
+        max_samples_per_output_file: int = 1000,
         task_prefix: str = "",
         validate_fn: Callable | None = None,
         postprocess_fn: Callable | None = None,
@@ -1188,8 +1219,12 @@ class Annotator:
             output_dir: Directory where annotation output is written.
             prompts: A single prompt or a sequence of prompts.
             prompt_prefix: Optional shared prefix used for prefix caching.
-            new_hub_id: Optional Hub dataset ID for annotation outputs.
-            overwrite: Whether to overwrite the output directory.
+            hub_id: Optional Hub dataset ID for prepared-data cache and
+                JSONL progress backup.
+            force_data_preparation: Rebuild prepared data even if cached.
+            overwrite: Whether to overwrite the output directory EXCEPT for the prepared data cache
+                (which is preserved to allow resuming). If you want to overwrite the prepared data cache,
+                delete it manually or set ``force_data_preparation=True``.
             options: Runtime options passed to the client.
             max_num_samples: Number of times to repeat a single prompt.
             output_schema: Optional JSON schema for structured output.
@@ -1235,7 +1270,8 @@ class Annotator:
             output_dir=output_dir,
             prompt_template=prompt_template,
             prepared_dataset=prepared_dataset,
-            new_hub_id=new_hub_id,
+            hub_id=hub_id,
+            force_data_preparation=force_data_preparation,
             overwrite=overwrite,
             options=options,
             output_schema=output_schema,
@@ -1252,55 +1288,171 @@ class Annotator:
     def _post_annotate(
         self,
         *,
-        pdout: Path,
+        process_pdout: Path,
         idx_column: str,
-        new_hub_id: str | None = None,
+        hub_id: str | None = None,
         keep_idx_column: bool = False,
+        task_prefix: str = "",
     ) -> Dataset:
         """Clean up after annotation is complete.
 
         Removes empty output files and performs any final cleanup operations.
+        Deletes the local prepared-data cache directory and the two temporary
+        Hub branches (``JSONL_BACKUP_BRANCH`` and ``prepared_cache``) once
+        they are no longer needed.
 
         Args:
             pdout: Output directory path to clean up.
-            new_hub_id: Optional Hugging Face dataset ID for uploads.
+            hub_id: Optional Hugging Face dataset ID for uploads and cleanup.
             idx_column: Column name used as unique identifier.
-            keep_idx_column: Whether to keep the idx_column in the final dataset before uploading and returning
+            keep_idx_column: Whether to keep the idx_column in the final dataset before uploading and returning.
+            task_prefix: Prefix used for the local cache directory name and the upload branch name.
 
         Returns:
             The concatenated dataset of all annotation results (JSON-invalid samples are NOT removed)
         """
-        ds: Dataset = concatenate_datasets(
-            [
-                Dataset.from_json(str(pfin))
-                for pfin in pdout.glob("*.jsonl")
-                if pfin.stat().st_size > 0
-            ]
+        ds = load_dataset(
+            "json", data_dir=str(process_pdout), split="train"
         ).sort(idx_column)
+
         if not keep_idx_column:
             ds = ds.remove_columns([idx_column])
 
-        ds.save_to_disk(pdout / "done_disk_dataset")
+        # Save final dataset to root directory
+        ds.save_to_disk(process_pdout.parent)
 
-        if new_hub_id:
-            ds.push_to_hub(new_hub_id, private=True)
+        if hub_id:
+            ds.push_to_hub(hub_id, private=True)
             if self.verbose:
                 self._logger.info(
-                    f"Uploaded final dataset to the HF Hub: https://huggingface.co/datasets/{new_hub_id}!"
+                    f"Uploaded final dataset to the HF Hub: https://huggingface.co/datasets/{hub_id}!"
                 )
 
         ds.cleanup_cache_files()
 
-        cached_input_ds = pdout / "cached_input_dataset"
+        # Clean up the local prepared-data cache
+        cached_input_ds = (
+            process_pdout.parent / f"{task_prefix}{PREPARED_DS_LOCAL_SUBDIR}"
+        )
         if cached_input_ds.exists():
-            shutil.rmtree(cached_input_ds)
+            shutil.rmtree(cached_input_ds, ignore_errors=True)
+
+        if hub_id:
+            # Clean up the prepared-data branch on the Hub
+            try:
+                delete_branch(
+                    hub_id,
+                    branch=f"{task_prefix}{PREPARED_DS_BRANCH_SUFF}",
+                    repo_type="dataset",
+                )
+            except Exception as exc:
+                self._logger.warning(
+                    f"Failed to delete prepared-data branch '{PREPARED_DS_BRANCH_SUFF}'"
+                    f" on '{hub_id}': {exc}"
+                )
+
+            # Clean up the progress upload branch used for JSONL progress backup
+            # These branches can take up a lot of space and are easily forgotten,
+            # so best to clean up
+            try:
+                delete_branch(
+                    hub_id,
+                    branch=f"{task_prefix}{PROGRESS_BACKUP_BRANCH_SUFF}",
+                    repo_type="dataset",
+                )
+            except Exception as exc:
+                self._logger.warning(
+                    f"Failed to delete progress branch '{PROGRESS_BACKUP_BRANCH_SUFF}'"
+                    f" on '{hub_id}': {exc}"
+                )
+
+        self._add_metadata(
+            root_pdout=process_pdout.parent,
+            dataset=ds,
+            task_prefix=task_prefix,
+            hub_id=hub_id,
+        )
 
         return ds
+
+    def _add_metadata(
+        self,
+        root_pdout: Path,
+        dataset: Dataset,
+        task_prefix: str,
+        hub_id: str | None = None,
+    ) -> None:
+        """
+        Add simple metadata the a "metadata" subdirectory of the output directory.
+        This includes counts of finish_reason, valid_fields, and error_type, as well as library version information.
+        Optionally upload to the hub into the "metadata" subdirectory of the dataset repository.
+
+        Args:
+            root_pdout: The root output directory path.
+            dataset: The final annotated dataset.
+            task_prefix: String prefix to use for internal column names.
+            hub_id: Optional Hugging Face dataset ID to upload metadata to.
+        """
+        mtd_dir = root_pdout / "metadata"
+        mtd_dir.mkdir(exist_ok=True)
+
+        # Add version info
+        mtd_dir.joinpath("_version.json").write_text(
+            json.dumps(get_lib_versions(), indent=4, default=str),
+            encoding="utf-8",
+        )
+
+        # Get counts for finish_reason and valid_fields
+        finish_reason_counts: CounterType[str] = Counter()
+        valid_fields_counts: CounterType[str] = Counter()
+        valid_res = {None: "none", True: "valid", False: "invalid"}
+        error_type_counts: CounterType[str] = Counter()
+
+        # Iterate to avoid OOM
+        for batch in dataset.iter(batch_size=10_000):
+            if f"{task_prefix}finish_reason" in batch:
+                reasons = [
+                    "none" if item is None else item
+                    for item in batch[f"{task_prefix}finish_reason"]
+                ]
+                finish_reason_counts.update(reasons)
+
+            if f"{task_prefix}valid_fields" in batch:
+                valids = [
+                    valid_res.get(item, "unknown")
+                    for item in batch[f"{task_prefix}valid_fields"]
+                ]
+                valid_fields_counts.update(valids)
+
+            if f"{task_prefix}error_type" in batch:
+                error_types = [
+                    "none" if item is None else item
+                    for item in batch[f"{task_prefix}error_type"]
+                ]
+                error_type_counts.update(error_types)
+
+        mtd = {
+            "finish_reason_counts": dict(finish_reason_counts),
+            "valid_fields_counts": dict(valid_fields_counts),
+            "error_type_counts": dict(error_type_counts),
+        }
+
+        mtd_dir.joinpath("annotation_metadata.json").write_text(
+            json.dumps(mtd, indent=4, default=str), encoding="utf-8"
+        )
+
+        if hub_id:
+            upload_folder(
+                repo_id=hub_id,
+                repo_type="dataset",
+                folder_path=mtd_dir,
+                path_in_repo="metadata",
+            )
 
     def get_pfout_name(
         self,
         *,
-        pdout: Path | str,
+        process_pdout: Path,
         max_samples_per_output_file: int,
         processed_n_samples: int | None = None,
     ) -> Path:
@@ -1317,24 +1469,20 @@ class Annotator:
         Returns:
             Path object for the output file name.
         """
-        pdout = Path(pdout)
         processed_n_samples = processed_n_samples or 0
-        stem = pdout.stem
+        stem = process_pdout.stem
         if not max_samples_per_output_file:
-            return pdout.joinpath(f"{stem}.jsonl")
+            return process_pdout.joinpath(f"{stem}.jsonl")
         else:
             count_idx = processed_n_samples // max_samples_per_output_file
-            return pdout.joinpath(f"{stem}_{count_idx}.jsonl")
+            return process_pdout.joinpath(f"{stem}_{count_idx}.jsonl")
 
-    def push_dir_to_hub(
+    def push_progress_to_hub(
         self,
         dir_path: Path | str,
-        new_hub_id: str | None = None,
+        hub_id: str | None = None,
         *,
         task_prefix: str = "",
-        revision: str | None = None,
-        allow_patterns: list[str] | None = None,
-        ignore_patterns: list[str] | None = None,
     ) -> None:
         """Upload the output directory to Hugging Face Hub.
 
@@ -1343,49 +1491,34 @@ class Annotator:
 
         Args:
             dir_path: Path to the directory containing annotation files.
-            new_hub_id: Optional Hugging Face dataset ID to override the instance's new_hub_id.
+            hub_id: Optional Hugging Face dataset ID to upload into.
             task_prefix: String prefix to use for branch naming.
-            revision: Optional explicit branch name. Defaults to
-                ``{task_prefix}jsonl_upload``.
-            allow_patterns: Optional include patterns for upload.
-            ignore_patterns: Optional ignore patterns for upload.
         """
-        if not new_hub_id:
+        if not hub_id:
             raise ValueError(
-                "'new_hub_id' must be set to push data to the HuggingFace Hub"
+                "'hub_id' must be set to push data to the HuggingFace Hub"
             )
 
-        revision = revision or f"{task_prefix}jsonl_upload"
-        allow_patterns = allow_patterns or ["*.jsonl", "*.json"]
-        ignore_patterns = ignore_patterns or [
-            f"{task_prefix}cached_input_dataset/*",
-            ".cache/*",
-        ]
-
-        create_repo(
-            new_hub_id, repo_type="dataset", exist_ok=True, private=True
-        )
+        create_repo(hub_id, repo_type="dataset", exist_ok=True, private=True)
         create_branch(
-            new_hub_id,
+            hub_id,
             repo_type="dataset",
-            branch=revision,
+            branch=f"{task_prefix}{PROGRESS_BACKUP_BRANCH_SUFF}",
             exist_ok=True,
         )
 
         upload_large_folder(
-            repo_id=new_hub_id,
+            repo_id=hub_id,
             repo_type="dataset",
             folder_path=str(dir_path),
-            allow_patterns=allow_patterns,
-            ignore_patterns=ignore_patterns,
             private=True,
-            revision=revision,
+            revision=f"{task_prefix}{PROGRESS_BACKUP_BRANCH_SUFF}",
             print_report=False,
         )
         if self.verbose:
             self._logger.info(
                 "Backed-up data to the HF Hub:"
-                f" https://huggingface.co/datasets/{new_hub_id}/tree/{revision}"
+                f" https://huggingface.co/datasets/{hub_id}/tree/{task_prefix}{PROGRESS_BACKUP_BRANCH_SUFF}"
             )
 
 

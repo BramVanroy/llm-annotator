@@ -87,7 +87,7 @@ def main(args: list[str] | None = None) -> None:
             output_dir=output_dir,
             prompt_template="{prompt}",
             dataset=prompt_dataset,
-            prepared_hub_id=parsed_args.hub_id,
+            hub_id=parsed_args.hub_id,
             force_data_preparation=parsed_args.force_data_preparation,
         )
 
@@ -95,7 +95,7 @@ def main(args: list[str] | None = None) -> None:
             output_dir=output_dir,
             prompt_template="{prompt}",
             prepared_dataset=prepared_dataset,
-            new_hub_id=parsed_args.hub_id,
+            hub_id=parsed_args.hub_id,
             upload_every_n_samples=None,
             options=options,
         )

@@ -25,7 +25,7 @@ def main(args: list[str] | None = None) -> None:
     parser.add_argument(
         "--max-num-samples",
         type=int,
-        default=200,
+        default=20,
         help="Number of samples to process. Use -1 for the full dataset.",
     )
     parser.add_argument("--output-dir", default="outputs/sentiment-imdb-qwen")
@@ -88,7 +88,7 @@ Classification:"""
             dataset_split="test",
             max_num_samples=parsed_args.max_num_samples,
             sort_by_length=True,  # Sort by prompt length for more efficient batching -- final dataset will be re-ordered to original
-            prepared_hub_id=hub_id,
+            hub_id=hub_id,
             force_data_preparation=parsed_args.force_data_preparation,
         )
 
@@ -96,10 +96,9 @@ Classification:"""
             output_dir=parsed_args.output_dir,
             prompt_template=prompt_template,
             prepared_dataset=prepared_dataset,
-            new_hub_id=hub_id,
+            hub_id=hub_id,
             output_schema=output_schema,
             keep_columns=["text", "label"],  # Keep all original columns
-            upload_every_n_samples=100,
             num_retries_invalid=3,
             postprocess_fn=postprocess_fn,
             # validate_fn=random_validitity,

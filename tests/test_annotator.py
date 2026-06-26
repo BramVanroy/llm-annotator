@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from datasets import Dataset
+from datasets import Dataset, load_dataset
 
 from llm_annotator.annotator import (
     Annotator,
@@ -109,7 +109,7 @@ def test_get_skip_idxs_with_filters(
     )
 
     only_train = dummy_annotator._get_skip_idxs(
-        pdout=p,
+        process_pdout=p,
         idx_column="idx",
         dataset_split="train",
         dataset_config="en",
@@ -307,44 +307,16 @@ def test_run_annotation_guard_rails(tmp_path: Path) -> None:
             "messages": [[{"role": "user", "content": "Q: a"}]],
         }
     )
-    with pytest.raises(ValueError, match="new_hub_id must be provided"):
-        # Because upload_every_n_samples is set, new_hub_id must be provided.
-        annotator.run_annotation(
-            output_dir=tmp_path / "x2",
-            prompt_template="{text}",
-            prepared_dataset=prepared_ds,
-            upload_every_n_samples=10,
-        )
-
-
-def test_run_annotation_resume_from_hub_id_validation(
-    tmp_path: Path,
-) -> None:
-    # Verifies resume_from_hub_id format and overwrite guard rails.
-    annotator = Annotator(client=DummyClient())
-    prepared_ds = Dataset.from_dict(
-        {
-            "idx": [0],
-            "messages": [[{"role": "user", "content": "Q: a"}]],
-        }
+    # When upload_every_n_samples is set but hub_id is not provided,
+    # the code silently disables uploads (sets upload_every_n_samples=0).
+    result = annotator.run_annotation(
+        output_dir=tmp_path / "x2",
+        prompt_template="{text}",
+        prepared_dataset=prepared_ds,
+        upload_every_n_samples=10,
     )
-
-    with pytest.raises(ValueError, match="must be a Hugging Face dataset ID"):
-        annotator.run_annotation(
-            output_dir=tmp_path / "bad-id",
-            prompt_template="{text}",
-            prepared_dataset=prepared_ds,
-            resume_from_hub_id="invalid-id",
-        )
-
-    with pytest.raises(ValueError, match="overwrite=True"):
-        annotator.run_annotation(
-            output_dir=tmp_path / "overwrite",
-            prompt_template="{text}",
-            prepared_dataset=prepared_ds,
-            resume_from_hub_id="owner/name",
-            overwrite=True,
-        )
+    # Verify the annotation completed successfully
+    assert len(result) == 1
 
 
 def test_prepare_data_uses_local_cache(tmp_path: Path) -> None:
@@ -415,15 +387,15 @@ def test_post_annotate_and_pfout_name(
     )
 
     done = dummy_annotator._post_annotate(
-        pdout=p, idx_column="idx", keep_idx_column=False
+        process_pdout=p, idx_column="idx", keep_idx_column=False
     )
     assert done.column_names == ["response"]
 
     single = dummy_annotator.get_pfout_name(
-        pdout=p, max_samples_per_output_file=0, processed_n_samples=0
+        process_pdout=p, max_samples_per_output_file=0, processed_n_samples=0
     )
     chunked = dummy_annotator.get_pfout_name(
-        pdout=p, max_samples_per_output_file=10, processed_n_samples=25
+        process_pdout=p, max_samples_per_output_file=10, processed_n_samples=25
     )
     assert single.name == "out.jsonl"
     assert chunked.name == "out_2.jsonl"
@@ -450,9 +422,9 @@ def test_push_dir_to_hub_calls_hf_helpers(
     )
 
     with pytest.raises(ValueError, match="must be set"):
-        annotator.push_dir_to_hub(tmp_path, new_hub_id=None)
+        annotator.push_progress_to_hub(tmp_path, hub_id=None)
 
-    annotator.push_dir_to_hub(tmp_path, new_hub_id="me/test")
+    annotator.push_progress_to_hub(tmp_path, hub_id="me/test")
     assert called == ["repo", "branch", "upload"]
 
 
@@ -621,31 +593,6 @@ def test_run_annotation_keep_columns_type_error(tmp_path: Path) -> None:
         )
 
 
-def test_run_annotation_writes_version_file(tmp_path: Path) -> None:
-    # Verifies _version.json is created in output_dir at runtime.
-    annotator = Annotator(client=DummyClient(), batch_size=4, num_proc=2)
-    prepared_ds = Dataset.from_dict(
-        {
-            "idx": [0, 1],
-            "messages": [
-                [{"role": "user", "content": "Q: a"}],
-                [{"role": "user", "content": "Q: b"}],
-            ],
-        }
-    )
-    annotator.run_annotation(
-        output_dir=tmp_path / "out",
-        prompt_template="Q: {text}",
-        prepared_dataset=prepared_ds,
-    )
-
-    version_path = tmp_path / "out" / "_version.json"
-    assert version_path.exists()
-    version_data = json.loads(version_path.read_text(encoding="utf-8"))
-    assert "python" in version_data
-    assert "llm_annotator" in version_data
-
-
 def test_run_annotation_keep_columns_and_validation_fields(
     tmp_path: Path,
 ) -> None:
@@ -781,14 +728,20 @@ def test_prepare_data_uses_prepared_hub_and_force_rebuild(
         lambda *args, **kwargs: dataset,
     )
 
+    monkeypatch.setattr(
+        Dataset,
+        "save_to_disk",
+        lambda self, path, **kwargs: None,
+    )
+
     cached_ds, cached_path, cached_hub_id = annotator.prepare_data(
         output_dir=tmp_path / "hub-cache",
         prompt_template="Q: {text}",
-        prepared_hub_id="owner/prepared",
+        hub_id="owner/prepared",
     )
 
     assert cached_ds is dataset
-    assert cached_path is None
+    assert cached_path == tmp_path / "hub-cache" / "prepared_dataset"
     assert cached_hub_id == "owner/prepared"
 
     calls: list[tuple[str, str]] = []
@@ -796,10 +749,16 @@ def test_prepare_data_uses_prepared_hub_and_force_rebuild(
         "llm_annotator.annotator.delete_branch",
         lambda *args, **kwargs: calls.append((args[0], kwargs["branch"])),
     )
+    mock_prepared = Dataset.from_dict(
+        {
+            "idx": [0, 1],
+            "messages": [[{"role": "user", "content": "Q: a"}], []],
+        }
+    )
     monkeypatch.setattr(
         Annotator,
         "_load_dataset",
-        lambda self, **kwargs: dataset,
+        lambda self, **kwargs: mock_prepared,
     )
     monkeypatch.setattr(
         Dataset,
@@ -810,14 +769,14 @@ def test_prepare_data_uses_prepared_hub_and_force_rebuild(
     rebuilt_ds, rebuilt_path, rebuilt_hub_id = annotator.prepare_data(
         output_dir=tmp_path / "force-rebuild",
         prompt_template="Q: {text}",
-        prepared_hub_id="owner/prepared",
+        hub_id="owner/prepared",
         force_data_preparation=True,
     )
 
-    assert rebuilt_ds is dataset
+    assert set(rebuilt_ds.column_names) == {"idx", "messages"}
     assert rebuilt_path is not None
     assert rebuilt_hub_id == "owner/prepared"
-    assert calls == [("owner/prepared", "prepared_cache")]
+    assert calls == [("owner/prepared", "prepared_dataset")]
 
 
 def test_run_annotation_validation_and_short_circuit_paths(
@@ -847,7 +806,7 @@ def test_run_annotation_validation_and_short_circuit_paths(
             prompt_template="Q: {text}",
             prepared_dataset=prepared_ds,
             upload_every_n_samples=1.5,
-            new_hub_id="owner/output",
+            hub_id="owner/output",
         )
 
     with pytest.raises(TypeError, match="decode to a dictionary"):
@@ -894,12 +853,26 @@ def test_run_annotation_validation_and_short_circuit_paths(
         annotator.run_annotation(
             output_dir=tmp_path / "missing-prepared",
             prompt_template="Q: {text}",
-            prepared_hub_id="owner/prepared",
+            hub_id="owner/prepared",
         )
+
+    # Restore monkeypatches before the successful run
+    monkeypatch.setattr(
+        "llm_annotator.annotator.load_dataset",
+        load_dataset,
+    )
+    monkeypatch.setattr(
+        Dataset,
+        "load_from_disk",
+        Dataset.load_from_disk,
+    )
 
     output_dir = tmp_path / "complete"
     output_dir.mkdir()
-    (output_dir / "existing.jsonl").write_text(
+    # Create progress backup subdirectory with existing JSONL
+    progress_dir = output_dir / "progress_backup"
+    progress_dir.mkdir()
+    (progress_dir / "existing.jsonl").write_text(
         '{"idx": 0, "response": "done"}\n',
         encoding="utf-8",
     )
@@ -945,3 +918,133 @@ def test_run_annotation_keeps_all_columns_when_requested(
         "error",
         "error_type",
     ]
+
+
+def test_prepare_data_strips_original_columns(tmp_path: Path) -> None:
+    # Verifies prepare_data removes source columns not needed for inference.
+    annotator = Annotator(client=DummyClient())
+    ds = Dataset.from_dict({"text": ["a", "b"], "label": [0, 1]})
+
+    prepared_ds, _, _ = annotator.prepare_data(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        dataset=ds,
+    )
+
+    assert set(prepared_ds.column_names) == {"idx", "messages"}
+
+
+def test_prepare_data_keep_columns_retains_named_columns(
+    tmp_path: Path,
+) -> None:
+    # Verifies keep_columns preserves the requested source column alongside essentials.
+    annotator = Annotator(client=DummyClient())
+    ds = Dataset.from_dict({"text": ["a", "b"], "label": [0, 1]})
+
+    prepared_ds, _, _ = annotator.prepare_data(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        dataset=ds,
+        keep_columns=["text"],
+    )
+
+    assert set(prepared_ds.column_names) == {"idx", "messages", "text"}
+    assert "label" not in prepared_ds.column_names
+
+
+def test_prepare_data_keep_columns_true_warns_and_keeps_all(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Verifies keep_columns=True suppresses stripping and emits a size warning.
+    import logging
+
+    annotator = Annotator(client=DummyClient())
+    ds = Dataset.from_dict({"text": ["a", "b"], "label": [0, 1]})
+
+    with caplog.at_level(logging.WARNING, logger="llm_annotator.annotator"):
+        prepared_ds, _, _ = annotator.prepare_data(
+            output_dir=tmp_path / "out",
+            prompt_template="Q: {text}",
+            dataset=ds,
+            keep_columns=True,
+        )
+
+    assert any("disk space" in r.message for r in caplog.records)
+    assert "text" in prepared_ds.column_names
+    assert "label" in prepared_ds.column_names
+
+
+def test_post_annotate_cleanup_respects_task_prefix(tmp_path: Path) -> None:
+    # Verifies _post_annotate removes the prefixed cache dir, not a hardcoded one.
+    annotator = Annotator(client=DummyClient())
+    root_out = tmp_path / "out"
+    root_out.mkdir()
+
+    # Create progress subdirectory
+    pdout = root_out / "progress_backup"
+    pdout.mkdir()
+    (pdout / "out.jsonl").write_text(
+        '{"my_idx": 0, "response": "ok"}\n', encoding="utf-8"
+    )
+
+    # Create prefixed cache directory in root (should be deleted)
+    prefixed_cache = root_out / "my_prepared_dataset"
+    prefixed_cache.mkdir()
+    (prefixed_cache / "data.arrow").write_text("x")
+
+    # Create unprefixed cache directory in root (should NOT be deleted)
+    unprefixed_cache = root_out / "prepared_dataset"
+    unprefixed_cache.mkdir()
+    (unprefixed_cache / "data.arrow").write_text("x")
+
+    annotator._post_annotate(
+        process_pdout=pdout,
+        idx_column="my_idx",
+        task_prefix="my_",
+    )
+
+    assert not prefixed_cache.exists()
+    assert unprefixed_cache.exists()
+
+
+def test_post_annotate_deletes_hub_branches(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Verifies _post_annotate deletes both the upload and prepared-data Hub branches.
+    annotator = Annotator(client=DummyClient())
+    root_out = tmp_path / "out"
+    root_out.mkdir()
+
+    # Create progress subdirectory with JSONL
+    pdout = root_out / "progress_backup"
+    pdout.mkdir()
+    (pdout / "out.jsonl").write_text(
+        '{"idx": 0, "response": "ok"}\n', encoding="utf-8"
+    )
+
+    deleted: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "llm_annotator.annotator.delete_branch",
+        lambda repo_id, *, branch, repo_type: deleted.append(
+            (repo_id, branch)
+        ),
+    )
+    monkeypatch.setattr(
+        Dataset,
+        "push_to_hub",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "llm_annotator.annotator.upload_folder",
+        lambda *args, **kwargs: None,
+    )
+
+    annotator._post_annotate(
+        process_pdout=pdout,
+        idx_column="idx",
+        hub_id="owner/output",
+        task_prefix="",
+    )
+
+    assert ("owner/output", "progress_backup") in deleted
+    assert ("owner/output", "prepared_dataset") in deleted

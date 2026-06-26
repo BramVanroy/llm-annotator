@@ -135,7 +135,7 @@ def main(args: list[str] | None = None) -> None:
             dataset_name=parsed_args.dataset,
             dataset_split=parsed_args.dataset_split,
             max_num_samples=num_samples,
-            prepared_hub_id=hub_id,
+            hub_id=hub_id,
             force_data_preparation=parsed_args.force_data_preparation,
         )
 
@@ -143,7 +143,7 @@ def main(args: list[str] | None = None) -> None:
             output_dir=f"outputs/finemath-dutch-{num_samples}",
             prompt_template=prompt_template,
             prepared_dataset=prepared_dataset,
-            new_hub_id=hub_id,
+            hub_id=hub_id,
             keep_columns=True,
             upload_every_n_samples=upload_every_n_samples,
             options=options,
