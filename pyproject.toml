@@ -31,15 +31,15 @@ dependencies = [
 [project.optional-dependencies]
 vllm = [
     "mistral-common>=1.11.2,<2",
-    "vllm==0.21.0",
+    "vllm==0.24.0",
 ]
 # Requires CUDA
 vllm-flashinfer = [
     "mistral-common>=1.11.2,<2",
-    "vllm==0.21.0",
-    "flashinfer-python==0.6.8.post1",
-    "flashinfer-cubin==0.6.8.post1",
-    "flashinfer-jit-cache==0.6.8.post1"
+    "vllm==0.24.0",
+    "flashinfer-python==0.6.12",
+    "flashinfer-cubin==0.6.12",
+    "flashinfer-jit-cache==0.6.12"
 ]
 anthropic = [
     "anthropic>=0.102.0,<1",

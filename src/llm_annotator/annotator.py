@@ -577,7 +577,7 @@ class Annotator:
             sort_by_length: Whether to sort prompts by length.
             system_message: Optional system message for chat prompts.
             hub_id: Optional Hugging Face dataset ID used for both prepared-data
-                backup and restore. Will be stored in the ``CACHED_DATASET_BRANCH`` configuration of the repo if provided.
+                backup and restore. Will be stored in the PREPARED_DS_BRANCH_SUFF branch.
             keep_columns: Source columns to retain in the cached artifact in
                 addition to the essential ``idx_column`` and messages column.
                 ``True`` keeps all columns (logs a size warning). ``None`` or
