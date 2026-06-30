@@ -29,9 +29,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Install with ---extras "vllm" to use vLLM for inference. Requires CUDA.
 vllm = [
     "mistral-common>=1.11.2,<2",
     "vllm==0.24.0",
+    # Default installs 5.8.x, which has issues with gemma4
+    "transformers==5.11.0",
 ]
 # Requires CUDA
 vllm-flashinfer = [
@@ -39,7 +42,9 @@ vllm-flashinfer = [
     "vllm==0.24.0",
     "flashinfer-python==0.6.12",
     "flashinfer-cubin==0.6.12",
-    "flashinfer-jit-cache==0.6.12"
+    "flashinfer-jit-cache==0.6.12",
+    # Default installs 5.8.x, which has issues with gemma4
+    "transformers==5.11.0",
 ]
 anthropic = [
     "anthropic>=0.102.0,<1",
