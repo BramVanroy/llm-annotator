@@ -1,6 +1,9 @@
 copilot-instructions.md
 .github/instructions.md
 .vscode/
+CLAUDE.md
+./claude
+logs/
 .github/*
 !.github/workflows/
 output/
