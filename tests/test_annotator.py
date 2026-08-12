@@ -1048,3 +1048,187 @@ def test_post_annotate_deletes_hub_branches(
 
     assert ("owner/output", "progress_backup") in deleted
     assert ("owner/output", "prepared_dataset") in deleted
+
+
+def test_get_skip_idxs_repairs_truncated_last_line(
+    tmp_path: Path, dummy_annotator: Annotator
+) -> None:
+    # Verifies a half-written final line (killed job) is dropped and removed
+    # from the file so later reads see valid JSONL only.
+    p = tmp_path / "out"
+    p.mkdir()
+    pfout = p / "out.jsonl"
+    pfout.write_text(
+        json.dumps({"idx": 0, "response": "a"})
+        + "\n"
+        + json.dumps({"idx": 1, "response": "b"})
+        + "\n"
+        + '{"idx": 2, "response": "hal',
+        encoding="utf-8",
+    )
+
+    assert dummy_annotator._get_skip_idxs(
+        process_pdout=p, idx_column="idx"
+    ) == {
+        0,
+        1,
+    }
+
+    lines = pfout.read_text(encoding="utf-8").splitlines()
+    assert [json.loads(line)["idx"] for line in lines] == [0, 1]
+
+
+def test_get_skip_idxs_raises_on_corrupt_earlier_line(
+    tmp_path: Path, dummy_annotator: Annotator
+) -> None:
+    # Verifies corruption in the middle of a file is surfaced instead of
+    # silently skipped: only the last line can be an interrupted write.
+    p = tmp_path / "out"
+    p.mkdir()
+    (p / "out.jsonl").write_text(
+        '{"idx": 0, "respo\n' + json.dumps({"idx": 1}) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(json.JSONDecodeError):
+        dummy_annotator._get_skip_idxs(process_pdout=p, idx_column="idx")
+
+
+def test_get_skip_idxs_requires_idx_column(
+    tmp_path: Path, dummy_annotator: Annotator
+) -> None:
+    # Verifies resumption fails loudly when existing output has no idx column.
+    p = tmp_path / "out"
+    p.mkdir()
+    (p / "out.jsonl").write_text('{"response": "a"}\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not found in existing output file"):
+        dummy_annotator._get_skip_idxs(process_pdout=p, idx_column="idx")
+
+
+def test_process_batch_rejects_short_response_list(
+    dummy_annotator: Annotator,
+) -> None:
+    # Verifies a client returning fewer responses than inputs is an error
+    # instead of a silent, misaligned sample drop.
+    client = cast(DummyClient, dummy_annotator.client)
+    client.batch_generate = types.MethodType(  # type: ignore[method-assign]
+        lambda self, *, messages, options=None, gen_kwargs=None: [
+            Response(text="ok", provider=self.provider_type, model=self.model)
+        ],
+        client,
+    )
+
+    with pytest.raises(ValueError, match="exactly one response per input"):
+        dummy_annotator._process_batch(
+            batch={
+                "messages": [
+                    [{"role": "user", "content": "a"}],
+                    [{"role": "user", "content": "b"}],
+                ]
+            },
+            options=None,
+        )
+
+
+def test_run_annotation_without_prompt_template(tmp_path: Path) -> None:
+    # Verifies prepared data can be annotated without repeating the template,
+    # which the prepared messages already encode.
+    annotator = Annotator(client=DummyClient(), batch_size=2)
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": [0, 1],
+            "messages": [
+                [{"role": "user", "content": "a"}],
+                [{"role": "user", "content": "b"}],
+            ],
+        }
+    )
+
+    out = annotator.run_annotation(
+        output_dir=tmp_path / "out",
+        prepared_dataset=prepared_ds,
+        keep_idx_column=True,
+    )
+
+    assert out["idx"] == [0, 1]
+    assert out["response"] == ["a", "b"]
+
+
+def test_generate_dataset_end_to_end(tmp_path: Path) -> None:
+    # Verifies the synthetic-prompt entry point runs through to a dataset.
+    annotator = Annotator(client=DummyClient(), batch_size=2)
+
+    out = annotator.generate_dataset(
+        output_dir=tmp_path / "out",
+        prompts=["Tell me about cats", "Tell me about dogs"],
+        keep_idx_column=True,
+    )
+
+    assert out["idx"] == [0, 1]
+    assert out["response"] == ["Tell me about cats", "Tell me about dogs"]
+
+
+def test_post_annotate_deduplicates_repeated_idxs(
+    tmp_path: Path, dummy_annotator: Annotator
+) -> None:
+    # Verifies overlapping writers (e.g. a requeued job racing its predecessor)
+    # cannot produce duplicate samples in the final dataset.
+    pdout = tmp_path / "out" / "progress_backup"
+    pdout.mkdir(parents=True)
+    (pdout / "a.jsonl").write_text(
+        json.dumps({"idx": 0, "response": "first"})
+        + "\n"
+        + json.dumps({"idx": 1, "response": "first"})
+        + "\n",
+        encoding="utf-8",
+    )
+    (pdout / "b.jsonl").write_text(
+        json.dumps({"idx": 1, "response": "second"})
+        + "\n"
+        + json.dumps({"idx": 2, "response": "second"})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    ds = dummy_annotator._post_annotate(
+        process_pdout=pdout, idx_column="idx", keep_idx_column=True
+    )
+
+    assert ds["idx"] == [0, 1, 2]
+    assert len(ds) == 3
+
+
+def test_run_annotation_chunks_output_files_without_hub(
+    tmp_path: Path,
+) -> None:
+    # Verifies max_samples_per_output_file caps file size even when nothing is
+    # uploaded, so restarts do not have to parse one unbounded JSONL.
+    annotator = Annotator(client=DummyClient(), batch_size=2)
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": list(range(10)),
+            "messages": [
+                [{"role": "user", "content": f"q{idx}"}] for idx in range(10)
+            ],
+        }
+    )
+
+    out_dir = tmp_path / "out"
+    result = annotator.run_annotation(
+        output_dir=out_dir,
+        prepared_dataset=prepared_ds,
+        max_samples_per_output_file=4,
+        keep_idx_column=True,
+    )
+
+    files = sorted((out_dir / "progress_backup").glob("*.jsonl"))
+    assert [pfin.name for pfin in files] == [
+        "progress_backup_0.jsonl",
+        "progress_backup_1.jsonl",
+        "progress_backup_2.jsonl",
+    ]
+    assert [
+        len(pfin.read_text(encoding="utf-8").splitlines()) for pfin in files
+    ] == [4, 4, 2]
+    assert result["idx"] == list(range(10))

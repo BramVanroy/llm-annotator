@@ -5,12 +5,19 @@ import json
 import shutil
 import string
 from collections import Counter
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    Future,
+    ThreadPoolExecutor,
+    wait,
+)
 from dataclasses import dataclass, field
 from functools import wraps
 from math import ceil
 from os import cpu_count
 from pathlib import Path
-from typing import Any, Callable, Iterable, Literal, Sequence
+from queue import SimpleQueue
+from typing import Any, Callable, Iterable, Iterator, Literal, Sequence
 from typing import Counter as CounterType
 
 from datasets import (
@@ -27,7 +34,12 @@ from huggingface_hub import (
 )
 from tqdm import tqdm
 
-from llm_annotator.clients.base import Client, ProviderRuntimeOptions, Response
+from llm_annotator.clients.base import (
+    Client,
+    Provider,
+    ProviderRuntimeOptions,
+    Response,
+)
 from llm_annotator.clients.vllm_offline_client import VLLMOfflineClient
 from llm_annotator.logging_utils import get_logger
 from llm_annotator.utils import (
@@ -177,35 +189,83 @@ class Annotator:
         Scans existing output files to determine which samples can be skipped
         in resumed processing.
 
+        A hard crash (SIGKILL, node failure, preemption) can leave a partially
+        written final line behind. Such a truncated line is dropped and the file
+        is repaired in place, so that both the resume filter here and the final
+        concatenation in :meth:`_post_annotate` see valid JSONL only. The sample
+        that produced the broken line is simply re-annotated.
+
         Args:
-            pdout: Output directory path to scan for existing files.
+            process_pdout: Output directory path to scan for existing files.
+            idx_column: Column name used as unique identifier.
+            dataset_split: Only count rows from this split, when recorded.
+            dataset_config: Only count rows from this config, when recorded.
 
         Returns:
             Set of indices that have already been processed.
+
+        Raises:
+            ValueError: If an existing output file has no ``idx_column``.
         """
-        ids_done = set()
-        if process_pdout.exists() and process_pdout.is_dir():
-            for pfin in process_pdout.glob("*.jsonl"):
-                if pfin.stat().st_size == 0:
-                    continue
-                ds = Dataset.from_json(str(pfin))
+        ids_done: set[int] = set()
+        if not (process_pdout.exists() and process_pdout.is_dir()):
+            return ids_done
 
-                if dataset_split and "dataset_split" in ds.column_names:
-                    ds = ds.filter(
-                        lambda s: s["dataset_split"] == dataset_split
-                    )
+        for pfin in sorted(process_pdout.glob("*.jsonl")):
+            if pfin.stat().st_size == 0:
+                continue
 
-                if dataset_config and "dataset_config" in ds.column_names:
-                    ds = ds.filter(
-                        lambda s: s["dataset_config"] == dataset_config
-                    )
+            valid_bytes = 0
+            truncated = False
+            with pfin.open("rb") as fhin:
+                for raw_line in fhin:
+                    if not raw_line.strip():
+                        valid_bytes += len(raw_line)
+                        continue
 
-                if idx_column not in ds.column_names:
-                    raise ValueError(
-                        f"Expected index column '{idx_column}' not found in existing output file '{pfin}'."
-                        " Cannot determine which samples to skip on resume. Please check your configuration and ensure the index column is included in the output."
-                    )
-                ids_done.update(ds.unique(idx_column))
+                    try:
+                        row = json.loads(raw_line)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        # Only the very last line can legitimately be broken
+                        # (interrupted mid-write); anything else is corruption
+                        # we should not silently paper over.
+                        if fhin.read(1):
+                            raise
+                        truncated = True
+                        break
+
+                    valid_bytes += len(raw_line)
+
+                    if idx_column not in row:
+                        raise ValueError(
+                            f"Expected index column '{idx_column}' not found in existing output file '{pfin}'."
+                            " Cannot determine which samples to skip on resume. Please check your configuration and ensure the index column is included in the output."
+                        )
+
+                    if (
+                        dataset_split
+                        and "dataset_split" in row
+                        and row["dataset_split"] != dataset_split
+                    ):
+                        continue
+
+                    if (
+                        dataset_config
+                        and "dataset_config" in row
+                        and row["dataset_config"] != dataset_config
+                    ):
+                        continue
+
+                    ids_done.add(row[idx_column])
+
+            if truncated:
+                self._logger.warning(
+                    f"Discarding an incomplete trailing line in '{pfin}'"
+                    " (likely an interrupted write). The affected sample will"
+                    " be annotated again."
+                )
+                with pfin.open("r+b") as fhout:
+                    fhout.truncate(valid_bytes)
 
         return ids_done
 
@@ -454,6 +514,7 @@ class Annotator:
         task_prefix: str = "",
         validate_fn: Callable | None = None,
         postprocess_fn: Callable | None = None,
+        client: Client | None = None,
     ) -> list[dict[str, Any]]:
         """Process a batch of samples through the client.
 
@@ -469,15 +530,32 @@ class Annotator:
                 was passed, and the fields were invalid, this function will not be called
                 and `valid` will be set to False directly.
             postprocess_fn: Optional function to postprocess each sample after annotation.
+            client: Optional client to run inference with. Defaults to
+                ``self.client``. Subclasses that hold a pool of clients use this
+                to dispatch a batch to a specific worker.
 
         Returns:
             List of processed output dictionaries for each sample in the batch.
+
+        Raises:
+            ValueError: If the client did not return exactly one response per
+                input, which would silently drop or misalign samples.
         """
         output_schema = options.json_schema if options is not None else None
-        responses = self.client.batch_generate(
-            messages=batch[f"{task_prefix}messages"],
+        messages = batch[f"{task_prefix}messages"]
+        client = client if client is not None else self.client
+        responses = client.batch_generate(
+            messages=messages,
             options=options,
         )
+
+        if len(responses) != len(messages):
+            raise ValueError(
+                f"Client '{type(client).__name__}' returned {len(responses):,}"
+                f" responses for {len(messages):,} inputs. Clients must return"
+                " exactly one response per input, in order; anything else"
+                " silently drops or misaligns samples."
+            )
 
         results = []
         for response in responses:
@@ -525,6 +603,176 @@ class Annotator:
                 )
 
         return results
+
+    def _invalid_indices(
+        self, results: list[dict[str, Any]], task_prefix: str
+    ) -> list[int]:
+        """Return the positions of results that failed schema or custom validation.
+
+        Args:
+            results: Processed outputs for a single batch.
+            task_prefix: String prefix used for internal column names.
+
+        Returns:
+            The indices in ``results`` that are marked invalid.
+        """
+        return [
+            idx
+            for idx, res in enumerate(results)
+            if (
+                (
+                    f"{task_prefix}valid" in res
+                    and not res[f"{task_prefix}valid"]
+                )
+                or (
+                    f"{task_prefix}valid_fields" in res
+                    and not res[f"{task_prefix}valid_fields"]
+                )
+            )
+        ]
+
+    def _annotate_batch(
+        self,
+        *,
+        batch: dict[str, list[Any]],
+        options: ProviderRuntimeOptions | None,
+        task_prefix: str = "",
+        validate_fn: Callable | None = None,
+        postprocess_fn: Callable | None = None,
+        num_retries_invalid: int = 5,
+        client: Client | None = None,
+    ) -> list[dict[str, Any]]:
+        """Annotate one batch, retrying the samples that come back invalid.
+
+        Args:
+            batch: Dictionary containing batch data with messages samples.
+            options: Runtime options passed to the client.
+            task_prefix: String prefix to use for internal column names.
+            validate_fn: Optional custom validation function.
+            postprocess_fn: Optional postprocessing function.
+            num_retries_invalid: Number of retries for invalid outputs.
+            client: Optional client to run inference with (defaults to
+                ``self.client``).
+
+        Returns:
+            One processed output dictionary per sample in the batch, in order.
+        """
+        results = self._process_batch(
+            batch=batch,
+            options=options,
+            task_prefix=task_prefix,
+            validate_fn=validate_fn,
+            postprocess_fn=postprocess_fn,
+            client=client,
+        )
+
+        if num_retries_invalid <= 0:
+            return results
+
+        invalid_indices = self._invalid_indices(results, task_prefix)
+        n_retries = 0
+        while invalid_indices and n_retries < num_retries_invalid:
+            n_retries += 1
+            if self.verbose:
+                self._logger.info(
+                    f"Retrying {len(invalid_indices):,} invalid samples (attempt {n_retries}/{num_retries_invalid})..."
+                )
+
+            retry_batch = {
+                k: [v[i] for i in invalid_indices] for k, v in batch.items()
+            }
+            retry_results = self._process_batch(
+                batch=retry_batch,
+                options=options,
+                task_prefix=task_prefix,
+                validate_fn=validate_fn,
+                client=client,
+            )
+
+            for local_idx, global_idx in enumerate(invalid_indices):
+                results[global_idx] = retry_results[local_idx]
+
+            invalid_indices = self._invalid_indices(results, task_prefix)
+
+            if (
+                self.verbose
+                and invalid_indices
+                and n_retries == num_retries_invalid
+            ):
+                self._logger.warning(
+                    f"After {n_retries}/{num_retries_invalid} attempts, {len(invalid_indices):,}"
+                    " samples are still invalid. Skipping..."
+                )
+
+        return results
+
+    def _iter_annotated_batches(
+        self,
+        *,
+        prepared_dataset: Dataset,
+        options: ProviderRuntimeOptions | None,
+        task_prefix: str = "",
+        validate_fn: Callable | None = None,
+        postprocess_fn: Callable | None = None,
+        num_retries_invalid: int = 5,
+    ) -> Iterator[tuple[dict[str, list[Any]], list[dict[str, Any]]]]:
+        """Iterate over the dataset, yielding each batch with its annotations.
+
+        This is the extension point for alternative execution strategies: the
+        base implementation walks the dataset serially through a single client,
+        while :class:`VLLMQueueAnnotator` overrides it to keep several servers
+        busy at once. Implementations may yield batches in any order, as long as
+        every batch is yielded exactly once together with one result per sample.
+
+        Args:
+            prepared_dataset: The dataset still left to annotate.
+            options: Runtime options passed to the client.
+            task_prefix: String prefix to use for internal column names.
+            validate_fn: Optional custom validation function.
+            postprocess_fn: Optional postprocessing function.
+            num_retries_invalid: Number of retries for invalid outputs.
+
+        Yields:
+            Tuples of ``(batch, results)``, aligned sample by sample.
+        """
+        total_num_batches = ceil(len(prepared_dataset) / self.batch_size)
+        for batch in tqdm(
+            prepared_dataset.iter(self.batch_size),
+            total=total_num_batches,
+            desc=f"Annotating (max_bs={self.batch_size})",
+            unit="batch",
+        ):
+            yield (
+                batch,
+                self._annotate_batch(
+                    batch=batch,
+                    options=options,
+                    task_prefix=task_prefix,
+                    validate_fn=validate_fn,
+                    postprocess_fn=postprocess_fn,
+                    num_retries_invalid=num_retries_invalid,
+                ),
+            )
+
+    def _warm_up(
+        self,
+        *,
+        system_message: str | None = None,
+        prompt_prefix: str | None = None,
+        options: ProviderRuntimeOptions | None = None,
+    ) -> None:
+        """Warm up the inference backend before the first real batch.
+
+        Args:
+            system_message: Optional system message shared across requests.
+            prompt_prefix: Optional fixed prefix that starts every user turn.
+            options: Optional generation options used for the warm-up call.
+        """
+        self.client.warm_up(
+            system_message=system_message,
+            prompt_prefix=prompt_prefix,
+            options=options,
+        )
 
     def prepare_data(
         self,
@@ -708,7 +956,7 @@ class Annotator:
     def run_annotation(
         self,
         output_dir: str | Path,
-        prompt_template: str,
+        prompt_template: str | None = None,
         *,
         prepared_dataset: Dataset | None = None,
         prepared_data_path: str | Path | None = None,
@@ -733,7 +981,10 @@ class Annotator:
 
         Args:
             output_dir: Directory where annotation output is written.
-            prompt_template: Prompt template used for warm-up metadata.
+            prompt_template: Prompt template used for warm-up metadata. Optional
+                because the prepared dataset already carries the rendered
+                messages; when given, its static prefix is used to prime the
+                prefix cache.
             prepared_dataset: Pre-prepared dataset with messages column.
             prepared_data_path: Local path to prepared data on disk.
             hub_id: Hugging Face dataset ID used for prepared-data cache and
@@ -911,7 +1162,9 @@ class Annotator:
                     f"Skipping {len(skip_idxs):,} already-processed samples"
                 )
 
-        prompt_template_prefix = extract_prompt_prefix(prompt_template)
+        prompt_template_prefix = (
+            extract_prompt_prefix(prompt_template) if prompt_template else None
+        )
 
         pfout = self.get_pfout_name(
             process_pdout=process_pdout,
@@ -920,129 +1173,81 @@ class Annotator:
         )
         fhout = pfout.open("a", encoding="utf-8")
 
-        self.client.warm_up(
+        self._warm_up(
             system_message=system_message,
             prompt_prefix=prompt_template_prefix,
             options=options,
         )
 
-        total_num_batches = ceil(len(prepared_dataset) / self.batch_size)
-        for batch in tqdm(
-            prepared_dataset.iter(self.batch_size),
-            total=total_num_batches,
-            desc=f"Annotating (max_bs={self.batch_size})",
-            unit="batch",
-        ):
-            results = self._process_batch(
-                batch=batch,
-                options=options,
-                task_prefix=task_prefix,
-                validate_fn=validate_fn,
-                postprocess_fn=postprocess_fn,
-            )
+        annotated_batches = self._iter_annotated_batches(
+            prepared_dataset=prepared_dataset,
+            options=options,
+            task_prefix=task_prefix,
+            validate_fn=validate_fn,
+            postprocess_fn=postprocess_fn,
+            num_retries_invalid=num_retries_invalid,
+        )
 
-            if num_retries_invalid > 0:
-                invalid_indices = [
-                    idx
-                    for idx, res in enumerate(results)
-                    if (
-                        (
-                            f"{task_prefix}valid" in res
-                            and not res[f"{task_prefix}valid"]
-                        )
-                        or (
-                            f"{task_prefix}valid_fields" in res
-                            and not res[f"{task_prefix}valid_fields"]
-                        )
-                    )
-                ]
-
-                n_retries = 0
-                while invalid_indices and n_retries < num_retries_invalid:
-                    n_retries += 1
-                    if self.verbose:
-                        self._logger.info(
-                            f"Retrying {len(invalid_indices):,} invalid samples (attempt {n_retries}/{num_retries_invalid})..."
-                        )
-
-                    retry_batch = {
-                        k: [v[i] for i in invalid_indices]
-                        for k, v in batch.items()
-                    }
-                    retry_results = self._process_batch(
-                        batch=retry_batch,
-                        options=options,
-                        task_prefix=task_prefix,
-                        validate_fn=validate_fn,
-                    )
-
-                    for local_idx, global_idx in enumerate(invalid_indices):
-                        results[global_idx] = retry_results[local_idx]
-
-                    invalid_indices = [
-                        idx
-                        for idx, res in enumerate(results)
-                        if (
-                            (
-                                f"{task_prefix}valid" in res
-                                and not res[f"{task_prefix}valid"]
-                            )
-                            or (
-                                f"{task_prefix}valid_fields" in res
-                                and not res[f"{task_prefix}valid_fields"]
-                            )
-                        )
+        try:
+            for batch, results in annotated_batches:
+                batch_size = len(batch[idx_column])
+                if keep_columns is True:
+                    inputs = [
+                        {k: v[i] for k, v in batch.items()}
+                        for i in range(batch_size)
+                    ]
+                else:
+                    inputs = [
+                        {
+                            k: v[i]
+                            for k, v in batch.items()
+                            if k in keep_columns  # type: ignore[operator]
+                        }
+                        for i in range(batch_size)
                     ]
 
-                    if self.verbose:
-                        if (
-                            invalid_indices
-                            and n_retries == num_retries_invalid
-                        ):
-                            self._logger.warning(
-                                f"After {n_retries}/{num_retries_invalid} attempts, {len(invalid_indices):,}"
-                                " samples are still invalid. Skipping..."
-                            )
+                for result_idx, res in enumerate(results):
+                    inp = inputs[result_idx]
+                    data_sample = {**inp, **res}
+                    fhout.write(json.dumps(data_sample, default=str) + "\n")
+                    fhout.flush()
+                    processed_n_samples += 1
 
-            batch_size = len(batch[idx_column])
-            if keep_columns is True:
-                inputs = [
-                    {k: v[i] for k, v in batch.items()}
-                    for i in range(batch_size)
-                ]
-            else:
-                inputs = [
-                    {
-                        k: v[i]
-                        for k, v in batch.items()
-                        if k in keep_columns  # type: ignore[operator]
-                    }
-                    for i in range(batch_size)
-                ]
-
-            for result_idx, res in enumerate(results):
-                inp = inputs[result_idx]
-                data_sample = {**inp, **res}
-                fhout.write(json.dumps(data_sample, default=str) + "\n")
-                fhout.flush()
-                processed_n_samples += 1
-
-                if (
-                    upload_every_n_samples > 0
-                    and processed_n_samples % upload_every_n_samples == 0
-                ):
-                    fhout.close()
-                    remove_empty_jsonl_files(process_pdout)
-                    if hub_id:
-                        self.push_progress_to_hub(process_pdout, hub_id=hub_id)
-                    pfout = self.get_pfout_name(
-                        process_pdout=process_pdout,
-                        max_samples_per_output_file=max_samples_per_output_file,
-                        processed_n_samples=processed_n_samples,
+                    time_to_upload = (
+                        upload_every_n_samples > 0
+                        and processed_n_samples % upload_every_n_samples == 0
                     )
-                    fhout = pfout.open("a", encoding="utf-8")
+                    # Cap the file size even when nothing is pushed to the Hub:
+                    # otherwise a long run leaves one unbounded JSONL that every
+                    # restart has to parse in full.
+                    file_is_full = (
+                        max_samples_per_output_file > 0
+                        and processed_n_samples % max_samples_per_output_file
+                        == 0
+                    )
 
-        fhout.close()
+                    if time_to_upload or file_is_full:
+                        fhout.close()
+                        remove_empty_jsonl_files(process_pdout)
+                        if time_to_upload and hub_id:
+                            self.push_progress_to_hub(
+                                process_pdout, hub_id=hub_id
+                            )
+                        pfout = self.get_pfout_name(
+                            process_pdout=process_pdout,
+                            max_samples_per_output_file=max_samples_per_output_file,
+                            processed_n_samples=processed_n_samples,
+                        )
+                        fhout = pfout.open("a", encoding="utf-8")
+        finally:
+            # Closing the generator lets alternative execution strategies
+            # (e.g. the multi-server queue) shut their workers down when the
+            # writer stops early because of an error or interruption.
+            close_batches = getattr(annotated_batches, "close", None)
+            if callable(close_batches):
+                close_batches()
+            fhout.close()
+
         remove_empty_jsonl_files(process_pdout)
         if hub_id and upload_every_n_samples > 0:
             self.push_progress_to_hub(process_pdout, hub_id=hub_id)
@@ -1264,6 +1469,8 @@ class Annotator:
             max_num_samples=max_num_samples,
             idx_column=idx_column,
             task_prefix=task_prefix,
+            hub_id=hub_id,
+            force_data_preparation=force_data_preparation,
         )
 
         return self.run_annotation(
@@ -1271,7 +1478,6 @@ class Annotator:
             prompt_template=prompt_template,
             prepared_dataset=prepared_dataset,
             hub_id=hub_id,
-            force_data_preparation=force_data_preparation,
             overwrite=overwrite,
             options=options,
             output_schema=output_schema,
@@ -1314,6 +1520,26 @@ class Annotator:
         ds = load_dataset(
             "json", data_dir=str(process_pdout), split="train"
         ).sort(idx_column)
+
+        # A sample can only be written twice if two processes wrote to the same
+        # progress directory (e.g. a requeued job whose predecessor was still
+        # draining). Keep the first row per idx so the final dataset holds
+        # exactly one row per sample.
+        seen: set[Any] = set()
+        unique_rows: list[int] = []
+        for row_idx, sample_idx in enumerate(ds[idx_column]):
+            if sample_idx not in seen:
+                seen.add(sample_idx)
+                unique_rows.append(row_idx)
+
+        if len(unique_rows) < ds.num_rows:
+            self._logger.warning(
+                f"Found {ds.num_rows - len(unique_rows):,} duplicate"
+                f" '{idx_column}' values in '{process_pdout}'. Keeping the"
+                " first row of each; this usually means two annotation"
+                " processes shared one output directory."
+            )
+            ds = ds.select(unique_rows)
 
         if not keep_idx_column:
             ds = ds.remove_columns([idx_column])
@@ -1567,4 +1793,285 @@ def _create_messages(
         }
 
 
-__all__ = ["Annotator", "destroy_on_error"]
+@dataclass(slots=True)
+class VLLMQueueAnnotator(Annotator):
+    """Annotator that spreads one workload over several vLLM servers.
+
+    This subclass only changes *how* batches are executed: instead of walking
+    the prepared dataset serially through a single client, it keeps a bounded
+    queue of batches in flight over a pool of vLLM server clients, handing each
+    batch to whichever server is free. Everything else -- prompt templating,
+    JSONL progress snapshots keyed by ``idx``, resumption, Hub backups, and the
+    final concatenation -- is inherited from :class:`Annotator`, so all four
+    public entry points behave exactly as documented there.
+
+    Because batches finish out of order, results are written in completion
+    order and sorted by ``idx`` at the end (as they already are for the base
+    annotator, whose JSONL files are concatenated and sorted in
+    :meth:`Annotator._post_annotate`).
+
+    Args:
+        clients: vLLM server clients used as the worker pool. The first client
+            doubles as ``Annotator.client`` for inherited helpers.
+        batch_size: Maximum number of samples sent to a worker in one request.
+        queue_size: Maximum number of batches in flight (dispatched but not yet
+            written out). This bounds memory, *not* the amount of work: the
+            full dataset is always annotated. Defaults to two batches per
+            client, and is raised to ``len(clients)`` if a smaller value is
+            given, since a smaller queue would leave servers idle.
+        num_proc: Number of processes for dataset preprocessing.
+        verbose: Whether to print progress information.
+
+    Raises:
+        ValueError: If no clients are given or ``queue_size`` is not positive.
+        TypeError: If a client is not a vLLM server client.
+
+    Examples:
+        >>> from llm_annotator import VLLMClient, VLLMQueueAnnotator
+        >>> clients = [  # doctest: +SKIP
+        ...     VLLMClient(
+        ...         model="Qwen/Qwen3-8B", base_url=f"http://{host}:8000/v1"
+        ...     )
+        ...     for host in ("node01", "node02")
+        ... ]
+        >>> with VLLMQueueAnnotator(
+        ...     clients=clients, batch_size=64
+        ... ) as anno:  # doctest: +SKIP
+        ...     ds = anno.annotate_dataset(
+        ...         output_dir="outputs/data",
+        ...         prompt_template="Classify: {text}",
+        ...         dataset_name="my-dataset",
+        ...     )
+    """
+
+    clients: list[Client[Any]] = field(default_factory=list)
+    queue_size: int = 0
+    _client_pool: Any = field(init=False, repr=False, default=None)
+
+    def __init__(
+        self,
+        clients: Sequence[Client[Any]],
+        *,
+        batch_size: int = 256,
+        queue_size: int | None = None,
+        num_proc: int | None = DEFAULT_CPU_COUNT,
+        verbose: bool = False,
+    ) -> None:
+        """Instantiate a multi-server vLLM annotator.
+
+        Args:
+            clients: vLLM server clients used as the worker pool.
+            batch_size: Maximum number of samples sent to a worker at once.
+            queue_size: Maximum number of batches in flight. Defaults to two
+                per client.
+            num_proc: Number of processes for dataset preprocessing.
+            verbose: Whether to print progress information.
+
+        Raises:
+            ValueError: If no clients are given or ``queue_size`` is not
+                positive.
+            TypeError: If a client is not a vLLM server client.
+        """
+        if not clients:
+            raise ValueError(
+                "'clients' must contain at least one VLLM client."
+            )
+
+        self.clients = list(clients)
+        for client in self.clients:
+            if getattr(client, "provider_type", None) != Provider.VLLM:
+                raise TypeError(
+                    "VLLMQueueAnnotator only supports VLLM server clients,"
+                    f" got '{type(client).__name__}'."
+                )
+
+        self.batch_size = batch_size
+        self.num_proc = num_proc
+        self.verbose = verbose
+        self.client = self.clients[0]
+        self._logger = get_logger("annotator.vllm_queue")
+
+        if queue_size is None:
+            queue_size = 2 * len(self.clients)
+        elif queue_size < 1:
+            raise ValueError(
+                "'queue_size' must be a positive integer or None."
+            )
+        elif queue_size < len(self.clients):
+            self._logger.warning(
+                f"'queue_size' ({queue_size}) is smaller than the number of"
+                f" clients ({len(self.clients)}), which would leave servers"
+                " idle. Raising it to the number of clients."
+            )
+            queue_size = len(self.clients)
+        self.queue_size = queue_size
+
+        # Load balancing: a batch is only dispatched once a client is free, so
+        # a slow server never gets a backlog while another one idles.
+        self._client_pool = SimpleQueue()
+        for client in self.clients:
+            self._client_pool.put(client)
+
+    def destroy(self) -> None:
+        """Clean up the resources of every client in the pool.
+
+        Every client is destroyed even if some of them raise; the first error
+        is re-raised afterwards.
+
+        Raises:
+            BaseException: The first error raised by a client, if any.
+        """
+        first_error: BaseException | None = None
+        for client in self.clients:
+            try:
+                client.destroy()
+            except BaseException as exc:  # noqa: BLE001 - re-raised below
+                self._logger.warning(
+                    f"Failed to destroy client '{type(client).__name__}': {exc}"
+                )
+                if first_error is None:
+                    first_error = exc
+
+        if first_error is not None:
+            raise first_error
+
+    def _warm_up(
+        self,
+        *,
+        system_message: str | None = None,
+        prompt_prefix: str | None = None,
+        options: ProviderRuntimeOptions | None = None,
+    ) -> None:
+        """Warm up every server in the pool in parallel.
+
+        Args:
+            system_message: Optional system message shared across requests.
+            prompt_prefix: Optional fixed prefix that starts every user turn.
+            options: Optional generation options used for the warm-up call.
+        """
+        with ThreadPoolExecutor(max_workers=len(self.clients)) as pool:
+            futures = [
+                pool.submit(
+                    client.warm_up,
+                    system_message=system_message,
+                    prompt_prefix=prompt_prefix,
+                    options=options,
+                )
+                for client in self.clients
+            ]
+            for future in futures:
+                future.result()
+
+    def _annotate_batch_on_free_client(
+        self,
+        batch: dict[str, list[Any]],
+        **kwargs: Any,
+    ) -> tuple[dict[str, list[Any]], list[dict[str, Any]]]:
+        """Annotate one batch on the first available client in the pool.
+
+        Args:
+            batch: Dictionary containing batch data with messages samples.
+            **kwargs: Forwarded to :meth:`Annotator._annotate_batch`.
+
+        Returns:
+            The batch together with one result per sample, in order.
+        """
+        client = self._client_pool.get()
+        try:
+            results = self._annotate_batch(
+                batch=batch, client=client, **kwargs
+            )
+        finally:
+            self._client_pool.put(client)
+
+        return batch, results
+
+    def _iter_annotated_batches(
+        self,
+        *,
+        prepared_dataset: Dataset,
+        options: ProviderRuntimeOptions | None,
+        task_prefix: str = "",
+        validate_fn: Callable | None = None,
+        postprocess_fn: Callable | None = None,
+        num_retries_invalid: int = 5,
+    ) -> Iterator[tuple[dict[str, list[Any]], list[dict[str, Any]]]]:
+        """Annotate the dataset over all clients, yielding batches as they finish.
+
+        At most ``queue_size`` batches are in flight at any time and a new one
+        is dispatched as soon as a finished batch has been handed to the
+        caller, so memory stays bounded while every server stays busy until
+        the dataset is exhausted.
+
+        Args:
+            prepared_dataset: The dataset still left to annotate.
+            options: Runtime options passed to the clients.
+            task_prefix: String prefix to use for internal column names.
+            validate_fn: Optional custom validation function.
+            postprocess_fn: Optional postprocessing function.
+            num_retries_invalid: Number of retries for invalid outputs.
+
+        Yields:
+            Tuples of ``(batch, results)`` in completion order, each aligned
+            sample by sample.
+        """
+        batches = prepared_dataset.iter(self.batch_size)
+        batch_kwargs: dict[str, Any] = {
+            "options": options,
+            "task_prefix": task_prefix,
+            "validate_fn": validate_fn,
+            "postprocess_fn": postprocess_fn,
+            "num_retries_invalid": num_retries_invalid,
+        }
+
+        pool = ThreadPoolExecutor(
+            max_workers=len(self.clients),
+            thread_name_prefix="vllm-queue-worker",
+        )
+        pending: set[Future[Any]] = set()
+        progress = tqdm(
+            total=ceil(len(prepared_dataset) / self.batch_size),
+            desc=(
+                f"Annotating (max_bs={self.batch_size},"
+                f" servers={len(self.clients)})"
+            ),
+            unit="batch",
+        )
+
+        def _submit_next() -> bool:
+            """Dispatch the next batch, if any is left.
+
+            Returns:
+                Whether a batch was dispatched.
+            """
+            batch = next(batches, None)
+            if batch is None:
+                return False
+            pending.add(
+                pool.submit(
+                    self._annotate_batch_on_free_client,
+                    batch,
+                    **batch_kwargs,
+                )
+            )
+            return True
+
+        try:
+            while len(pending) < self.queue_size and _submit_next():
+                pass
+
+            while pending:
+                done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    batch, results = future.result()
+                    progress.update(1)
+                    yield batch, results
+                    _submit_next()
+        finally:
+            progress.close()
+            # Do not wait: on an error or a KeyboardInterrupt the in-flight
+            # requests should not hold up the cleanup that follows.
+            pool.shutdown(wait=False, cancel_futures=True)
+
+
+__all__ = ["Annotator", "VLLMQueueAnnotator", "destroy_on_error"]

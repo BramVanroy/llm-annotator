@@ -1,4 +1,5 @@
 from .annotator import Annotator as Annotator
+from .annotator import VLLMQueueAnnotator as VLLMQueueAnnotator
 from .clients.base import OnError as OnError
 from .clients.base import Provider as Provider
 from .clients.base import ProviderRuntimeOptions as ProviderRuntimeOptions
@@ -34,6 +35,7 @@ from .utils import get_hash as get_hash
 
 __all__ = [
     "Annotator",
+    "VLLMQueueAnnotator",
     "ClaudeClient",
     "ClaudeRuntimeOptions",
     "ConfigurationError",

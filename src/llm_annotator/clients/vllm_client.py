@@ -58,6 +58,10 @@ class VLLMRuntimeOptions(VLLMBaseRuntimeOptions):
     See https://docs.vllm.ai/en/latest/serving/openai_compatible_server/#api-reference
 
     Attributes:
+        temperature: Sampling temperature. ``None`` uses the model default;
+            ``0.0`` gives greedy, reproducible decoding.
+        top_p: Nucleus-sampling probability mass. ``None`` uses the model
+            default.
         add_generation_prompt: If ``True``, appends a generation prompt to each
             message. Defaults to ``True``.
         chat_template: Optional chat template string. When omitted the model’s
@@ -66,6 +70,8 @@ class VLLMRuntimeOptions(VLLMBaseRuntimeOptions):
             processor (e.g. ``{"num_crops": 4}`` for Phi-3-Vision).
     """
 
+    temperature: float | None = None
+    top_p: float | None = None
     add_generation_prompt: bool = True
     chat_template: str | None = None
     mm_processor_kwargs: dict[str, Any] | None = None
@@ -84,6 +90,10 @@ class VLLMRuntimeOptions(VLLMBaseRuntimeOptions):
             payload["repetition_penalty"] = self.repetition_penalty
         if self.max_tokens is not None:
             payload["max_completion_tokens"] = self.max_tokens
+        if self.temperature is not None:
+            payload["temperature"] = self.temperature
+        if self.top_p is not None:
+            payload["top_p"] = self.top_p
         payload["add_generation_prompt"] = self.add_generation_prompt
         if self.chat_template is not None:
             payload["chat_template"] = self.chat_template
