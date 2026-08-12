@@ -1,15 +1,21 @@
-.PHONY: quality style test test-fast test-slow test-integration test-all typecheck serve-docs
+.PHONY: quality style style-check style-fix test test-fast test-slow test-integration test-all typecheck serve-docs
 
 PACKAGE = src/llm_annotator
 
 quality:
 	uv run interrogate -vv
+	$(MAKE) style-check
+
+style-check:
 	uv run ruff check $(PACKAGE) tests/ examples/
 	uv run ruff format --check $(PACKAGE) tests/ examples/
 
-style:
+# Explicit manual repo-wide cleanup; not intended for normal commit hooks.
+style-fix:
 	uv run ruff check $(PACKAGE) tests/ examples/ --fix
 	uv run ruff format $(PACKAGE) tests/ examples/
+
+style: style-fix
 
 test:
 	uv run pytest -m "not slow" --cov=$(PACKAGE) --cov-report=term-missing --cov-report=xml
