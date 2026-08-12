@@ -32,6 +32,22 @@ dependencies = [
 # Install with ---extras "vllm" to use vLLM for inference. Requires CUDA.
 vllm = [
     "vllm==0.27.1",
+    # vLLM only requires transformers>=5.5.3, but 5.8.x has issues with gemma4
+    "transformers>=5.11.0",
+]
+# Prebuilt FlashInfer kernels, to be installed next to the "vllm" extra on
+# machines that actually serve models:
+#   uv sync --extra vllm --extra vllm-kernels
+# Without them vLLM JIT-compiles those kernels the first time it serves a
+# model, which needs nvcc (gone after `module purge` on a cluster) and lets
+# several servers sharing one home directory race each other in
+# ~/.cache/flashinfer until one dies loading a half-written .so. They are kept
+# out of the "vllm" extra because together they weigh ~2.5 GB, which the dev
+# group and CI have no use for. Both versions must match the flashinfer-python
+# that vllm pins; see https://docs.flashinfer.ai/installation.html
+vllm-kernels = [
+    "flashinfer-cubin==0.6.16.post3",
+    "flashinfer-jit-cache==0.6.16.post3",
 ]
 anthropic = [
     "anthropic>=0.102.0,<1",
@@ -71,6 +87,27 @@ Issues = "https://github.com/BramVanroy/llm-annotator/issues"
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+# FlashInfer's prebuilt kernels are not on PyPI: the cubins live on its own
+# index and the JIT cache is published per CUDA release. Pick the variant that
+# matches the *torch build* (vllm 0.27.1 pulls torch 2.13.0+cu130, so cu130),
+# not the CUDA toolkit module a cluster happens to offer: these kernels link
+# against the CUDA runtime shipped inside the torch/nvidia wheels, and the only
+# thing the node needs is a driver new enough for that runtime. Both indexes
+# are `explicit`, so only the packages mapped to them below are fetched there.
+[[tool.uv.index]]
+name = "flashinfer-cubin"
+url = "https://flashinfer.ai/whl/"
+explicit = true
+
+[[tool.uv.index]]
+name = "flashinfer-jit-cache"
+url = "https://flashinfer.ai/whl/cu130/"
+explicit = true
+
+[tool.uv.sources]
+flashinfer-cubin = { index = "flashinfer-cubin" }
+flashinfer-jit-cache = { index = "flashinfer-jit-cache" }
 
 [tool.hatch.version]
 source = "vcs"

@@ -866,6 +866,23 @@ wheels = [
 ]
 
 [[package]]
+name = "flashinfer-cubin"
+version = "0.6.16.post3"
+source = { registry = "https://flashinfer.ai/whl/" }
+wheels = [
+    { url = "https://github.com/flashinfer-ai/flashinfer/releases/download/v0.6.16.post3/flashinfer_cubin-0.6.16.post3-py3-none-any.whl", hash = "sha256:c79fba990aee2a7c7ef64208bb65900e45fe23c3a223f3dfc21eef225f43cba2" },
+]
+
+[[package]]
+name = "flashinfer-jit-cache"
+version = "0.6.16.post3+cu130"
+source = { registry = "https://flashinfer.ai/whl/cu130/" }
+wheels = [
+    { url = "https://github.com/flashinfer-ai/flashinfer/releases/download/v0.6.16.post3/flashinfer_jit_cache-0.6.16.post3+cu130-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:9bd5529b1b2c774206bde78a65d84aff29583a51ce2804226cb45d6261af43ad" },
+    { url = "https://github.com/flashinfer-ai/flashinfer/releases/download/v0.6.16.post3/flashinfer_jit_cache-0.6.16.post3+cu130-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:abcca93faa2fbbc9a98394ccc44ab657627b91e49da2624efd26a6ff669264ab" },
+]
+
+[[package]]
 name = "flashinfer-python"
 version = "0.6.16.post3"
 source = { registry = "https://pypi.org/simple" }
@@ -1444,7 +1461,12 @@ openai = [
     { name = "openai" },
 ]
 vllm = [
+    { name = "transformers" },
     { name = "vllm" },
+]
+vllm-kernels = [
+    { name = "flashinfer-cubin" },
+    { name = "flashinfer-jit-cache" },
 ]
 
 [package.dev-dependencies]
@@ -1478,11 +1500,14 @@ requires-dist = [
     { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.102.0,<1" },
     { name = "colorama", specifier = ">=0.4.6,<1" },
     { name = "datasets", specifier = ">=5,<6" },
+    { name = "flashinfer-cubin", marker = "extra == 'vllm-kernels'", specifier = "==0.6.16.post3", index = "https://flashinfer.ai/whl/" },
+    { name = "flashinfer-jit-cache", marker = "extra == 'vllm-kernels'", specifier = "==0.6.16.post3", index = "https://flashinfer.ai/whl/cu130/" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=2.36.0,<3" },
     { name = "pydantic", specifier = ">=2.13.4,<3" },
+    { name = "transformers", marker = "extra == 'vllm'", specifier = ">=5.11.0" },
     { name = "vllm", marker = "extra == 'vllm'", specifier = "==0.27.1" },
 ]
-provides-extras = ["anthropic", "openai", "vllm"]
+provides-extras = ["anthropic", "openai", "vllm", "vllm-kernels"]
 
 [package.metadata.requires-dev]
 dev = [
