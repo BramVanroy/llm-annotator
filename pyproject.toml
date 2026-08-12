@@ -24,27 +24,14 @@ classifiers = [
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "colorama>=0.4.6,<1",
-    "datasets>=4.8.5,<5",
-    "pydantic>=2.13.0,<3",
+    "datasets>=5,<6",
+    "pydantic>=2.13.4,<3",
 ]
 
 [project.optional-dependencies]
 # Install with ---extras "vllm" to use vLLM for inference. Requires CUDA.
 vllm = [
-    "mistral-common>=1.11.2,<2",
-    "vllm==0.24.0",
-    # Default installs 5.8.x, which has issues with gemma4
-    "transformers==5.11.0",
-]
-# Requires CUDA
-vllm-flashinfer = [
-    "mistral-common>=1.11.2,<2",
-    "vllm==0.24.0",
-    "flashinfer-python==0.6.12",
-    "flashinfer-cubin==0.6.12",
-    "flashinfer-jit-cache==0.6.12",
-    # Default installs 5.8.x, which has issues with gemma4
-    "transformers==5.11.0",
+    "vllm==0.27.1",
 ]
 anthropic = [
     "anthropic>=0.102.0,<1",
@@ -52,14 +39,6 @@ anthropic = [
 openai = [
     "openai>=2.36.0,<3",
 ]
-
-[[tool.uv.index]]
-name = "flashinfer-jit-cache-cu130"
-url = "https://flashinfer.ai/whl/cu130/"
-explicit = true
-
-[tool.uv.sources]
-flashinfer-jit-cache = { index = "flashinfer-jit-cache-cu130" }
 
 [dependency-groups]
 docs = [
