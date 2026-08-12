@@ -31,7 +31,6 @@ Install provider extras when needed:
 
 ```bash
 uv add "llm-annotator[vllm]"
-uv add "llm-annotator[vllm-flashinfer]"  # Faster if your hardware supports it
 uv add "llm-annotator[openai]"
 uv add "llm-annotator[anthropic]"
 ```
@@ -83,6 +82,11 @@ optional sorting, then uploads the result to Hugging Face Hub. On
 inference failures, `run_annotation` can reload the prepared data from
 Hub without repeating the expensive preparation step.
 
+One `hub_id` drives every Hub destination: the prepared data and the JSONL
+progress backup go to temporary branches of that repo, the final dataset is
+pushed to its `main` branch, and both temporary branches are deleted once
+the run completes.
+
 ```python
 from llm_annotator import Annotator, VLLMOfflineClient
 
@@ -91,7 +95,7 @@ client = VLLMOfflineClient(
     max_model_len=4096,
 )
 
-HUB_ID = "my-org/imdb-prepared"
+HUB_ID = "my-org/imdb-sentiment"
 
 with Annotator(client=client, verbose=True) as anno:
     # Step 1: prepare:  reuses local cache, falls back to Hub, builds
@@ -103,23 +107,55 @@ with Annotator(client=client, verbose=True) as anno:
         dataset_split="test",
         max_num_samples=100,
         sort_by_length=True,
-        prepared_hub_id=HUB_ID,         # back up prepared data to Hub
+        hub_id=HUB_ID,                  # back up prepared data to Hub
     )
 
     # Step 2: run generation against the prepared data.
-    # If this step fails, re-run it with prepared_hub_id=HUB_ID and the
-    # same output_dir:  the prepared data is restored from Hub automatically.
+    # If this step fails, re-run it with hub_id=HUB_ID and the same
+    # output_dir:  the prepared data is restored from Hub automatically and
+    # the samples already in the progress files are skipped.
     ds = anno.run_annotation(
         output_dir="outputs/imdb-sentiment",
         prompt_template="Classify the sentiment: {text}",
         prepared_dataset=prepared_dataset,
-        new_hub_id="my-org/imdb-annotated",
+        hub_id=HUB_ID,
         upload_every_n_samples=500,
     )
 ```
 
 To force a fresh preparation even when local or Hub artifacts exist, pass
 `force_data_preparation=True` to `prepare_data` (or to `annotate_dataset`).
+
+### Many vLLM servers at once
+
+`VLLMQueueAnnotator` spreads one workload over a pool of vLLM servers -- for
+instance one server per GPU of a multi-node SLURM allocation. It is a drop-in
+`Annotator`: the same four entry points, the same JSONL progress files, the same
+resume behaviour. The only difference is that batches are dispatched to whichever
+server is free, with at most `queue_size` batches in flight at a time.
+
+```python
+from llm_annotator import VLLMClient, VLLMQueueAnnotator, VLLMRuntimeOptions
+
+clients = [
+    VLLMClient(model="Qwen/Qwen3.5-4B", base_url=f"http://{host}:8000/v1")
+    for host in ("gcn1", "gcn2", "gcn3", "gcn4")
+]
+
+with VLLMQueueAnnotator(clients=clients, batch_size=64, verbose=True) as anno:
+    ds = anno.annotate_dataset(
+        output_dir="outputs/imdb-sentiment",
+        prompt_template="Classify the sentiment: {text}",
+        dataset_name="stanfordnlp/imdb",
+        dataset_split="test",
+        options=VLLMRuntimeOptions(max_tokens=128, temperature=0.0),
+    )
+```
+
+Because results are written per sample and keyed by `idx`, re-running the exact
+same call after a crash, a timeout or a preemption picks up where the previous
+attempt stopped. `slurm/` holds ready-made job scripts that start the servers and
+run this pipeline, and `examples/vllm-multinode/` the matching driver script.
 
 ## Why use it
 
