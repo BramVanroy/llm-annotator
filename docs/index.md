@@ -155,7 +155,7 @@ with VLLMQueueAnnotator(clients=clients, batch_size=64, verbose=True) as anno:
 Because results are written per sample and keyed by `idx`, re-running the exact
 same call after a crash, a timeout or a preemption picks up where the previous
 attempt stopped. `slurm/` holds ready-made job scripts that start the servers and
-run this pipeline, and `examples/vllm-multinode/` the matching driver script.
+run this pipeline, and `examples/vllm-server-pool/` the matching driver script.
 
 ## Why use it
 

@@ -1,11 +1,11 @@
-"""Annotate a dataset with a pool of vLLM servers spread over several nodes.
+"""Annotate a dataset with a pool of vLLM servers.
 
-Companion to ``slurm/vllm_annotate_multinode.sh`` and
-``slurm/vllm_server_multinode.sh``: those start one vLLM server per GPU and pass
-the resulting base URLs here. Every server becomes one worker of a
-:class:`~llm_annotator.VLLMQueueAnnotator`, which keeps a bounded queue of
-batches in flight across the whole pool and streams per-sample results to disk,
-so an interrupted run can be resumed by re-running the same command.
+Companion to ``slurm/submit_pool.sh``, which submits one SLURM job per vLLM
+server and a client job that runs this script over all of them. Every server
+becomes one worker of a :class:`~llm_annotator.VLLMQueueAnnotator`, which keeps
+a bounded queue of batches in flight across the whole pool and streams
+per-sample results to disk, so an interrupted run can be resumed by re-running
+the same command.
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         The parsed arguments.
     """
     parser = argparse.ArgumentParser(
-        description="Run a multi-server vLLM annotation job on a SLURM cluster."
+        description="Annotate a dataset over a pool of vLLM servers."
     )
     servers = parser.add_mutually_exclusive_group(required=True)
     servers.add_argument(
@@ -56,8 +56,8 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     servers.add_argument(
         "--hosts-file",
         type=Path,
-        help="File with one vLLM server base URL per line, as written by"
-        " slurm/vllm_server_multinode.sh.",
+        help="File with one vLLM server base URL per line, as collected from"
+        " the pool directory by slurm/vllm_annotate.sh.",
     )
     parser.add_argument(
         "--model",
@@ -67,7 +67,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("outputs/vllm-multinode"),
+        default=Path("outputs/vllm-server-pool"),
         help="Local directory for progress backup and final outputs.",
     )
     parser.add_argument(
