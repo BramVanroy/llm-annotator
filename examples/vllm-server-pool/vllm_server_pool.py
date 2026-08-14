@@ -1,11 +1,15 @@
-"""Annotate a dataset with a pool of vLLM servers.
+"""Annotate a dataset with a pool of vLLM servers, using the library directly.
 
-Companion to ``slurm/submit_pool.sh``, which submits one SLURM job per vLLM
-server and a client job that runs this script over all of them. Every server
-becomes one worker of a :class:`~llm_annotator.VLLMQueueAnnotator`, which keeps
-a bounded queue of batches in flight across the whole pool and streams
-per-sample results to disk, so an interrupted run can be resumed by re-running
-the same command.
+Every server becomes one worker of a ``VLLMQueueAnnotator``, which keeps a
+bounded queue of batches in flight across the whole pool and streams per-sample
+results to disk, so an interrupted run can be resumed by re-running the same
+command.
+
+This is the Python-API version, useful when the annotation is part of a larger
+program. For a run described entirely by a config file -- including multi-step
+pipelines where each step has its own model -- see ``pipeline.yaml`` in this
+directory and ``slurm/submit_pipeline.sh``, which reach the same annotator
+without any Python.
 """
 
 from __future__ import annotations
@@ -100,7 +104,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         "--queue-size",
         type=int,
         default=None,
-        help="Batches kept in flight. Defaults to two per server.",
+        help="Batches kept in flight. Defaults to four per server.",
     )
     parser.add_argument("--max-tokens", type=int, default=128)
     parser.add_argument("--temperature", type=float, default=0.0)

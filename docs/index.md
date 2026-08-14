@@ -37,6 +37,37 @@ uv add "llm-annotator[anthropic]"
 
 ## Quickstart
 
+### No Python at all
+
+Describe the whole run -- prompts, schema, model, dataset, and any number of
+chained annotation steps -- in one JSON or YAML file:
+
+```yaml title="my-pipeline.yaml"
+output_dir: outputs/imdb-sentiment
+
+dataset:
+  name: stanfordnlp/imdb
+  split: test
+  max_num_samples: 100
+
+client:
+  provider: vllm_offline
+  model: meta-llama/Llama-3.2-3B-Instruct
+  init:
+    max_model_len: 4096
+
+steps:
+  - name: sentiment
+    prompt: "Classify the sentiment: {text}"
+```
+
+```bash
+llm-annotate my-pipeline.yaml
+```
+
+See [Annotating from a config file](pipeline.md) for multi-step pipelines,
+where one model's output becomes the next model's input.
+
 ### One-step convenience
 
 Annotate a dataset end-to-end with a single call:
@@ -154,11 +185,17 @@ with VLLMQueueAnnotator(clients=clients, batch_size=64, verbose=True) as anno:
 
 Because results are written per sample and keyed by `idx`, re-running the exact
 same call after a crash, a timeout or a preemption picks up where the previous
-attempt stopped. `slurm/` holds ready-made job scripts that start the servers and
-run this pipeline, and `examples/vllm-server-pool/` the matching driver script.
+attempt stopped.
+
+On a cluster you do not have to write this at all: `slurm/` holds ready-made job
+scripts that take a [config file](pipeline.md) and submit one job chain per step,
+starting the right servers for each step's own model and releasing them when that
+step is done. `examples/vllm-server-pool/` has both forms side by side.
 
 ## Why use it
 
+- Run a whole annotation, or a chain of them, from one JSON/YAML config file
+  with the `llm-annotate` CLI.
 - Staged `prepare_data` + `run_annotation` pipeline for SLURM and
   cluster workflows:  expensive data preparation is done once and stored.
 - Resume interrupted generation runs from JSONL checkpoints.

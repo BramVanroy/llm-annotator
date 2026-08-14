@@ -44,8 +44,10 @@ def auto_reduce_batch_size(
 ) -> Callable[..., list[Response]]:
     """Decorate a ``batch_generate`` method to retry with halved chunk size on OOM.
 
-    Intended for use with :class:`VLLMOfflineClient`. On each call the full
-    ``messages`` list is split into chunks and dispatched one at a time. When a
+    Intended for use with
+    [`VLLMOfflineClient`][llm_annotator.clients.vllm_offline_client.VLLMOfflineClient].
+    On each call the full ``messages`` list is split into chunks and dispatched
+    one at a time. When a
     CUDA out-of-memory error is detected the current chunk size is halved and
     the failing chunk is retried at the new size. This continues until the chunk
     succeeds or the size would fall below the instance's ``_min_batch_size``,
@@ -107,24 +109,25 @@ def auto_reduce_batch_size(
 class VLLMOfflineRuntimeOptions(VLLMBaseRuntimeOptions):
     """Generation options for the vLLM offline client.
 
-    Extends :class:`VLLMBaseRuntimeOptions` (which provides ``top_k``,
-    ``repetition_penalty``, and ``chat_template_kwargs``) with
-    ``SamplingParams``-compatible fields for in-process vLLM inference.
+    Extends
+    [`VLLMBaseRuntimeOptions`][llm_annotator.clients.vllm_client.VLLMBaseRuntimeOptions]
+    (which provides ``top_k``, ``repetition_penalty``, and
+    ``chat_template_kwargs``) with ``SamplingParams``-compatible fields for
+    in-process vLLM inference.
 
     Attributes:
         max_tokens: Maximum number of output tokens. Inherited from
-            :class:`~llm_annotator.clients.base.ProviderRuntimeOptions`.
+            [`ProviderRuntimeOptions`][llm_annotator.clients.base.ProviderRuntimeOptions].
         json_schema: Optional JSON schema dict for structured output via guided
-            decoding. Inherited from
-            :class:`~llm_annotator.clients.base.ProviderRuntimeOptions`. When
+            decoding. Inherited from ``ProviderRuntimeOptions``. When
             provided, vLLM constrains generation to valid JSON matching the
             schema.
         top_k: Top-k sampling cutoff. Inherited from
-            :class:`VLLMBaseRuntimeOptions`. ``None`` uses the model default.
+            ``VLLMBaseRuntimeOptions``. ``None`` uses the model default.
         repetition_penalty: Multiplicative penalty for token repetition.
-            Inherited from :class:`VLLMBaseRuntimeOptions`.
+            Inherited from ``VLLMBaseRuntimeOptions``.
         chat_template_kwargs: Additional kwargs forwarded to the chat template.
-            Inherited from :class:`VLLMBaseRuntimeOptions`. Pass
+            Inherited from ``VLLMBaseRuntimeOptions``. Pass
             ``{"enable_thinking": True}`` here to enable thinking mode.
         temperature: Sampling temperature. ``None`` uses the model default.
         top_p: Top-p nucleus sampling probability. ``None`` uses the model
@@ -203,8 +206,9 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
 
     ``batch_generate`` automatically splits the message list into chunks of
     ``batch_size`` and retries failing chunks with a halved size on CUDA
-    out-of-memory errors (see :func:`auto_reduce_batch_size`). When
-    ``batch_size`` is ``None`` (the default) all messages are sent in a
+    out-of-memory errors (see
+    [`auto_reduce_batch_size`][llm_annotator.clients.vllm_offline_client.auto_reduce_batch_size]).
+    When ``batch_size`` is ``None`` (the default) all messages are sent in a
     single vLLM call, mirroring the original behaviour while still
     recovering from OOM when possible.
 
@@ -225,9 +229,10 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
         extra_vllm_kwargs: Additional keyword arguments forwarded to
             ``vllm.LLM``. Explicit constructor arguments take precedence
             over any conflicting keys here.
-        batch_size: Starting chunk size for :meth:`batch_generate`. Defaults
-            to ``None``, which sends all messages in one call. On OOM the
-            chunk size is halved automatically until it succeeds or falls
+        batch_size: Starting chunk size for
+            [`batch_generate`][llm_annotator.clients.vllm_offline_client.VLLMOfflineClient.batch_generate].
+            Defaults to ``None``, which sends all messages in one call. On OOM
+            the chunk size is halved automatically until it succeeds or falls
             below ``min_batch_size``.
         min_batch_size: Smallest permitted chunk size before an OOM error is
             re-raised. Must be >= 1.
@@ -325,7 +330,7 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
                 over any conflicting keys here.
             on_error: Error behavior when generation fails.
                 Defaults to ``"warn"``.
-            batch_size: Starting chunk size for :meth:`batch_generate`. When
+            batch_size: Starting chunk size for ``batch_generate``. When
                 ``None`` (the default) all messages are sent in one call. On
                 OOM the chunk size is halved until the call succeeds or falls
                 below ``min_batch_size``.
@@ -364,7 +369,9 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
         Explicit constructor arguments take precedence over any conflicting
         keys in ``extra_vllm_kwargs``. Called lazily on first use so that
         ``enable_prefix_caching`` and ``enable_chunked_prefill`` can be
-        adjusted (e.g. by :meth:`warm_up`) before the engine is constructed.
+        adjusted (e.g. by
+        [`warm_up`][llm_annotator.clients.vllm_offline_client.VLLMOfflineClient.warm_up])
+        before the engine is constructed.
 
         Raises:
             ImportError: If vLLM is not installed.

@@ -53,8 +53,10 @@ class VLLMBaseRuntimeOptions(ProviderRuntimeOptions):
 class VLLMRuntimeOptions(VLLMBaseRuntimeOptions):
     """Generation options for the vLLM OpenAI-compatible server.
 
-    Extends :class:`VLLMBaseRuntimeOptions` with server-specific parameters
-    from the `/v1/chat/completions` extra-params API.
+    Extends
+    [`VLLMBaseRuntimeOptions`][llm_annotator.clients.vllm_client.VLLMBaseRuntimeOptions]
+    with server-specific parameters from the `/v1/chat/completions`
+    extra-params API.
     See https://docs.vllm.ai/en/latest/serving/openai_compatible_server/#api-reference
 
     Attributes:
@@ -146,7 +148,7 @@ class VLLMClient(OpenAIClient[VLLMRuntimeOptions]):
 
         Sends all conversations in a single request to ``/v1/chat/completions/batch``.
         The OpenAI Batch API is not supported; passing ``use_batch_api=True`` raises
-        a :class:`ConfigurationError`.
+        a [`ConfigurationError`][llm_annotator.clients.exceptions.ConfigurationError].
 
         Args:
             messages: List of message lists, where each list is a conversation.
@@ -157,7 +159,8 @@ class VLLMClient(OpenAIClient[VLLMRuntimeOptions]):
             use_batch_api: Must be ``False``. The OpenAI Batch API is not
                 supported by the vLLM server client.
             poll_interval: Accepted for interface compatibility with
-                :class:`OpenAIClient`. Ignored.
+                [`OpenAIClient`][llm_annotator.clients.openai_client.OpenAIClient].
+                Ignored.
 
         Returns:
             A list of Response objects, one per input conversation,
@@ -173,6 +176,7 @@ class VLLMClient(OpenAIClient[VLLMRuntimeOptions]):
                 " Set use_batch_api=False (the default) to use vLLM's native"
                 " batch endpoint instead."
             )
+        # avoid unused variable warning for poll_interval, which is ignored
         _ = poll_interval
         from openai.types.chat.chat_completion import ChatCompletion
 

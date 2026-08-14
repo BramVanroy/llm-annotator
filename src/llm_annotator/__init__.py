@@ -26,9 +26,16 @@ from .clients.vllm_offline_client import (
 from .clients.vllm_offline_client import (
     auto_reduce_batch_size as auto_reduce_batch_size,
 )
+from .config import ClientConfig as ClientConfig
+from .config import DatasetConfig as DatasetConfig
+from .config import PipelineConfig as PipelineConfig
+from .config import StepConfig as StepConfig
+from .config import load_config_file as load_config_file
+from .config import load_pipeline_config as load_pipeline_config
 from .logging_utils import configure_logging as configure_logging
 from .logging_utils import get_logger as get_logger
 from .logging_utils import set_log_level as set_log_level
+from .pipeline import run_pipeline as run_pipeline
 from .utils import extract_prompt_prefix as extract_prompt_prefix
 from .utils import get_hash as get_hash
 
@@ -38,16 +45,20 @@ __all__ = [
     "VLLMQueueAnnotator",
     "ClaudeClient",
     "ClaudeRuntimeOptions",
+    "ClientConfig",
     "ConfigurationError",
+    "DatasetConfig",
     "LLMClientError",
     "OnError",
     "OpenAIClient",
     "OpenAIRuntimeOptions",
     "ParsingError",
+    "PipelineConfig",
     "Provider",
     "ProviderError",
     "ProviderRuntimeOptions",
     "Response",
+    "StepConfig",
     "VLLMBaseRuntimeOptions",
     "VLLMClient",
     "VLLMOfflineClient",
@@ -58,5 +69,8 @@ __all__ = [
     "extract_prompt_prefix",
     "get_hash",
     "get_logger",
+    "load_config_file",
+    "load_pipeline_config",
+    "run_pipeline",
     "set_log_level",
 ]

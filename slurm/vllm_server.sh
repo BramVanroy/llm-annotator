@@ -19,7 +19,7 @@
 
 # One vLLM server, in its own job. Submitted as an array by
 # slurm/submit_pool.sh, which derives --array, --gres and --cpus-per-task from
-# NUM_SERVERS and GPUS_PER_MODEL and overrides the headers above; a bare
+# NUM_SERVERS and GPUS_PER_VLLM_SERVER and overrides the headers above; a bare
 # `sbatch slurm/vllm_server.sh` starts a single one-GPU server with those
 # header defaults.
 #
@@ -51,16 +51,16 @@ PORT=$(vllm_pick_port $(( VLLM_PORT + TASK_ID )))
 URL="http://$(hostname):${PORT}/v1"
 URL_FILE="${POOL_DIR}/${TASK_ID}.url"
 
-echo "Serving ${MODEL} on ${URL} with ${GPUS_PER_MODEL} GPU(s)"
+echo "Serving ${MODEL} on ${URL} with ${GPUS_PER_VLLM_SERVER} GPU(s)"
 
-# Slurm already restricts this job to GPUS_PER_MODEL devices, so vLLM can use
+# Slurm already restricts this job to GPUS_PER_VLLM_SERVER devices, so vLLM can use
 # all of the ones it can see. VLLM_EXTRA_ARGS is deliberately word-split.
 # shellcheck disable=SC2086
 vllm serve "$MODEL" \
   --host 0.0.0.0 \
   --port "$PORT" \
   --served-model-name "$MODEL" \
-  --tensor-parallel-size "$GPUS_PER_MODEL" \
+  --tensor-parallel-size "$GPUS_PER_VLLM_SERVER" \
   --max-model-len "$MAX_MODEL_LEN" \
   --gpu-memory-utilization "$GPU_MEM_UTIL" \
   ${VLLM_EXTRA_ARGS:-} &

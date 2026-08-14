@@ -17,6 +17,23 @@ repos:
 
   - repo: local
     hooks:
+      # mkdocstrings renders docstrings as Markdown, so Sphinx roles survive as
+      # literal ":class:" text on the site. Use [`Name`][full.dotted.path].
+      - id: no-rst-roles
+        name: no Sphinx/RST roles in docstrings
+        language: pygrep
+        entry: ':(class|meth|func|mod|attr|obj|exc|data|ref):`'
+        types: [python]
+        files: ^(src|examples)/
+      # Griffe only documents attributes that carry a real docstring, so "#:"
+      # comments render as nothing at all. Put a """docstring""" underneath the
+      # assignment instead.
+      - id: no-sphinx-attribute-comments
+        name: no Sphinx "#:" attribute comments
+        language: pygrep
+        entry: '^\s*#:'
+        types: [python]
+        files: ^src/
       - id: ruff-lint
         name: ruff lint
         entry: uv run ruff check --fix --exit-non-zero-on-fix --

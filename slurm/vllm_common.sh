@@ -2,14 +2,14 @@
 # Shared helpers for the vLLM server pool. It is sourced from the other SLURM scripts
 # to set variables and do some checks.
 #
-# The pool is one Slurm job per vLLM server: every job holds GPUS_PER_MODEL
+# The pool is one Slurm job per vLLM server: every job holds GPUS_PER_VLLM_SERVER
 # GPUs and serves a single tensor-parallel server, publishing its base URL into
 # POOL_DIR once it is healthy. slurm/submit_pool.sh submits the array of server
 # jobs and launches the client that would read from that directory before continuing.
 #
 # Expects (with defaults applied by vllm_env_defaults):
 #   MODEL             model id or path served by every server
-#   GPUS_PER_MODEL    GPUs per job, i.e. tensor-parallel size (default 1)
+#   GPUS_PER_VLLM_SERVER    GPUs per job, i.e. tensor-parallel size (default 1)
 #   VLLM_PORT         base port; the array task id is added to it (default 8000)
 #   MAX_MODEL_LEN     --max-model-len passed to vllm serve (default 8192)
 #   GPU_MEM_UTIL      --gpu-memory-utilization (default 0.90)
@@ -27,7 +27,7 @@
 vllm_env_defaults() {
   # MODEL is required, if not set, exit with error message
   : "${MODEL:?Set MODEL, e.g. MODEL=Qwen/Qwen3.5-4B}"
-  : "${GPUS_PER_MODEL:=1}"
+  : "${GPUS_PER_VLLM_SERVER:=1}"
   : "${VLLM_PORT:=8000}"
   : "${MAX_MODEL_LEN:=8192}"
   : "${GPU_MEM_UTIL:=0.90}"
@@ -36,8 +36,8 @@ vllm_env_defaults() {
   : "${POOL_DIR:=${LOG_DIR}/pool_${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-local}}}"
   : "${READY_TIMEOUT:=1800}"
 
-  if (( GPUS_PER_MODEL < 1 )); then
-    echo "GPUS_PER_MODEL ($GPUS_PER_MODEL) must be at least 1" >&2
+  if (( GPUS_PER_VLLM_SERVER < 1 )); then
+    echo "GPUS_PER_VLLM_SERVER ($GPUS_PER_VLLM_SERVER) must be at least 1" >&2
     return 1
   fi
   mkdir -p "$LOG_DIR" "$POOL_DIR"
@@ -86,7 +86,7 @@ vllm_ensure_nvcc() {
 # Get the first free port at or above $1. Jobs offset the base port
 # by their array task id to avoid them racing to use the same port when
 # two jobs are assigned to the same node
-# e.g. a 4-GPU node fits two GPUS_PER_MODEL=2 servers
+# e.g. a 4-GPU node fits two GPUS_PER_VLLM_SERVER=2 servers
 vllm_pick_port() {
   local port="$1"
   local limit=$(( port + 200 ))

@@ -56,6 +56,17 @@ theme:
 hooks:
   - docs/hooks.py
 
+# Promote silent link/nav problems to warnings so `mkdocs build --strict`
+# (run in CI) turns them into build failures instead of shipping dead links.
+validation:
+  nav:
+    omitted_files: warn
+    not_found: warn
+  links:
+    absolute_links: warn
+    unrecognized_links: warn
+    anchors: warn
+
 # Plugins extend MkDocs with search and API-doc generation
 plugins:
   # Full-text search index used by the site search UI
@@ -64,10 +75,10 @@ plugins:
   - mike:
       # Keep canonical URLs pointing at the current stable alias
       canonical_version: latest
-  # Cross-reference resolver used by mkdocstrings and markdown links
-  - autorefs:
-      # If an exact target is missing, resolve to the closest matching identifier
-      resolve_closest: true
+  # Cross-reference resolver used by mkdocstrings and markdown links.
+  # Deliberately left at its defaults: `resolve_closest` would silently point a
+  # typo'd reference at the nearest identifier instead of failing the build.
+  - autorefs
   # Generates API reference pages from Python objects and docstrings
   - mkdocstrings:
       # Custom Jinja templates for mkdocstrings rendering
@@ -140,9 +151,12 @@ markdown_extensions:
 # Navigation structure for the generated docs site
 nav:
   - Home: index.md
+  - Config pipeline: pipeline.md
   - Provider setup: provider-info.md
   - API reference:
       - Annotator: api/annotator.md
+      - Pipeline: api/pipeline.md
+      - Config: api/config.md
       - Clients:
           - Base: api/clients/base.md
           - Claude: api/clients/claude.md

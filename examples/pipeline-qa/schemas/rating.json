@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "required": ["rating", "rationale"],
+  "properties": {
+    "rating": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "rationale": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

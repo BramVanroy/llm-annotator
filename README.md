@@ -19,6 +19,9 @@ It supports multiple providers through pluggable clients:
 
 Key capabilities:
 
+- **No-code config runs**:  describe prompts, schemas, model, dataset and
+  multiple chained annotation steps in one JSON/YAML file and run it with
+  `llm-annotate my-pipeline.yaml`.
 - **Staged pipeline**:  `prepare_data` + `run_annotation` separates expensive
   template application and sorting from model inference, enabling SLURM and
   cluster restart workflows.
@@ -157,6 +160,57 @@ with Annotator(client=client, verbose=True) as anno:
 
 To force a fresh preparation (ignoring any cached or Hub-stored artifacts),
 pass `force_data_preparation=True` to `prepare_data` or to `annotate_dataset`.
+
+### Run from a config file
+
+The same work can be described in a single JSON or YAML file and run without
+writing any Python:
+
+```sh
+llm-annotate my-pipeline.yaml
+# or, from a checkout: python scripts/annotate.py my-pipeline.yaml
+```
+
+A config lists one or more **steps** that run in order, each annotating the
+dataset the previous one produced. That is what makes generate-then-judge
+workflows possible: one model writes question-answer pairs, a second rates them.
+
+```yaml
+output_dir: outputs/pipeline-qa
+
+dataset:
+  name: stanfordnlp/imdb
+  split: test
+  max_num_samples: 20
+
+client:
+  provider: vllm_offline
+  model: Qwen/Qwen3-8B
+  options:
+    max_tokens: 512
+
+steps:
+  - name: write-qa
+    prompt_file: prompts/write_qa.md
+    output_schema_file: schemas/qa.json    # produces `question`, `answer`
+    filter_invalid: true
+    rename:
+      question: question_v1
+
+  - name: rate-qa
+    prompt: "Rate this question about the text.\n\n{text}\n\nQ: {question_v1}"
+    output_schema_file: schemas/rating.json
+    client:
+      provider: anthropic                  # a different judge
+      model: claude-haiku-4-5
+```
+
+Paths inside the config resolve relative to the config file, so a config
+directory is self-contained. Finished steps write a snapshot and are skipped on
+a re-run, so an interrupted pipeline resumes rather than starting over.
+
+A complete, runnable example lives in [examples/pipeline-qa/](examples/pipeline-qa/),
+and the full key reference is in [docs/pipeline.md](docs/pipeline.md).
 
 See the documentation for more examples, including:
 - Structured output with JSON schemas

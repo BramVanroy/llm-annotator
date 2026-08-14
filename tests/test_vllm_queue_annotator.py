@@ -159,10 +159,10 @@ def test_rejects_non_vllm_clients() -> None:
 
 
 def test_queue_size_defaults_and_floor() -> None:
-    # Verifies queue_size defaults to two batches per client and never drops
+    # Verifies queue_size defaults to four batches per client and never drops
     # below the number of clients (which would idle servers).
     clients = [FakeVLLMClient(base_url=f"http://w{i}") for i in range(3)]
-    assert VLLMQueueAnnotator(clients=clients).queue_size == 6
+    assert VLLMQueueAnnotator(clients=clients).queue_size == 12
     assert VLLMQueueAnnotator(clients=clients, queue_size=1).queue_size == 3
     assert VLLMQueueAnnotator(clients=clients, queue_size=10).queue_size == 10
 

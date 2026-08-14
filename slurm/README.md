@@ -1,105 +1,156 @@
 # SLURM job scripts (Snellius)
 
-One vLLM server per SLURM job. You describe the pool with two numbers — how many
-GPUs one copy of the model needs, and how many copies you want — and
-`submit_pool.sh` turns that into an array of server jobs plus one client job
-that annotates over all of them:
+You describe the whole annotation in one config file — prompts, schemas, models,
+providers, however many steps — and submit it:
 
 ```sh
-MODEL=Qwen/Qwen3.5-4B GPUS_PER_MODEL=2 NUM_SERVERS=4 \
-DATASET_NAME=stanfordnlp/imdb DATASET_SPLIT=test PROMPT_FIELD=text \
-MAX_NUM_SAMPLES=5000 BATCH_SIZE=64 \
-  ./slurm/submit_pool.sh
+ANNOTATE_CONFIG=examples/vllm-server-pool/pipeline.yaml ./slurm/submit_pipeline.sh
 ```
 
-That submits **4 jobs of 2 GPUs each**, each running one vLLM server with
-`--tensor-parallel-size 2`, and a CPU-only client job that pools all four behind
-a `VLLMQueueAnnotator`. Nothing about the allocation lives in an `#SBATCH`
-header you have to edit.
+`submit_pipeline.sh` asks the config what each step needs and submits **one job
+chain per step**, so a step only starts once the one before it has succeeded.
+Nothing about the allocation lives in an `#SBATCH` header you have to edit, and
+nothing about the annotation is repeated on the command line.
 
-Four small jobs schedule far sooner than one 8-GPU allocation, because each one
-fits on a partially used node. They also start at different times, which is
-fine: the client waits for the pool to fill up before it begins.
+Submitting per step is what makes a real pipeline work on a cluster: each step
+gets servers for **its own** model, and GPUs are released as soon as that step is
+done rather than being held for the whole run. A step that calls a hosted API
+gets no GPU at all.
 
 | File | Role |
 | --- | --- |
-| `submit_pool.sh` | Run on a login node. Derives `--array`, `--gres` and `--cpus-per-task` from the two knobs and submits both jobs. |
-| `vllm_server.sh` | One array task = one vLLM server. Publishes its base URL once it is healthy. |
-| `vllm_annotate.sh` | Client job. Waits for the pool, runs the annotation, releases the GPUs. |
+| `submit_pipeline.sh` | Run on a login node. Reads the config and submits the job chain. |
+| `vllm_annotate.sh` | Runs **one step** of the config. Waits for its pool if it has one. |
+| `vllm_server.sh` | One array task = one vLLM server. Publishes its base URL once healthy. |
 | `vllm_common.sh` | Sourced by both jobs: environment setup, port selection, health polling. |
 
-## How the two jobs find each other
+## What each step becomes
+
+The shape of a job is derived from the step's client, never configured twice.
+Check it before submitting anything:
+
+```sh
+uv run llm-annotate examples/vllm-server-pool/pipeline.yaml --describe-steps
+```
+
+```json
+{"index": 1, "name": "write-qa", "kind": "vllm_pool", "model": "Qwen/Qwen3-8B", "servers": 4, "gpus_per_vllm_server": 2, ...}
+{"index": 2, "name": "rate-qa",  "kind": "api", "model": "claude-haiku-4-5", ...}
+```
+
+| `kind` | When | Jobs submitted |
+| --- | --- | --- |
+| `vllm_pool` | `provider: vllm`, servers not given | GPU server array + CPU client |
+| `vllm_online` | `provider: vllm` with `base_urls`/`hosts_file`/`url_glob` | CPU client only |
+| `vllm_offline` | `provider: vllm_offline` | one GPU job, model loaded in-process |
+| `api` | `openai` / `claude` | CPU-only job |
+
+A step sizes its own pool in the config, next to the model it belongs to:
+
+```yaml
+client:
+  provider: vllm
+  model: Qwen/Qwen3-8B
+  pool:
+    servers: 4           # four servers for this step
+    gpus_per_vllm_server: 2   # tensor-parallel size, max 4 (one server, one node)
+```
+
+Four small jobs schedule far sooner than one 8-GPU allocation, because each one
+fits on a partially used node. They also start at different times, which is
+fine: the client waits for the pool to fill before it begins.
+
+## How the two jobs of a step find each other
 
 The server array writes into `logs/pool_<array-job-id>/`, one `<task>.url` file
-per server, containing that server's `http://<host>:<port>/v1`. A file appears
+per server containing that server's `http://<host>:<port>/v1`. A file appears
 only **after** the server answers `/health`, and is removed when the job ends, so
 every URL in the directory belongs to a server that is up right now. The client
-polls that directory, concatenates it into `hosts.txt` and hands it to the
-driver.
+polls that directory, concatenates it into `hosts.txt` and passes it to the CLI
+as `--hosts-file`, which attaches it to that step alone — a step on another
+provider is left untouched.
 
-Ports are `VLLM_PORT + array task id`, then probed upward for the first free
-one. Two array tasks can land on the same node (a 4-GPU node fits two
-`GPUS_PER_MODEL=2` servers), so a fixed port would collide.
+Ports are `VLLM_PORT + array task id`, then probed upward for the first free one.
+Two array tasks can land on the same node (a 4-GPU node fits two
+`gpus_per_vllm_server: 2` servers), so a fixed port would collide.
 
-When the annotation finishes the client `scancel`s the server array, instead of
-leaving four GPU jobs idling until their time limit. Set
-`CANCEL_SERVERS_ON_EXIT=0` to keep them alive.
+When a step finishes, its client `scancel`s that step's server array instead of
+leaving GPU jobs idling until their time limit. Set `CANCEL_SERVERS_ON_EXIT=0` to
+keep them alive.
 
 ## Configuration
 
-Everything is passed as environment variables on the `submit_pool.sh` command
-line; both jobs are submitted with `--export=ALL`, so anything you set there
-reaches them.
+Everything about the annotation — models, prompts, schemas, batch sizes, pool
+sizes — lives in the config file. The environment variables below only cover the
+allocation and are passed on the `submit_pipeline.sh` command line; both job
+types are submitted with `--export=ALL`.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `MODEL` | *required* | Model served by every server |
-| `GPUS_PER_MODEL` | `1` | GPUs per job, and `--tensor-parallel-size`. Max 4 — one server never spans nodes. |
-| `NUM_SERVERS` | `2` | Number of server jobs |
-| `MIN_SERVERS` | `$NUM_SERVERS` | Servers the client insists on. Lower it so one straggling job cannot hold up the run. |
-| `POOL_WAIT` | `3600` | Seconds the client waits for `NUM_SERVERS` before settling for `MIN_SERVERS` |
+| `ANNOTATE_CONFIG` | *required* | JSON/YAML pipeline config to run |
 | `GPU_PARTITION`, `SERVER_TIME` | `gpu_a100`, `04:00:00` | Server allocation |
-| `CLIENT_PARTITION`, `CLIENT_TIME` | `rome`, `05:00:00` | Client allocation (no GPU needed) |
-| `SLURM_ACCOUNT`, `CPUS_PER_GPU` | `tnsr72764`, `16` | Accounting and CPU share per GPU |
+| `CLIENT_PARTITION`, `CLIENT_TIME` | `rome`, `05:00:00` | Client allocation |
+| `SLURM_ACCOUNT`, `CPUS_PER_GPU` | `tnsr72764`, `18` | Accounting and CPU share per GPU |
+| `MAX_GPUS_PER_NODE` | `4` | Upper bound checked against each step's `gpus_per_vllm_server` |
+| `MIN_SERVERS` | all of them | Servers a step insists on. Lower it so one straggling job cannot hold up the run. |
+| `POOL_WAIT` | `3600` | Seconds a client waits for its servers to register |
 | `VLLM_PORT`, `MAX_MODEL_LEN`, `GPU_MEM_UTIL` | `8000`, `8192`, `0.90` | Passed to `vllm serve` |
 | `VLLM_EXTRA_ARGS` | – | Extra flags appended to `vllm serve` |
-| `CANCEL_SERVERS_ON_EXIT` | `1` | Cancel the server array when the client is done |
-| `OUTPUT_DIR` | `outputs/vllm-server-pool` | Progress files and final dataset |
-| `DATASET_NAME`, `DATASET_SPLIT`, `DATASET_CONFIG` | – | Source dataset; omit for the built-in demo texts |
-| `PROMPT_FIELD`, `PROMPT_TEMPLATE` | `text`, sentiment prompt | Column and template |
-| `IDX_COLUMN` | `idx` | Stable identifier column; must not exist in the source dataset |
-| `MAX_NUM_SAMPLES`, `BATCH_SIZE`, `QUEUE_SIZE`, `MAX_TOKENS` | – / `64` / 2 per server / `128` | Workload sizing |
-| `HUB_ID`, `TASK_PREFIX` | – | Hub backup target and column/path namespace |
+| `CANCEL_SERVERS_ON_EXIT` | `1` | Cancel a step's server array when its client is done |
+| `OUTPUT_DIR`, `HUB_ID`, `OVERWRITE` | from the config | Override the config's `output_dir` / `hub_id`, or discard existing step output |
 
-`DRY_RUN=1` prints the two `sbatch` invocations instead of submitting them,
-which is the quickest way to check what an allocation will actually ask for:
+`DRY_RUN=1` prints the submissions instead of making them, which is the quickest
+way to check what an allocation will ask for and that the chain is wired
+correctly:
 
 ```sh
-MODEL=x GPUS_PER_MODEL=2 NUM_SERVERS=4 DRY_RUN=1 ./slurm/submit_pool.sh
+ANNOTATE_CONFIG=examples/vllm-server-pool/pipeline.yaml DRY_RUN=1 \
+  ./slurm/submit_pipeline.sh
 ```
+
+A bad config path or an unreadable config fails on the login node, before any
+allocation is granted.
 
 ## Resuming
 
-Every annotated sample is appended to
-`<OUTPUT_DIR>/<TASK_PREFIX>progress_backup/*.jsonl` and flushed immediately. A
-restart re-reads those files and skips the ids already present, so after a
-crash, a timeout or a preemption you simply run **the same `submit_pool.sh`
-command again**. A half-written final line from a killed job is detected and
-re-annotated, and overlapping writers cannot duplicate a sample in the final
-dataset.
+Two levels, both automatic:
 
-## Running the client yourself
+- **Within a step**, every annotated sample is appended to
+  `<output_dir>/<NN>-<step>/annotate/<prefix>progress_backup/*.jsonl` and flushed
+  immediately; a restart re-reads those files and skips the ids already present.
+  A half-written final line from a killed job is detected and re-annotated.
+- **Between steps**, a finished step writes `<output_dir>/<NN>-<step>/output/`,
+  which a later run loads instead of recomputing.
 
-The client only speaks HTTP, so it can equally run from a login node, an
-interactive session or a CPU job. Submit servers without a client by calling
-`sbatch` directly, then point the driver at the pool:
+So after a crash, a timeout or a preemption you run **the same
+`submit_pipeline.sh` command again**. Finished steps are skipped, and the step
+that died continues where it stopped.
+
+## Running a step yourself
+
+The scripts add nothing the CLI cannot do, so any step can be run by hand — from
+a login node, an interactive session, or your laptop:
 
 ```sh
-sbatch --array=1-4 --gres=gpu:2 --cpus-per-task=32 \
-  --export=ALL,MODEL="$MODEL",GPUS_PER_MODEL=2 slurm/vllm_server.sh   # note the id
+# one step, against servers that already exist
+llm-annotate my-pipeline.yaml --steps write-qa --hosts-file logs/pool_<id>/hosts.txt
+
+# the next step, wherever you like
+llm-annotate my-pipeline.yaml --steps rate-qa
+```
+
+Running steps one at a time produces exactly the dataset a single
+`llm-annotate my-pipeline.yaml` would, so you can start locally and finish on the
+cluster, or vice versa. Only the run that includes the last step writes
+`<output_dir>/final/` and pushes to the Hub.
+
+To start servers without a client:
+
+```sh
+sbatch --array=1-4 --gres=gpu:2 --cpus-per-task=36 \
+  --export=ALL,MODEL="$MODEL",GPUS_PER_VLLM_SERVER=2 slurm/vllm_server.sh   # note the id
 
 cat logs/pool_<id>/*.url > logs/pool_<id>/hosts.txt
-python examples/vllm-server-pool/vllm_server_pool.py \
-    --hosts-file logs/pool_<id>/hosts.txt \
-    --model "$MODEL" --wait-for-servers 900 --dataset-name stanfordnlp/imdb
 ```
+
+See [../docs/pipeline.md](../docs/pipeline.md) for the full set of config keys.

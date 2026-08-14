@@ -17,7 +17,15 @@ from math import ceil
 from os import cpu_count
 from pathlib import Path
 from queue import SimpleQueue
-from typing import Any, Callable, Iterable, Iterator, Literal, Sequence
+from typing import (
+    Any,
+    Callable,
+    Iterable,
+    Iterator,
+    Literal,
+    Sequence,
+    cast,
+)
 from typing import Counter as CounterType
 
 from datasets import (
@@ -53,6 +61,7 @@ from llm_annotator.utils import (
 
 # Set a sensible default: cpu_count-1 cores
 # but at least 1 at most 8 to avoid overloading the system
+# (eg on SLURM, no need to use 128 cores for a small dataset)
 DEFAULT_CPU_COUNT = min(8, max(1, (cpu_count() or 1) - 1))
 
 PREPARED_DS_BRANCH_SUFF = "prepared_dataset"
@@ -62,11 +71,14 @@ PROGRESS_DS_LOCAL_SUBDIR = "progress_backup"
 
 
 def destroy_on_error(func: Callable[..., Any]) -> Callable[..., Any]:
-    """Decorate an ``Annotator`` method to call :meth:`~Annotator.destroy` on any exception.
+    """Decorate an ``Annotator`` method to clean up on any exception.
 
-    Catches ``BaseException`` (including ``KeyboardInterrupt`` and ``SystemExit``)
-    so resources are freed even on forced termination. The original exception
-    is always re-raised after the cleanup attempt.
+    Calls [`destroy`][llm_annotator.annotator.Annotator.destroy] before
+    re-raising. Catches ``BaseException`` (including ``KeyboardInterrupt`` and
+    ``SystemExit``) so resources are freed even on forced termination. The
+    original exception is always re-raised after the cleanup attempt.
+
+    Should be used on methods that use the underlying client.
 
     Args:
         func: The instance method to wrap.
@@ -94,34 +106,38 @@ def destroy_on_error(func: Callable[..., Any]) -> Callable[..., Any]:
 class Annotator:
     """Sensible base class for LLM-based dataset annotation.
 
-    This class provides a framework for annotating datasets using large language
-    models via a pluggable :class:`~llm_annotator.clients.base.Client`. It handles
+    This class provides a framework for annotating datasets using LLMs
+    via a pluggable [`Client`][llm_annotator.clients.base.Client]. It handles
     dataset loading, processing, and output generation with support for batching
-    and uploading to Hugging Face Hub.
+    and uploading to the Hugging Face Hub.
 
     The ``Annotator`` class has four public entry points:
 
-        * :meth:`prepare_data`. Apply prompt templates, sorting, and caching
-            without running inference. Backs prepared artifacts up to Hugging Face
-            Hub if ``hub_id`` is provided.
-        * :meth:`run_annotation`. Run inference only, consuming data returned by
-            :meth:`prepare_data` or loaded from a local path or Hub repo.
-        * :meth:`annotate_dataset`. Convenience wrapper that calls
-            :meth:`prepare_data` and then :meth:`run_annotation` in one call.
-        * :meth:`generate_dataset`. Generate a new dataset from scratch by calling
-            :meth:`annotate_dataset` over a synthetic prompt dataset.
+    - [`prepare_data`][llm_annotator.annotator.Annotator.prepare_data].
+        Apply prompt templates, sorting, and caching without running
+        inference. Backs-up prepared artifacts to Hugging Face Hub if
+        ``hub_id`` is provided.
+    - [`run_annotation`][llm_annotator.annotator.Annotator.run_annotation].
+        Run inference only, using prepared data returned by
+        ``prepare_data`` or loaded from a local path or Hub repo.
+    - [`annotate_dataset`][llm_annotator.annotator.Annotator.annotate_dataset].
+        Convenience wrapper that calls ``prepare_data`` and then
+        ``run_annotation`` in one call.
+    - [`generate_dataset`][llm_annotator.annotator.Annotator.generate_dataset].
+        Generate a new dataset from scratch by calling ``annotate_dataset``
+        over a synthetic prompt dataset.
 
-    The staged :meth:`prepare_data` + :meth:`run_annotation` pattern is
-    recommended for large-scale or cluster (SLURM) workflows. When
-    ``hub_id`` is provided, prepared artifacts are stored on
-    Hugging Face Hub and restored automatically on the next call, so a
-    failed generation job can be restarted without repeating the
-    preparation step.
+    For large-scale annotation jobs, consider using
+    [`VLLMQueueAnnotator`][llm_annotator.annotator.VLLMQueueAnnotator], which
+    distributes inference across a pool of vLLM servers.
 
     Args:
-        client: An initialised :class:`~llm_annotator.clients.base.Client`
+        client: An initialised [`Client`][llm_annotator.clients.base.Client]
             instance that performs the actual generation.
-        batch_size: Number of samples per inference batch.
+        batch_size: Number of samples per inference batch. It depends on the
+            client and its settings which batching is actually used. Batch
+            size here is mostly intended for progress reporting. The client
+            may split the given batch into smaller sub-batches if needed.
         num_proc: Number of processes for dataset preprocessing.
         verbose: Whether to print progress information.
 
@@ -161,7 +177,7 @@ class Annotator:
     _logger: Any = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        """Initialize a package-scoped logger for annotator runtime messages."""
+        """Initialize loggerfor annotator runtime messages."""
         self._logger = get_logger("annotator")
 
     def __enter__(self) -> "Annotator":
@@ -189,11 +205,8 @@ class Annotator:
         Scans existing output files to determine which samples can be skipped
         in resumed processing.
 
-        A hard crash (SIGKILL, node failure, preemption) can leave a partially
-        written final line behind. Such a truncated line is dropped and the file
-        is repaired in place, so that both the resume filter here and the final
-        concatenation in :meth:`_post_annotate` see valid JSONL only. The sample
-        that produced the broken line is simply re-annotated.
+        A hard crash can leave a partially written final line behind. The code here
+        is robust so that it can delete the last non-parseable JSON line and still recover.
 
         Args:
             process_pdout: Output directory path to scan for existing files.
@@ -212,7 +225,9 @@ class Annotator:
             return ids_done
 
         for pfin in sorted(process_pdout.glob("*.jsonl")):
+            # skip and remove empty files
             if pfin.stat().st_size == 0:
+                pfin.unlink()
                 continue
 
             valid_bytes = 0
@@ -226,9 +241,9 @@ class Annotator:
                     try:
                         row = json.loads(raw_line)
                     except (json.JSONDecodeError, UnicodeDecodeError):
-                        # Only the very last line can legitimately be broken
-                        # (interrupted mid-write); anything else is corruption
-                        # we should not silently paper over.
+                        # Only the very last line can legitimately be broken.
+                        # If a "next" line exists, the file is corrupt (mid-file
+                        # broken JSON is not expected) so truncation is not possible
                         if fhin.read(1):
                             raise
                         truncated = True
@@ -239,9 +254,11 @@ class Annotator:
                     if idx_column not in row:
                         raise ValueError(
                             f"Expected index column '{idx_column}' not found in existing output file '{pfin}'."
-                            " Cannot determine which samples to skip on resume. Please check your configuration and ensure the index column is included in the output."
+                            " Cannot determine which samples to skip on resume. Please check your configuration"
+                            " and ensure the index column is included in the output."
                         )
 
+                    # Filter on dataset split/config
                     if (
                         dataset_split
                         and "dataset_split" in row
@@ -260,7 +277,7 @@ class Annotator:
 
             if truncated:
                 self._logger.warning(
-                    f"Discarding an incomplete trailing line in '{pfin}'"
+                    f"Discarding an incomplete trailing line in {pfin!r}"
                     " (likely an interrupted write). The affected sample will"
                     " be annotated again."
                 )
@@ -290,10 +307,12 @@ class Annotator:
     ) -> Dataset:
         """Load and preprocess the dataset for annotation.
 
-        Handles dataset loading from various sources, applies prompt templates,
-        and manages caching for efficient resumption of interrupted jobs.
+        Handles dataset loading, applies prompt templates, and manages
+        caching for efficient resumption of interrupted jobs.
 
         Args:
+            prompt_template: Prompt template used to build chat messages.
+            idx_column: Column name used as unique identifier. Must not exist in the input dataset.
             dataset_name: Name or path of the dataset to load.
             dataset: Pre-loaded dataset to use instead of loading from name/path.
             dataset_config: Dataset configuration name (optional).
@@ -316,7 +335,7 @@ class Annotator:
         Raises:
             ValueError: If configuration is invalid or required fields are missing.
         """
-
+        # only set for VLLMOfflineClient, which cannot be pickled for multiprocessing
         pipeline_loaded = getattr(self.client, "_pipeline_loaded", False)
 
         if (
@@ -386,57 +405,60 @@ class Annotator:
         if max_num_samples:
             dataset = dataset.select(range(min(max_num_samples, len(dataset))))
 
-        # Validate that the dataset contains all fields required by the
-        # prompt template. Tests expect a ValueError when a required
-        # field is missing.
-        if dataset is not None and prompt_fields:
-            missing = [
-                fld for fld in prompt_fields if fld not in dataset.column_names
-            ]
-            if missing:
-                raise ValueError(
-                    f"Template contains field '{missing[0]}' not present in dataset."
-                    f" Available columns: {dataset.column_names}"
-                )
-
-        if preprocess_fn is not None:
-            dataset = preprocess_fn(dataset=dataset)
-
-        dataset = dataset.map(
-            _create_messages,
-            num_proc=self.num_proc,
-            fn_kwargs={
-                "prompt_fields": prompt_fields,
-                "prompt_template": prompt_template,
-                "task_prefix": task_prefix,
-                "system_message": system_message,
-            },
-            desc="Applying prompt template",
-        )
-
-        if sort_by_length:
-            if self.verbose:
-                self._logger.info(
-                    "Sorting dataset roughly by prompt length for more efficient batching (longest first)..."
-                )
-            dataset = dataset.map(
-                lambda msgs: {
-                    f"{task_prefix}messages_chars": len(
-                        json.dumps(msgs, default=str)
+        if dataset is not None:
+            # Validate that the dataset contains all fields required by the
+            # prompt template. Tests expect a ValueError when a required
+            # field is missing
+            if prompt_fields:
+                missing = [
+                    fld
+                    for fld in prompt_fields
+                    if fld not in dataset.column_names
+                ]
+                if missing:
+                    raise ValueError(
+                        f"Template contains field '{missing[0]}' not present in dataset."
+                        f" Available columns: {dataset.column_names}"
                     )
-                },
-                num_proc=self.num_proc,
-                input_columns=[f"{task_prefix}messages"],
-            )
-            # Sort by longest first to trigger OOM as soon as possible
-            if sort_by_length == "shortest_first":
-                do_reverse = False
-            else:
-                do_reverse = True
 
-            dataset = dataset.sort(
-                f"{task_prefix}messages_chars", reverse=do_reverse
-            ).remove_columns([f"{task_prefix}messages_chars"])
+            if preprocess_fn is not None:
+                dataset = preprocess_fn(dataset=dataset)
+
+            dataset = dataset.map(
+                _create_messages,
+                num_proc=self.num_proc,
+                fn_kwargs={
+                    "prompt_fields": prompt_fields,
+                    "prompt_template": prompt_template,
+                    "task_prefix": task_prefix,
+                    "system_message": system_message,
+                },
+                desc="Applying prompt template",
+            )
+
+            if sort_by_length:
+                if self.verbose:
+                    self._logger.info(
+                        "Sorting dataset roughly by prompt length for more efficient batching (longest first)..."
+                    )
+                dataset = dataset.map(
+                    lambda msgs: {
+                        f"{task_prefix}messages_chars": len(
+                            json.dumps(msgs, default=str)
+                        )
+                    },
+                    num_proc=self.num_proc,
+                    input_columns=[f"{task_prefix}messages"],
+                )
+                # Sort by longest first to trigger OOM as soon as possible
+                if sort_by_length == "shortest_first":
+                    do_reverse = False
+                else:
+                    do_reverse = True
+
+                dataset = dataset.sort(
+                    f"{task_prefix}messages_chars", reverse=do_reverse
+                ).remove_columns([f"{task_prefix}messages_chars"])
 
         return dataset
 
@@ -519,7 +541,7 @@ class Annotator:
         """Process a batch of samples through the client.
 
         Takes a batch of messages samples, runs inference, and processes
-        the outputs using the :meth:`_process_output` method.
+        the outputs using the `_process_output` method.
 
         Args:
             batch: Dictionary containing batch data with messages samples.
@@ -553,8 +575,7 @@ class Annotator:
             raise ValueError(
                 f"Client '{type(client).__name__}' returned {len(responses):,}"
                 f" responses for {len(messages):,} inputs. Clients must return"
-                " exactly one response per input, in order; anything else"
-                " silently drops or misaligns samples."
+                " exactly one response per input, in order."
             )
 
         results = []
@@ -574,6 +595,8 @@ class Annotator:
                     f"{task_prefix}valid_fields" in res
                     and res[f"{task_prefix}valid_fields"] is False
                 ):
+                    # do not bother running the custom validation fn if the
+                    # json schema validation already failed
                     is_valid = False
                 else:
                     is_valid = ensure_returns_bool(validate_fn, res)
@@ -588,8 +611,8 @@ class Annotator:
                 self._logger.warning(
                     "Warning: All samples in the batch failed to produce valid JSON fields."
                     " This might be exceptional (esp. for smaller batches)"
-                    " but if it happens often it suggests a deeper issue,"
-                    " such as too few 'max_tokens' in options."
+                    " but if it happens often it suggests a deeper issue,nsuch as too few"
+                    " 'max_tokens' in options."
                 )
 
         if f"{task_prefix}valid" in results[0]:
@@ -706,7 +729,7 @@ class Annotator:
 
         return results
 
-    def _iter_annotated_batches(
+    def _iter_and_annotate_batches(
         self,
         *,
         prepared_dataset: Dataset,
@@ -718,10 +741,11 @@ class Annotator:
     ) -> Iterator[tuple[dict[str, list[Any]], list[dict[str, Any]]]]:
         """Iterate over the dataset, yielding each batch with its annotations.
 
-        This is the extension point for alternative execution strategies: the
-        base implementation walks the dataset serially through a single client,
-        while :class:`VLLMQueueAnnotator` overrides it to keep several servers
-        busy at once. Implementations may yield batches in any order, as long as
+        Mostly intended for subclassing: the base implementation walks the
+        dataset serially through a single client, while
+        [`VLLMQueueAnnotator`][llm_annotator.annotator.VLLMQueueAnnotator]
+        overrides it to keep several servers busy at once. Implementations may
+        yield batches in any order, as long as
         every batch is yielded exactly once together with one result per sample.
 
         Args:
@@ -733,7 +757,12 @@ class Annotator:
             num_retries_invalid: Number of retries for invalid outputs.
 
         Yields:
-            Tuples of ``(batch, results)``, aligned sample by sample.
+            ``(batch, results)`` where ``batch`` is a column-oriented mapping
+            such as ``{col_name: [value_0, value_1, ...]}`` for the current
+            mini-batch, and ``results`` is a list of one processed result dict
+            per sample in that batch. The two are aligned by position, so
+            ``results[i]`` matches the sample in ``batch[col][i]`` for every
+            column ``col``.
         """
         total_num_batches = ceil(len(prepared_dataset) / self.batch_size)
         for batch in tqdm(
@@ -762,6 +791,10 @@ class Annotator:
         options: ProviderRuntimeOptions | None = None,
     ) -> None:
         """Warm up the inference backend before the first real batch.
+
+        Only really relevant for vLLM which may do caching of the prompt
+        as a warmup to speed up the first real batch. Other clients
+        may implement just a no-op pass.
 
         Args:
             system_message: Optional system message shared across requests.
@@ -992,7 +1025,8 @@ class Annotator:
             overwrite: Whether to overwrite existing output directory EXCEPT
                 for the prepared data cache (which is preserved to allow resuming).
                 If you want to overwrite the prepared data cache, delete it manually or set
-                ``force_data_preparation=True`` in :meth:`prepare_data`.
+                ``force_data_preparation=True`` in
+                [`prepare_data`][llm_annotator.annotator.Annotator.prepare_data].
             dataset_split: Dataset split used for skip filtering.
             dataset_config: Dataset config used for skip filtering.
             keep_columns: Columns to keep in output. ``True`` for all.
@@ -1179,7 +1213,7 @@ class Annotator:
             options=options,
         )
 
-        annotated_batches = self._iter_annotated_batches(
+        annotated_batches = self._iter_and_annotate_batches(
             prepared_dataset=prepared_dataset,
             options=options,
             task_prefix=task_prefix,
@@ -1296,8 +1330,10 @@ class Annotator:
     ) -> Dataset:
         """Annotate an existing dataset in one call.
 
-        This is a convenience wrapper around :meth:`prepare_data` and
-        :meth:`run_annotation` for callers that prefer a single entry point.
+        This is a convenience wrapper around
+        [`prepare_data`][llm_annotator.annotator.Annotator.prepare_data] and
+        [`run_annotation`][llm_annotator.annotator.Annotator.run_annotation]
+        for callers that prefer a single entry point.
 
         Args:
             output_dir: Directory where annotation output is written.
@@ -1688,7 +1724,7 @@ class Annotator:
         single-file and multi-file output modes.
 
         Args:
-            pdout: The output directory path.
+            process_pdout: The output directory path.
             max_samples_per_output_file: Maximum samples per output file (0 for unlimited).
             processed_n_samples: The number of samples processed so far.
 
@@ -1793,32 +1829,41 @@ def _create_messages(
         }
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, kw_only=True)
 class VLLMQueueAnnotator(Annotator):
-    """Annotator that spreads one workload over several vLLM servers.
+    """Annotator that spreads one workload over several vLLM servers/clients.
 
-    This subclass only changes *how* batches are executed: instead of walking
-    the prepared dataset serially through a single client, it keeps a bounded
-    queue of batches in flight over a pool of vLLM server clients, handing each
-    batch to whichever server is free. Everything else -- prompt templating,
+    Instead of walking the prepared dataset batch-by-batch through a single client
+    it keeps a bounded queue of batches in flight over a pool of vLLM server clients,
+    handing each batch to whichever server is free. The process can be simplified as:
+
+    - add all clients to a queue;
+    - for each batch:
+        - pop a client from the queue;
+        - send the batch to that client;
+
+    Everything else -- prompt templating,
     JSONL progress snapshots keyed by ``idx``, resumption, Hub backups, and the
-    final concatenation -- is inherited from :class:`Annotator`, so all four
-    public entry points behave exactly as documented there.
+    final concatenation -- is inherited from
+    [`Annotator`][llm_annotator.annotator.Annotator], so all four public entry
+    points behave exactly as documented there.
 
     Because batches finish out of order, results are written in completion
     order and sorted by ``idx`` at the end (as they already are for the base
     annotator, whose JSONL files are concatenated and sorted in
-    :meth:`Annotator._post_annotate`).
+    `Annotator._post_annotate`).
 
     Args:
-        clients: vLLM server clients used as the worker pool. The first client
-            doubles as ``Annotator.client`` for inherited helpers.
-        batch_size: Maximum number of samples sent to a worker in one request.
+        clients: vLLM server clients used as the worker pool. Keyword-only.
+            The first client doubles as ``Annotator.client`` for inherited
+            helpers, so ``client`` is derived here rather than passed in.
         queue_size: Maximum number of batches in flight (dispatched but not yet
             written out). This bounds memory, *not* the amount of work: the
-            full dataset is always annotated. Defaults to two batches per
-            client, and is raised to ``len(clients)`` if a smaller value is
-            given, since a smaller queue would leave servers idle.
+            full dataset is always annotated. ``None`` resolves to four batches
+            per client, and any value below ``len(clients)`` is raised to it,
+            since a smaller queue would leave servers idle. After
+            initialisation the attribute always holds the resolved value.
+        batch_size: Maximum number of samples sent to a worker in one request.
         num_proc: Number of processes for dataset preprocessing.
         verbose: Whether to print progress information.
 
@@ -1844,40 +1889,30 @@ class VLLMQueueAnnotator(Annotator):
         ...     )
     """
 
-    clients: list[Client[Any]] = field(default_factory=list)
-    queue_size: int = 0
-    _client_pool: Any = field(init=False, repr=False, default=None)
+    clients: Sequence[Client[Any]]
+    queue_size: int | None = None
+    # Required in the base class but set to init=False here
+    # since we derive it from the first client in the pool
+    client: Client = field(init=False, repr=False)
+    _client_pool: SimpleQueue[Client[Any]] = field(init=False, repr=False)
 
-    def __init__(
-        self,
-        clients: Sequence[Client[Any]],
-        *,
-        batch_size: int = 256,
-        queue_size: int | None = None,
-        num_proc: int | None = DEFAULT_CPU_COUNT,
-        verbose: bool = False,
-    ) -> None:
-        """Instantiate a multi-server vLLM annotator.
-
-        Args:
-            clients: vLLM server clients used as the worker pool.
-            batch_size: Maximum number of samples sent to a worker at once.
-            queue_size: Maximum number of batches in flight. Defaults to two
-                per client.
-            num_proc: Number of processes for dataset preprocessing.
-            verbose: Whether to print progress information.
+    def __post_init__(self) -> None:
+        """Validate the pool, derive the defaults, and fill the client queue.
 
         Raises:
             ValueError: If no clients are given or ``queue_size`` is not
                 positive.
             TypeError: If a client is not a vLLM server client.
         """
-        if not clients:
+        super().__post_init__()
+        self._logger = get_logger("annotator.vllm_queue")
+
+        if not self.clients:
             raise ValueError(
                 "'clients' must contain at least one VLLM client."
             )
 
-        self.clients = list(clients)
+        self.clients = list(self.clients)
         for client in self.clients:
             if getattr(client, "provider_type", None) != Provider.VLLM:
                 raise TypeError(
@@ -1885,26 +1920,9 @@ class VLLMQueueAnnotator(Annotator):
                     f" got '{type(client).__name__}'."
                 )
 
-        self.batch_size = batch_size
-        self.num_proc = num_proc
-        self.verbose = verbose
+        # not used here but to satisfy the base class and type-checer
         self.client = self.clients[0]
-        self._logger = get_logger("annotator.vllm_queue")
-
-        if queue_size is None:
-            queue_size = 2 * len(self.clients)
-        elif queue_size < 1:
-            raise ValueError(
-                "'queue_size' must be a positive integer or None."
-            )
-        elif queue_size < len(self.clients):
-            self._logger.warning(
-                f"'queue_size' ({queue_size}) is smaller than the number of"
-                f" clients ({len(self.clients)}), which would leave servers"
-                " idle. Raising it to the number of clients."
-            )
-            queue_size = len(self.clients)
-        self.queue_size = queue_size
+        self.queue_size: int = self._resolve_queue_size(self.queue_size)
 
         # Load balancing: a batch is only dispatched once a client is free, so
         # a slow server never gets a backlog while another one idles.
@@ -1912,8 +1930,44 @@ class VLLMQueueAnnotator(Annotator):
         for client in self.clients:
             self._client_pool.put(client)
 
+    def _resolve_queue_size(self, queue_size: int | None) -> int:
+        """Turn the requested queue size into an effective one.
+
+        Args:
+            queue_size: Requested number of batches in flight, or ``None`` to
+                derive it from the pool size.
+
+        Returns:
+            The number of batches to keep in flight.
+
+        Raises:
+            ValueError: If ``queue_size`` is given but not positive.
+        """
+        if queue_size is None:
+            return 4 * len(self.clients)
+
+        if queue_size < 1:
+            raise ValueError(
+                "'queue_size' must be a positive integer or None."
+            )
+
+        if queue_size < len(self.clients):
+            self._logger.warning(
+                f"'queue_size' ({queue_size}) is smaller than the number of"
+                f" clients ({len(self.clients)}), which would leave servers"
+                " idle. We're raising it to the number of clients as a"
+                " sensible minimal value."
+            )
+            return len(self.clients)
+
+        return queue_size
+
     def destroy(self) -> None:
-        """Clean up the resources of every client in the pool.
+        """Clean up the resources of every client in the pool. Since
+        clients can only be VLLMClient's, the impact is likely minimal
+        since the VLLMClient does not have a meaningful ``destroy`` method.
+        It derives it from the OpenAIClient which only does batch-related
+        cleanup, which VLLM does not support.
 
         Every client is destroyed even if some of them raise; the first error
         is re-raised afterwards.
@@ -1971,7 +2025,7 @@ class VLLMQueueAnnotator(Annotator):
 
         Args:
             batch: Dictionary containing batch data with messages samples.
-            **kwargs: Forwarded to :meth:`Annotator._annotate_batch`.
+            **kwargs: Forwarded to `Annotator._annotate_batch`.
 
         Returns:
             The batch together with one result per sample, in order.
@@ -1986,7 +2040,7 @@ class VLLMQueueAnnotator(Annotator):
 
         return batch, results
 
-    def _iter_annotated_batches(
+    def _iter_and_annotate_batches(
         self,
         *,
         prepared_dataset: Dataset,
@@ -2012,8 +2066,12 @@ class VLLMQueueAnnotator(Annotator):
             num_retries_invalid: Number of retries for invalid outputs.
 
         Yields:
-            Tuples of ``(batch, results)`` in completion order, each aligned
-            sample by sample.
+            ``(batch, results)`` in completion order, where ``batch`` is a
+            column-oriented mini-batch dict like
+            ``{col_name: [value_0, value_1, ...]}`` and ``results`` is a list
+            of result dicts with one item per sample. They remain aligned by
+            position, so ``results[i]`` corresponds to the sample at
+            ``batch[col][i]`` for each column ``col``.
         """
         batches = prepared_dataset.iter(self.batch_size)
         batch_kwargs: dict[str, Any] = {
@@ -2029,7 +2087,7 @@ class VLLMQueueAnnotator(Annotator):
             thread_name_prefix="vllm-queue-worker",
         )
         pending: set[Future[Any]] = set()
-        progress = tqdm(
+        pbar = tqdm(
             total=ceil(len(prepared_dataset) / self.batch_size),
             desc=(
                 f"Annotating (max_bs={self.batch_size},"
@@ -2056,21 +2114,26 @@ class VLLMQueueAnnotator(Annotator):
             )
             return True
 
+        # `__post_init__` always resolves `queue_size` to a positive int.
+        queue_size = cast(int, self.queue_size)
+
         try:
-            while len(pending) < self.queue_size and _submit_next():
+            # pre-fill the queue to its maximum size
+            # running Futures are in `pending`
+            while len(pending) < queue_size and _submit_next():
                 pass
 
+            # start retrieving first results and replacing the completed
+            # jobs with new ones until the work is done
             while pending:
                 done, pending = wait(pending, return_when=FIRST_COMPLETED)
                 for future in done:
                     batch, results = future.result()
-                    progress.update(1)
+                    pbar.update(1)
                     yield batch, results
                     _submit_next()
         finally:
-            progress.close()
-            # Do not wait: on an error or a KeyboardInterrupt the in-flight
-            # requests should not hold up the cleanup that follows.
+            pbar.close()
             pool.shutdown(wait=False, cancel_futures=True)
 
 

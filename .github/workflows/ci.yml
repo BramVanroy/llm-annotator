@@ -10,6 +10,8 @@ on:
       - "uv.lock"
       - ".pre-commit-config.yaml"
       - ".github/workflows/ci.yml"
+      - "mkdocs.yml"
+      - "docs/**"
   pull_request:
     branches: [main]
     paths:
@@ -18,6 +20,8 @@ on:
       - "uv.lock"
       - ".pre-commit-config.yaml"
       - ".github/workflows/ci.yml"
+      - "mkdocs.yml"
+      - "docs/**"
 
 # Cancel any in-progress run for the same branch/PR when a new push arrives.
 concurrency:
@@ -47,6 +51,30 @@ jobs:
 
       - name: Run mypy
         run: make typecheck
+
+  # Validation only: builds the site into a throwaway directory and discards it.
+  # Nothing is published here -- docs.yml is still the only workflow that
+  # touches gh-pages, and it only runs on a release. The point is to catch
+  # broken cross-references, dead anchors and missing nav entries on the PR
+  # that introduces them rather than at release time.
+  docs:
+    name: Docs build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install docs dependencies
+        run: uv sync --locked --group docs
+
+      - name: Build docs (strict)
+        run: uv run mkdocs build --strict --site-dir "${RUNNER_TEMP}/site"
 
   test:
     name: Tests (Python ${{ matrix.python-version }})

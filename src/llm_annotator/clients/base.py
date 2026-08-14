@@ -17,6 +17,14 @@ OnError = Literal["raise", "ignore", "warn"]
 
 
 class Provider(StrEnum):
+    """Canonical name of the inference backend a client talks to.
+
+    Each [`Client`][llm_annotator.clients.base.Client] subclass reports one of
+    these through its ``provider_type``. Config files must spell the provider
+    exactly as one of these values; anything else is rejected with a
+    ``ValueError`` listing the valid options.
+    """
+
     OPENAI = auto()
     CLAUDE = auto()
     VLLM = auto()
@@ -81,9 +89,13 @@ class Client(ABC, Generic[T_Options]):
             model: Provider-specific model name.
             max_workers: Maximum number of concurrent worker threads for ``batch_generate``. Clients that support native batching may ignore this parameter.
             on_error: Error behavior for provider failures.
-                - ``"raise"``: raise a :class:`ProviderError` (default).
-                - ``"ignore"``: return a :class:`Response` with ``error`` set.
-                - ``"warn"``: log a warning and return an error :class:`Response`.
+                - ``"raise"``: raise a
+                  [`ProviderError`][llm_annotator.clients.exceptions.ProviderError]
+                  (default).
+                - ``"ignore"``: return a
+                  [`Response`][llm_annotator.clients.base.Response] with
+                  ``error`` set.
+                - ``"warn"``: log a warning and return an error ``Response``.
         """
         if on_error not in {"raise", "ignore", "warn"}:
             raise ValueError(
@@ -106,21 +118,23 @@ class Client(ABC, Generic[T_Options]):
 
         When ``partial`` is provided (e.g. after a response was already
         partially decoded), its fields are forwarded to the returned
-        :class:`Response` so callers retain the generated text, stop
-        reason, token counts, and the raw provider object.
+        [`Response`][llm_annotator.clients.base.Response] so callers retain the
+        generated text, stop reason, token counts, and the raw provider object.
 
         Args:
             exc: The exception to handle.
             context: Human-readable description of where the error occurred.
-            partial: Optional partial :class:`Response` built before the
-                error was detected. Its ``text``, ``stop_reason``,
+            partial: Optional partial
+                [`Response`][llm_annotator.clients.base.Response] built before
+                the error was detected. Its ``text``, ``stop_reason``,
                 ``num_output_tokens``, and ``full_response`` fields are
-                preserved in the returned error :class:`Response`.
+                preserved in the returned error ``Response``.
 
         Returns:
-            An error :class:`Response`. Only reached when
-            ``self.on_error`` is ``"ignore"`` or ``"warn"``; otherwise
-            a :class:`~llm_annotator.clients.exceptions.ProviderError`
+            An error [`Response`][llm_annotator.clients.base.Response]. Only
+            reached when ``self.on_error`` is ``"ignore"`` or ``"warn"``;
+            otherwise
+            a [`ProviderError`][llm_annotator.clients.exceptions.ProviderError]
             is raised.
 
         Raises:
@@ -206,9 +220,10 @@ class Client(ABC, Generic[T_Options]):
     ) -> list[Response]:
         """Generate responses for a batch of inputs.
 
-        The default implementation calls :meth:`generate` sequentially. Override
-        this method in subclasses that support native batching (e.g. vLLM offline
-        and vLLM server) for better throughput.
+        The default implementation calls
+        [`generate`][llm_annotator.clients.base.Client.generate] sequentially.
+        Override this method in subclasses that support native batching
+        (e.g. vLLM offline and vLLM server) for better throughput.
 
         Args:
             messages: List of message lists, where each message dict has "role" and "content" keys.
@@ -238,8 +253,9 @@ class Client(ABC, Generic[T_Options]):
         """Prime the client before the main workload (no-op by default).
 
         Override in clients that benefit from a warm-up pass (e.g.
-        :class:`~llm_annotator.clients.VLLMOfflineClient` uses this to prime
-        the KV-cache with a shared prefix before the first real batch).
+        [`VLLMOfflineClient`][llm_annotator.clients.vllm_offline_client.VLLMOfflineClient]
+        uses this to prime the KV-cache with a shared prefix before the first
+        real batch).
 
         Args:
             system_message: Optional system message shared across all requests.

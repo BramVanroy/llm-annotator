@@ -59,15 +59,15 @@ jobs:
       - name: Check out docs tag
         run: git checkout "${{ steps.docs_ref.outputs.docs_git_tag }}"
 
-      - name: Restore current docs build tooling for manual reruns
-        if: github.event_name == 'workflow_dispatch'
+      # Docs *content* comes from the tag; the tooling that renders it always
+      # comes from main, so a rendering fix reaches published docs without
+      # re-tagging. Pinned to main rather than GITHUB_SHA because GITHUB_SHA is
+      # the tag commit on a release but the branch tip on a workflow_dispatch,
+      # which made a manual rerun build a different site than the release did.
+      - name: Use current docs build tooling from main
         run: |
-          git checkout "${GITHUB_SHA}" -- pyproject.toml
-          git checkout "${GITHUB_SHA}" -- uv.lock
-          git checkout "${GITHUB_SHA}" -- mkdocs.yml
-          git checkout "${GITHUB_SHA}" -- docs/hooks.py
-          git checkout "${GITHUB_SHA}" -- docs/overrides/python/material/class.html.jinja
-          git checkout "${GITHUB_SHA}" -- docs/overrides/python/material/function.html.jinja
+          git checkout origin/main -- \
+            pyproject.toml uv.lock mkdocs.yml docs/hooks.py docs/overrides
 
       - uses: astral-sh/setup-uv@v5
         with:

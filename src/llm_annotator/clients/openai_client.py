@@ -92,9 +92,13 @@ class OpenAIClient(Client[T_OpenAIOptions]):
             api_key: OpenAI API key. If omitted, the SDK will use
                 ``OPENAI_API_KEY`` from the environment.
             on_error: Error behavior when generation fails. Valid options are:
-                - ``"raise"``: raise a :class:`ProviderError` (default).
-                - ``"ignore"``: return a :class:`Response` with ``error`` set.
-                - ``"warn"``: log a warning and return an error :class:`Response`.
+                - ``"raise"``: raise a
+                  [`ProviderError`][llm_annotator.clients.exceptions.ProviderError]
+                  (default).
+                - ``"ignore"``: return a
+                  [`Response`][llm_annotator.clients.base.Response] with
+                  ``error`` set.
+                - ``"warn"``: log a warning and return an error ``Response``.
         """
         from openai import OpenAI
 
