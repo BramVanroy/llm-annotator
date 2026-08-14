@@ -1,4 +1,11 @@
-"""VLLM provider implementation."""
+"""Online vLLM provider: a running OpenAI-compatible vLLM server.
+
+The counterpart that loads the weights in-process instead of talking to a
+server is
+[`vllm_offline_client`][llm_annotator.clients.vllm_offline_client]. Both share
+[`VLLMBaseRuntimeOptions`][llm_annotator.clients.vllm_online_client.VLLMBaseRuntimeOptions],
+which lives here.
+"""
 
 from __future__ import annotations
 
@@ -50,11 +57,11 @@ class VLLMBaseRuntimeOptions(ProviderRuntimeOptions):
 
 
 @dataclass(slots=True, frozen=True)
-class VLLMRuntimeOptions(VLLMBaseRuntimeOptions):
+class VLLMOnlineRuntimeOptions(VLLMBaseRuntimeOptions):
     """Generation options for the vLLM OpenAI-compatible server.
 
     Extends
-    [`VLLMBaseRuntimeOptions`][llm_annotator.clients.vllm_client.VLLMBaseRuntimeOptions]
+    [`VLLMBaseRuntimeOptions`][llm_annotator.clients.vllm_online_client.VLLMBaseRuntimeOptions]
     with server-specific parameters from the `/v1/chat/completions`
     extra-params API.
     See https://docs.vllm.ai/en/latest/serving/openai_compatible_server/#api-reference
@@ -106,10 +113,10 @@ class VLLMRuntimeOptions(VLLMBaseRuntimeOptions):
         return payload
 
 
-class VLLMClient(OpenAIClient[VLLMRuntimeOptions]):
-    """Client wrapper for VLLM's OpenAI-compatible server/client."""
+class VLLMOnlineClient(OpenAIClient[VLLMOnlineRuntimeOptions]):
+    """Client for a running vLLM OpenAI-compatible server."""
 
-    provider_type = Provider.VLLM
+    provider_type = Provider.VLLM_ONLINE
 
     def __init__(
         self,
@@ -117,10 +124,11 @@ class VLLMClient(OpenAIClient[VLLMRuntimeOptions]):
         base_url: str = "http://localhost:8000/v1",
         on_error: OnError = "warn",
     ) -> None:
-        """Initialize the VLLM client.
+        """Initialize the online vLLM client.
 
         Args:
-            model: VLLM model identifier.
+            model: Model identifier. When omitted, the server is asked which
+                model it serves.
             base_url: Base URL for the vLLM API endpoint.
             on_error: Error behavior when generation fails.
         """
@@ -139,7 +147,7 @@ class VLLMClient(OpenAIClient[VLLMRuntimeOptions]):
         self,
         *,
         messages: list[list[dict[str, str]]],
-        options: VLLMRuntimeOptions | None = None,
+        options: VLLMOnlineRuntimeOptions | None = None,
         gen_kwargs: dict[str, Any] | None = None,
         use_batch_api: bool = False,
         poll_interval: float = 10.0,
@@ -246,9 +254,13 @@ class VLLMClient(OpenAIClient[VLLMRuntimeOptions]):
 
         return responses
 
-    def _default_options(self) -> VLLMRuntimeOptions:
+    def _default_options(self) -> VLLMOnlineRuntimeOptions:
         """Return default runtime options for vLLM requests."""
-        return VLLMRuntimeOptions()
+        return VLLMOnlineRuntimeOptions()
 
 
-__all__ = ["VLLMBaseRuntimeOptions", "VLLMClient", "VLLMRuntimeOptions"]
+__all__ = [
+    "VLLMBaseRuntimeOptions",
+    "VLLMOnlineClient",
+    "VLLMOnlineRuntimeOptions",
+]

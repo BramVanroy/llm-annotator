@@ -12,6 +12,9 @@ config/
 wandb/
 models/
 prompts/
+# ... but the prompts that ship with the examples are part of the repo: the
+# docs advertise those configs as runnable, and they are not without these.
+!examples/**/prompts/
 data/
 .idea/
 .ruff_cache

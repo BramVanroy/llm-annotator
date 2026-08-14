@@ -5,8 +5,8 @@ generation workflows powered by large language models.
 
 It provides a common interface for multiple providers:
 
-- `VLLMOfflineClient` for local vLLM inference.
-- `VLLMClient` for vLLM server endpoints.
+- `VLLMOfflineClient` for in-process vLLM inference (`vllm_offline`).
+- `VLLMOnlineClient` for vLLM server endpoints (`vllm_online`).
 - `OpenAIClient` for OpenAI-compatible APIs.
 - `ClaudeClient` for Anthropic APIs.
 
@@ -166,10 +166,16 @@ resume behaviour. The only difference is that batches are dispatched to whicheve
 server is free, with at most `queue_size` batches in flight at a time.
 
 ```python
-from llm_annotator import VLLMClient, VLLMQueueAnnotator, VLLMRuntimeOptions
+from llm_annotator import (
+    VLLMOnlineClient,
+    VLLMOnlineRuntimeOptions,
+    VLLMQueueAnnotator,
+)
 
 clients = [
-    VLLMClient(model="Qwen/Qwen3.5-4B", base_url=f"http://{host}:8000/v1")
+    VLLMOnlineClient(
+        model="Qwen/Qwen3.5-4B", base_url=f"http://{host}:8000/v1"
+    )
     for host in ("gcn1", "gcn2", "gcn3", "gcn4")
 ]
 
@@ -179,7 +185,7 @@ with VLLMQueueAnnotator(clients=clients, batch_size=64, verbose=True) as anno:
         prompt_template="Classify the sentiment: {text}",
         dataset_name="stanfordnlp/imdb",
         dataset_split="test",
-        options=VLLMRuntimeOptions(max_tokens=128, temperature=0.0),
+        options=VLLMOnlineRuntimeOptions(max_tokens=128, temperature=0.0),
     )
 ```
 

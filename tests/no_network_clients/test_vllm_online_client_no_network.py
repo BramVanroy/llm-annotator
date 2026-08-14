@@ -5,25 +5,28 @@ from typing import Any, cast
 import pytest
 
 from llm_annotator.clients.exceptions import ConfigurationError
-from llm_annotator.clients.vllm_client import VLLMClient, VLLMRuntimeOptions
+from llm_annotator.clients.vllm_online_client import (
+    VLLMOnlineClient,
+    VLLMOnlineRuntimeOptions,
+)
 
 
 pytestmark = pytest.mark.usefixtures("block_network")
 
 
-def test_vllm_client_uses_listed_model_when_none_given(
+def test_vllm_online_client_uses_listed_model_when_none_given(
     fake_openai_module: dict[str, Any],
 ) -> None:
     # Verifies VLLM client auto-selects first served model when model is None.
     fake_openai_module["model_list"] = ["served-vllm-model"]
-    client = VLLMClient(model=None)
+    client = VLLMOnlineClient(model=None)
 
     assert client.model == "served-vllm-model"
 
 
-def test_vllm_runtime_options_to_payload() -> None:
+def test_vllm_online_runtime_options_to_payload() -> None:
     # Verifies the shared and server-specific runtime options serialize correctly.
-    base_payload = VLLMRuntimeOptions(
+    base_payload = VLLMOnlineRuntimeOptions(
         max_tokens=8,
         top_k=4,
         repetition_penalty=1.1,
@@ -43,12 +46,12 @@ def test_vllm_runtime_options_to_payload() -> None:
     assert base_payload["mm_processor_kwargs"] == {"num_crops": 4}
 
 
-def test_vllm_batch_generate_rejects_openai_batch_api(
+def test_vllm_online_batch_generate_rejects_openai_batch_api(
     fake_openai_module: dict[str, Any],
 ) -> None:
     # Verifies the OpenAI Batch API guard raises a configuration error.
     _ = fake_openai_module
-    client = VLLMClient(model="served-vllm-model")
+    client = VLLMOnlineClient(model="served-vllm-model")
 
     with pytest.raises(ConfigurationError, match="does not support"):
         client.batch_generate(
@@ -57,7 +60,7 @@ def test_vllm_batch_generate_rejects_openai_batch_api(
         )
 
 
-def test_vllm_batch_generate_uses_batch_endpoint(
+def test_vllm_online_batch_generate_uses_batch_endpoint(
     fake_openai_module: dict[str, Any],
 ) -> None:
     # Verifies vLLM batch API endpoint and response mapping.
@@ -75,14 +78,14 @@ def test_vllm_batch_generate_uses_batch_endpoint(
             },
         ]
     }
-    client = VLLMClient(model="served-vllm-model")
+    client = VLLMOnlineClient(model="served-vllm-model")
 
     responses = client.batch_generate(
         messages=[
             [{"role": "user", "content": "one"}],
             [{"role": "user", "content": "two"}],
         ],
-        options=VLLMRuntimeOptions(max_tokens=9, top_k=20),
+        options=VLLMOnlineRuntimeOptions(max_tokens=9, top_k=20),
     )
 
     assert fake_openai_module["last_post_url"] == (
@@ -96,7 +99,7 @@ def test_vllm_batch_generate_uses_batch_endpoint(
     assert responses[1].text == "B"
 
 
-def test_vllm_batch_generate_includes_json_schema(
+def test_vllm_online_batch_generate_includes_json_schema(
     fake_openai_module: dict[str, Any],
 ) -> None:
     # Verifies json_schema is forwarded into the vLLM batch request body.
@@ -109,11 +112,11 @@ def test_vllm_batch_generate_includes_json_schema(
             }
         ]
     }
-    client = VLLMClient(model="served-vllm-model")
+    client = VLLMOnlineClient(model="served-vllm-model")
 
     responses = client.batch_generate(
         messages=[[{"role": "user", "content": "one"}]],
-        options=VLLMRuntimeOptions(json_schema={"type": "object"}),
+        options=VLLMOnlineRuntimeOptions(json_schema={"type": "object"}),
     )
 
     post_payload = fake_openai_module["last_post_json"]
@@ -124,7 +127,7 @@ def test_vllm_batch_generate_includes_json_schema(
     assert responses[0].text == "A"
 
 
-def test_vllm_batch_generate_pads_missing_choices(
+def test_vllm_online_batch_generate_pads_missing_choices(
     fake_openai_module: dict[str, Any],
 ) -> None:
     # Verifies vLLM batch responses are padded with errors when choices are missing.
@@ -137,14 +140,14 @@ def test_vllm_batch_generate_pads_missing_choices(
             }
         ]
     }
-    client = VLLMClient(model="served-vllm-model", on_error="ignore")
+    client = VLLMOnlineClient(model="served-vllm-model", on_error="ignore")
 
     responses = client.batch_generate(
         messages=[
             [{"role": "user", "content": "one"}],
             [{"role": "user", "content": "two"}],
         ],
-        options=VLLMRuntimeOptions(max_tokens=9),
+        options=VLLMOnlineRuntimeOptions(max_tokens=9),
     )
 
     assert len(responses) == 2
@@ -152,7 +155,7 @@ def test_vllm_batch_generate_pads_missing_choices(
     assert responses[1].error is not None
 
 
-def test_vllm_batch_generate_http_error_returns_error_responses(
+def test_vllm_online_batch_generate_http_error_returns_error_responses(
     fake_openai_module: dict[str, Any],
 ) -> None:
     # Verifies vLLM batch HTTP errors are mapped to one error response per input.
@@ -172,7 +175,7 @@ def test_vllm_batch_generate_http_error_returns_error_responses(
             return FailingHTTPResponse()
 
     _ = fake_openai_module
-    client = VLLMClient(model="served-vllm-model", on_error="ignore")
+    client = VLLMOnlineClient(model="served-vllm-model", on_error="ignore")
     cast(Any, client._client)._client = FailingHTTPClient()
 
     responses = client.batch_generate(
@@ -180,7 +183,7 @@ def test_vllm_batch_generate_http_error_returns_error_responses(
             [{"role": "user", "content": "one"}],
             [{"role": "user", "content": "two"}],
         ],
-        options=VLLMRuntimeOptions(max_tokens=4),
+        options=VLLMOnlineRuntimeOptions(max_tokens=4),
     )
     assert len(responses) == 2
     assert all(r.error is not None for r in responses)

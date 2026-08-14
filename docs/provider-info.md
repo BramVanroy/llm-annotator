@@ -5,12 +5,18 @@ configure authentication for each provider.
 
 ## Provider matrix
 
-| Provider | Extra to install | Client class | Default auth source |
-| --- | --- | --- | --- |
-| vLLM (offline) | `llm-annotator[vllm]` | `VLLMOfflineClient` | No API key. Runs local model weights. |
-| vLLM server (OpenAI-compatible) | `llm-annotator[vllm]` | `VLLMClient` | No API key by default (`api_key="EMPTY"`). |
-| OpenAI | `llm-annotator[openai]` | `OpenAIClient` | `OPENAI_API_KEY` |
-| Anthropic Claude | `llm-annotator[anthropic]` | `ClaudeClient` | `ANTHROPIC_API_KEY` |
+| Provider | Config name | Extra to install | Client class | Default auth source |
+| --- | --- | --- | --- | --- |
+| vLLM offline (in-process) | `vllm_offline` | `llm-annotator[vllm]` | `VLLMOfflineClient` | No API key. Runs local model weights. |
+| vLLM online (OpenAI-compatible server) | `vllm_online` | `llm-annotator[openai]` | `VLLMOnlineClient` | No API key by default (`api_key="EMPTY"`). |
+| OpenAI | `openai` | `llm-annotator[openai]` | `OpenAIClient` | `OPENAI_API_KEY` |
+| Anthropic Claude | `claude` | `llm-annotator[anthropic]` | `ClaudeClient` | `ANTHROPIC_API_KEY` |
+
+The **config name** column is the exact spelling `provider:` takes in a
+[config file](pipeline.md); no other spelling is accepted. Note that the online
+vLLM client speaks the OpenAI protocol, so it needs the `openai` extra rather
+than the (much heavier) `vllm` one — that extra is only needed where the model
+weights are actually loaded.
 
 ## Install extras
 
@@ -69,12 +75,12 @@ with Annotator(client=client) as anno:
     ...
 ```
 
-### vLLM server
+### vLLM online (server)
 
 ```python
-from llm_annotator import Annotator, VLLMClient
+from llm_annotator import Annotator, VLLMOnlineClient
 
-client = VLLMClient(
+client = VLLMOnlineClient(
     model="meta-llama/Llama-3.2-3B-Instruct",
     base_url="http://localhost:8000/v1",
 )
@@ -82,7 +88,7 @@ with Annotator(client=client) as anno:
     ...
 ```
 
-### vLLM offline
+### vLLM offline (in-process)
 
 ```python
 from llm_annotator import Annotator, VLLMOfflineClient

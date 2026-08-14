@@ -21,8 +21,8 @@ from llm_annotator.clients.base import (
 )
 from llm_annotator.clients.claude_client import ClaudeClient
 from llm_annotator.clients.openai_client import OpenAIClient
-from llm_annotator.clients.vllm_client import VLLMClient
 from llm_annotator.clients.vllm_offline_client import VLLMOfflineClient
+from llm_annotator.clients.vllm_online_client import VLLMOnlineClient
 
 
 class DummyClient(Client[ProviderRuntimeOptions]):
@@ -459,7 +459,7 @@ def test_destroy_on_error_calls_client_destroy(
 
 @pytest.mark.parametrize(
     "client_cls",
-    [OpenAIClient, ClaudeClient, VLLMClient, VLLMOfflineClient],
+    [OpenAIClient, ClaudeClient, VLLMOnlineClient, VLLMOfflineClient],
 )
 def test_annotator_smoke_with_all_client_types(client_cls: type[Any]) -> None:
     # Verifies Annotator batch processing works across all client classes when calls are mocked.

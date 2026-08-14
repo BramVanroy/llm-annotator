@@ -29,9 +29,15 @@ dataset:
   max_num_samples: 200
 
 steps:
-  # `model` is deliberately omitted: a vLLM client with no model asks the
-  # server which one it is serving, so the model is named exactly once, in the
-  # `pool` block below, and the servers and the client can never disagree.
+  # `model` is named exactly once, in this step's `client` block below. The
+  # servers and the client both read it from there -- a job submitter passes it
+  # to `vllm serve`, the client sends it with every request -- so the two can
+  # never disagree.
+  #
+  # Dropping `model` is only an option when the servers already exist: a
+  # `vllm_online` client with no model asks the server which one it is serving.
+  # A submitter that has to *start* the servers has nothing to ask, so
+  # slurm/submit_pipeline.sh refuses such a step before allocating any GPU.
   - name: write-qa
     prompt: |
       Read the following text and write one question that it answers, together
@@ -52,7 +58,7 @@ steps:
       question: question_v1
       answer: answer_v1
     client:
-      provider: vllm
+      provider: vllm_online
       model: Qwen/Qwen3-8B
       batch_size: 64
       queue_size: 8

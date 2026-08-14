@@ -113,7 +113,7 @@ def test_example_config_resolves_its_files() -> None:
 
 @pytest.mark.parametrize(
     "given",
-    ["openai", "claude", "vllm", "vllm_offline"],
+    ["openai", "claude", "vllm_online", "vllm_offline"],
 )
 def test_provider_canonical_names_accepted(given: str) -> None:
     client = ClientConfig.model_validate({"provider": given, "model": "m"})
@@ -122,7 +122,14 @@ def test_provider_canonical_names_accepted(given: str) -> None:
 
 @pytest.mark.parametrize(
     "given",
-    ["bedrock", "anthropic", "Anthropic", "vllm-offline", "vllm-server"],
+    [
+        "bedrock",
+        "anthropic",
+        "Anthropic",
+        "vllm",
+        "vllm-offline",
+        "vllm-server",
+    ],
 )
 def test_non_canonical_provider_rejected(given: str) -> None:
     with pytest.raises(ValueError, match="Unknown provider"):
@@ -131,7 +138,7 @@ def test_non_canonical_provider_rejected(given: str) -> None:
 
 def test_model_required_except_for_vllm_server() -> None:
     # A vLLM server can report which model it serves; nothing else can.
-    assert ClientConfig(provider="vllm").model is None
+    assert ClientConfig(provider="vllm_online").model is None
     with pytest.raises(ValueError, match="needs an explicit 'model'"):
         ClientConfig(provider="openai")
 
@@ -166,7 +173,7 @@ def test_build_options_rejects_double_schema() -> None:
 
 
 def test_pool_requires_vllm_provider() -> None:
-    with pytest.raises(ValueError, match="needs provider 'vllm'"):
+    with pytest.raises(ValueError, match="needs provider 'vllm_online'"):
         ClientConfig(
             provider="openai", model="m", base_urls=["http://a:8000/v1"]
         )
@@ -175,7 +182,7 @@ def test_pool_requires_vllm_provider() -> None:
 def test_pool_sources_are_mutually_exclusive(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="at most one of"):
         ClientConfig(
-            provider="vllm",
+            provider="vllm_online",
             model="m",
             base_urls=["http://a:8000/v1"],
             hosts_file=tmp_path / "hosts.txt",
@@ -183,9 +190,9 @@ def test_pool_sources_are_mutually_exclusive(tmp_path: Path) -> None:
 
 
 def test_is_pool_flag() -> None:
-    assert not ClientConfig(provider="vllm", model="m").is_pool()
+    assert not ClientConfig(provider="vllm_online", model="m").is_pool()
     assert ClientConfig(
-        provider="vllm", model="m", base_urls=["http://a:8000/v1"]
+        provider="vllm_online", model="m", base_urls=["http://a:8000/v1"]
     ).is_pool()
 
 
@@ -195,7 +202,7 @@ def test_resolve_base_urls_from_hosts_file(tmp_path: Path) -> None:
         "http://a:8000/v1\n\nhttp://b:8000/v1\n", encoding="utf-8"
     )
     client = ClientConfig(
-        provider="vllm", model="m", hosts_file=Path("hosts.txt")
+        provider="vllm_online", model="m", hosts_file=Path("hosts.txt")
     )
     assert client.resolve_base_urls(tmp_path) == [
         "http://a:8000/v1",
@@ -208,15 +215,43 @@ def test_resolve_base_urls_from_url_glob(tmp_path: Path) -> None:
     pool.mkdir()
     (pool / "1.url").write_text("http://a:8000/v1\n", encoding="utf-8")
     (pool / "2.url").write_text("http://b:8000/v1\n", encoding="utf-8")
-    client = ClientConfig(provider="vllm", model="m", url_glob="pool_*/*.url")
+    client = ClientConfig(
+        provider="vllm_online", model="m", url_glob="pool_*/*.url"
+    )
     assert client.resolve_base_urls(tmp_path) == [
         "http://a:8000/v1",
         "http://b:8000/v1",
     ]
 
 
+def test_resolve_base_urls_from_absolute_url_glob(tmp_path: Path) -> None:
+    # A scheduler writing its pool directory somewhere central has no relative
+    # path to offer, and `Path.glob` refuses absolute patterns outright.
+    pool = tmp_path / "pool_1"
+    pool.mkdir()
+    (pool / "1.url").write_text("http://a:8000/v1\n", encoding="utf-8")
+    client = ClientConfig(
+        provider="vllm_online",
+        model="m",
+        url_glob=str(tmp_path / "pool_*" / "*.url"),
+    )
+    assert client.resolve_base_urls(Path.cwd()) == ["http://a:8000/v1"]
+
+
+def test_resolve_base_urls_reports_empty_absolute_glob(tmp_path: Path) -> None:
+    client = ClientConfig(
+        provider="vllm_online",
+        model="m",
+        url_glob=str(tmp_path / "pool_*" / "*.url"),
+    )
+    with pytest.raises(ValueError, match="matched no files"):
+        client.resolve_base_urls(Path.cwd())
+
+
 def test_resolve_base_urls_reports_empty_glob(tmp_path: Path) -> None:
-    client = ClientConfig(provider="vllm", model="m", url_glob="pool_*/*.url")
+    client = ClientConfig(
+        provider="vllm_online", model="m", url_glob="pool_*/*.url"
+    )
     with pytest.raises(ValueError, match="matched no files"):
         client.resolve_base_urls(tmp_path)
 
@@ -512,6 +547,34 @@ def test_step_client_switching_provider_drops_stale_options() -> None:
     assert merged.options == {}
 
 
+def test_step_client_switching_provider_keeps_only_its_own_options() -> None:
+    # Setting an option of its own must not drag the previous provider's
+    # options along with it: `top_k` and `seed` mean nothing to Claude.
+    config = PipelineConfig.model_validate(
+        minimal_config(
+            client={
+                "provider": "vllm_offline",
+                "model": "Qwen/Qwen3-8B",
+                "options": {"temperature": 0.7, "top_k": 20, "seed": 1},
+            },
+            steps=[
+                {
+                    "name": "a",
+                    "prompt": "x",
+                    "client": {
+                        "provider": "claude",
+                        "model": "claude-haiku-4-5",
+                        "options": {"max_tokens": 10},
+                    },
+                }
+            ],
+        )
+    )
+    merged = config.step_client(config.steps[0])
+    assert merged.provider == "claude"
+    assert merged.options == {"max_tokens": 10}
+
+
 def test_bad_step_client_fails_at_load_time() -> None:
     # A merged step client is validated up front, so a bad option does not
     # surface only once step 5 of a long pipeline starts.
@@ -544,9 +607,9 @@ def test_partial_step_client_needs_no_provider_or_model() -> None:
 @pytest.mark.parametrize(
     ("client", "expected"),
     [
-        ({"provider": "vllm", "model": "m"}, "vllm_pool"),
+        ({"provider": "vllm_online", "model": "m"}, "vllm_pool"),
         (
-            {"provider": "vllm", "base_urls": ["http://a:8000/v1"]},
+            {"provider": "vllm_online", "base_urls": ["http://a:8000/v1"]},
             "vllm_online",
         ),
         ({"provider": "vllm_offline", "model": "m"}, "vllm_offline"),
@@ -559,14 +622,17 @@ def test_step_kinds(client: dict[str, Any], expected: str) -> None:
 
 
 def test_pool_block_defaults_and_round_trip() -> None:
-    assert ClientConfig(provider="vllm", model="m").pool.servers == 1
+    assert ClientConfig(provider="vllm_online", model="m").pool.servers == 1
     assert (
-        ClientConfig(provider="vllm", model="m").pool.gpus_per_vllm_server == 1
+        ClientConfig(
+            provider="vllm_online", model="m"
+        ).pool.gpus_per_vllm_server
+        == 1
     )
 
     sized = ClientConfig.model_validate(
         {
-            "provider": "vllm",
+            "provider": "vllm_online",
             "model": "m",
             "pool": {"servers": 4, "gpus_per_vllm_server": 2},
         }
@@ -577,20 +643,24 @@ def test_pool_block_defaults_and_round_trip() -> None:
 def test_pool_block_rejects_nonsense() -> None:
     with pytest.raises(ValueError):
         ClientConfig.model_validate(
-            {"provider": "vllm", "model": "m", "pool": {"servers": 0}}
+            {"provider": "vllm_online", "model": "m", "pool": {"servers": 0}}
         )
     with pytest.raises(ValueError, match="gpus_per_serve"):
         ClientConfig.model_validate(
-            {"provider": "vllm", "model": "m", "pool": {"gpus_per_serve": 2}}
+            {
+                "provider": "vllm_online",
+                "model": "m",
+                "pool": {"gpus_per_serve": 2},
+            }
         )
 
 
 def test_pool_block_is_not_part_of_the_cache_key() -> None:
     # Sizing describes the servers a scheduler starts, not the client object,
     # so it must not force an (expensive) client rebuild between steps.
-    plain = ClientConfig(provider="vllm", model="m")
+    plain = ClientConfig(provider="vllm_online", model="m")
     sized = ClientConfig.model_validate(
-        {"provider": "vllm", "model": "m", "pool": {"servers": 8}}
+        {"provider": "vllm_online", "model": "m", "pool": {"servers": 8}}
     )
     assert plain.cache_key() == sized.cache_key()
 
@@ -598,7 +668,7 @@ def test_pool_block_is_not_part_of_the_cache_key() -> None:
 def test_describe_steps_reports_every_step() -> None:
     config = PipelineConfig.model_validate(
         minimal_config(
-            client={"provider": "vllm", "model": "Qwen/Qwen3-8B"},
+            client={"provider": "vllm_online", "model": "Qwen/Qwen3-8B"},
             steps=[
                 {
                     "name": "write",
@@ -649,7 +719,7 @@ def test_step_client_overrides_target_one_step(tmp_path: Path) -> None:
                 {
                     "name": "write",
                     "prompt": "x",
-                    "client": {"provider": "vllm", "model": "m"},
+                    "client": {"provider": "vllm_online", "model": "m"},
                 },
                 {
                     "name": "judge",
@@ -685,7 +755,7 @@ def test_step_client_overrides_merge_with_the_step_block(
                     "name": "write",
                     "prompt": "x",
                     "client": {
-                        "provider": "vllm",
+                        "provider": "vllm_online",
                         "model": "m",
                         "queue_size": 4,
                     },

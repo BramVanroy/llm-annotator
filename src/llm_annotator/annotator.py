@@ -177,7 +177,7 @@ class Annotator:
     _logger: Any = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        """Initialize loggerfor annotator runtime messages."""
+        """Initialize the logger for annotator runtime messages."""
         self._logger = get_logger("annotator")
 
     def __enter__(self) -> "Annotator":
@@ -277,7 +277,7 @@ class Annotator:
 
             if truncated:
                 self._logger.warning(
-                    f"Discarding an incomplete trailing line in {pfin!r}"
+                    f"Discarding an incomplete trailing line in '{pfin}'"
                     " (likely an interrupted write). The affected sample will"
                     " be annotated again."
                 )
@@ -611,8 +611,8 @@ class Annotator:
                 self._logger.warning(
                     "Warning: All samples in the batch failed to produce valid JSON fields."
                     " This might be exceptional (esp. for smaller batches)"
-                    " but if it happens often it suggests a deeper issue,nsuch as too few"
-                    " 'max_tokens' in options."
+                    " but if it happens often it suggests a deeper issue, such"
+                    " as too few 'max_tokens' in options."
                 )
 
         if f"{task_prefix}valid" in results[0]:
@@ -1872,9 +1872,9 @@ class VLLMQueueAnnotator(Annotator):
         TypeError: If a client is not a vLLM server client.
 
     Examples:
-        >>> from llm_annotator import VLLMClient, VLLMQueueAnnotator
+        >>> from llm_annotator import VLLMOnlineClient, VLLMQueueAnnotator
         >>> clients = [  # doctest: +SKIP
-        ...     VLLMClient(
+        ...     VLLMOnlineClient(
         ...         model="Qwen/Qwen3-8B", base_url=f"http://{host}:8000/v1"
         ...     )
         ...     for host in ("node01", "node02")
@@ -1909,15 +1909,16 @@ class VLLMQueueAnnotator(Annotator):
 
         if not self.clients:
             raise ValueError(
-                "'clients' must contain at least one VLLM client."
+                "'clients' must contain at least one vLLM server client."
             )
 
         self.clients = list(self.clients)
         for client in self.clients:
-            if getattr(client, "provider_type", None) != Provider.VLLM:
+            if getattr(client, "provider_type", None) != Provider.VLLM_ONLINE:
                 raise TypeError(
-                    "VLLMQueueAnnotator only supports VLLM server clients,"
-                    f" got '{type(client).__name__}'."
+                    "VLLMQueueAnnotator only supports vLLM server clients"
+                    " (provider 'vllm_online'), got"
+                    f" '{type(client).__name__}'."
                 )
 
         # not used here but to satisfy the base class and type-checer
@@ -1962,12 +1963,29 @@ class VLLMQueueAnnotator(Annotator):
 
         return queue_size
 
+    def set_queue_size(self, queue_size: int | None) -> None:
+        """Change how many batches are kept in flight.
+
+        Assigning to ``queue_size`` directly would break the invariant that it
+        always holds a *resolved* value, since ``None`` and values below the
+        pool size are only normalised on the way in. Use this instead when a
+        pool is reused for another workload.
+
+        Args:
+            queue_size: Requested number of batches in flight, or ``None`` to
+                derive it from the pool size.
+
+        Raises:
+            ValueError: If ``queue_size`` is given but not positive.
+        """
+        self.queue_size = self._resolve_queue_size(queue_size)
+
     def destroy(self) -> None:
-        """Clean up the resources of every client in the pool. Since
-        clients can only be VLLMClient's, the impact is likely minimal
-        since the VLLMClient does not have a meaningful ``destroy`` method.
-        It derives it from the OpenAIClient which only does batch-related
-        cleanup, which VLLM does not support.
+        """Clean up the resources of every client in the pool. Since clients
+        can only be ``VLLMOnlineClient``s, the impact is likely minimal:
+        that class has no meaningful ``destroy`` of its own. It inherits
+        ``OpenAIClient``'s, which only does batch-related cleanup, and vLLM
+        does not support the OpenAI Batch API.
 
         Every client is destroyed even if some of them raise; the first error
         is re-raised afterwards.

@@ -9,6 +9,7 @@ library's API directly.
 from __future__ import annotations
 
 import dataclasses
+import glob
 import json
 import time
 import urllib.error
@@ -36,7 +37,7 @@ from llm_annotator.logging_utils import get_logger
 
 LOGGER = get_logger("config")
 
-ProviderName = Literal["openai", "claude", "vllm", "vllm_offline"]
+ProviderName = Literal["openai", "claude", "vllm_online", "vllm_offline"]
 StepType = Literal["annotate", "generate"]
 
 StepKind = Literal["vllm_pool", "vllm_online", "vllm_offline", "api"]
@@ -102,10 +103,12 @@ def _options_class(provider: ProviderName) -> type[ProviderRuntimeOptions]:
         from llm_annotator.clients.claude_client import ClaudeRuntimeOptions
 
         return ClaudeRuntimeOptions
-    if provider == "vllm":
-        from llm_annotator.clients.vllm_client import VLLMRuntimeOptions
+    if provider == "vllm_online":
+        from llm_annotator.clients.vllm_online_client import (
+            VLLMOnlineRuntimeOptions,
+        )
 
-        return VLLMRuntimeOptions
+        return VLLMOnlineRuntimeOptions
     if provider == "vllm_offline":
         from llm_annotator.clients.vllm_offline_client import (
             VLLMOfflineRuntimeOptions,
@@ -132,7 +135,7 @@ def _client_class(provider: ProviderName) -> type[Client[Any]]:
     extras = {
         "openai": "openai",
         "claude": "anthropic",
-        "vllm": "openai",
+        "vllm_online": "openai",
         "vllm_offline": "vllm",
     }
     try:
@@ -144,10 +147,12 @@ def _client_class(provider: ProviderName) -> type[Client[Any]]:
             from llm_annotator.clients.claude_client import ClaudeClient
 
             return ClaudeClient
-        elif provider == "vllm":
-            from llm_annotator.clients.vllm_client import VLLMClient
+        elif provider == "vllm_online":
+            from llm_annotator.clients.vllm_online_client import (
+                VLLMOnlineClient,
+            )
 
-            return VLLMClient
+            return VLLMOnlineClient
         elif provider == "vllm_offline":
             from llm_annotator.clients.vllm_offline_client import (
                 VLLMOfflineClient,
@@ -263,15 +268,16 @@ class ClientConfig(_StrictBase):
     the provider's ``*RuntimeOptions`` dataclass, so every provider-specific
     knob is reachable without this class having to enumerate them.
 
-    Supplying ``base_urls``, ``hosts_file`` or ``url_glob`` (``vllm`` only)
-    turns the step into a multi-server run backed by
+    Supplying ``base_urls``, ``hosts_file`` or ``url_glob`` (``vllm_online``
+    only) turns the step into a multi-server run backed by
     [`VLLMQueueAnnotator`][llm_annotator.annotator.VLLMQueueAnnotator].
 
     Attributes:
-        provider: Provider name. Aliases ``anthropic`` and ``vllm-offline``
-            are accepted.
-        model: Model identifier. Optional only for ``vllm``, which can ask the
-            server which model it serves.
+        provider: Provider name, spelled exactly ``openai``, ``claude``,
+            ``vllm_online`` or ``vllm_offline``. No other spelling is
+            accepted, so a typo cannot silently pick a different backend.
+        model: Model identifier. Optional only for ``vllm_online``, which can
+            ask the server which model it serves.
         init: Extra keyword arguments for the client constructor.
         options: Fields of the provider's runtime-options dataclass.
         batch_size: Samples per inference batch.
@@ -279,12 +285,15 @@ class ClientConfig(_StrictBase):
             disable multiprocessing.
         base_urls: vLLM server base URLs, for a multi-server pool.
         hosts_file: File with one vLLM base URL per line.
-        url_glob: Glob matching files that each hold one vLLM base URL.
+        url_glob: Glob matching files that each hold one vLLM base URL. It may
+            be absolute, which is what a job scheduler writing into a scratch
+            directory needs.
         queue_size: Batches kept in flight across the pool.
         wait_for_servers: Seconds to wait for every server's ``/health``
             before starting. ``0`` disables the check.
         pool: How many servers this step wants and how big each one is. Only
-            meaningful for ``vllm`` steps whose servers are started for them.
+            meaningful for ``vllm_online`` steps whose servers are started for
+            them.
     """
 
     provider: ProviderName = "vllm_offline"
@@ -328,12 +337,12 @@ class ClientConfig(_StrictBase):
                 "Provide at most one of 'base_urls', 'hosts_file' or"
                 f" 'url_glob', got {pool_keys}."
             )
-        if pool_keys and self.provider != "vllm":
+        if pool_keys and self.provider != "vllm_online":
             raise ValueError(
                 f"'{pool_keys[0]}' describes a pool of vLLM servers and needs"
-                f" provider 'vllm', not '{self.provider}'."
+                f" provider 'vllm_online', not '{self.provider}'."
             )
-        if self.model is None and self.provider != "vllm":
+        if self.model is None and self.provider != "vllm_online":
             raise ValueError(
                 f"Provider '{self.provider}' needs an explicit 'model'."
             )
@@ -362,12 +371,16 @@ class ClientConfig(_StrictBase):
 
         This is the whole taxonomy a job submitter needs, and it is derived
         rather than configured, so a config cannot disagree with itself about
-        which resources a step wants:
+        which resources a step wants. A kind names the *resources* a step
+        needs, not its provider, which is why provider ``vllm_online`` can
+        yield either ``vllm_pool`` or ``vllm_online``:
 
         ``vllm_pool``
-            vLLM servers still have to be started for it.
+            Provider ``vllm_online``, but no servers were named, so they still
+            have to be started for it.
         ``vllm_online``
-            It talks to servers that someone else started.
+            Provider ``vllm_online`` pointed at servers that someone else
+            started.
         ``vllm_offline``
             It loads the model in-process, so it needs GPUs wherever the
             annotation itself runs.
@@ -378,14 +391,20 @@ class ClientConfig(_StrictBase):
             The step kind.
 
         Examples:
-            >>> ClientConfig(provider="vllm", model="m").kind()
+            >>> ClientConfig(provider="vllm_online", model="m").kind()
             'vllm_pool'
+            >>> ClientConfig(
+            ...     provider="vllm_online",
+            ...     model="m",
+            ...     base_urls=["http://node01:8000/v1"],
+            ... ).kind()
+            'vllm_online'
             >>> ClientConfig(provider="claude", model="m").kind()
             'api'
         """
         if self.provider == "vllm_offline":
             return "vllm_offline"
-        if self.provider == "vllm":
+        if self.provider == "vllm_online":
             return "vllm_online" if self.is_pool() else "vllm_pool"
         return "api"
 
@@ -436,11 +455,20 @@ class ClientConfig(_StrictBase):
                 raise ValueError(f"hosts_file '{pfin}' does not exist.")
             lines = pfin.read_text(encoding="utf-8").splitlines()
         else:
-            matches = sorted(root.glob(str(self.url_glob)))
+            # `Path.glob` rejects an absolute pattern outright, and a scheduler
+            # that writes its pool directory somewhere central has no relative
+            # path to offer, so absolute patterns go through `glob.glob`.
+            pattern = str(self.url_glob)
+            if Path(pattern).is_absolute():
+                matches = sorted(Path(hit) for hit in glob.glob(pattern))
+                searched = "the filesystem"
+            else:
+                matches = sorted(root.glob(pattern))
+                searched = f"'{root}'"
             if not matches:
                 raise ValueError(
                     f"url_glob '{self.url_glob}' matched no files under"
-                    f" '{root}'."
+                    f" {searched}."
                 )
             lines = []
             for match in matches:
@@ -491,10 +519,10 @@ class ClientConfig(_StrictBase):
         if not self.is_pool():
             return _client_class(self.provider)(**kwargs)
 
-        # A pool is `vllm`-only (enforced in validation), so the server client
-        # is named directly here rather than looked up: only it takes the
-        # `base_url` that distinguishes one pool member from the next.
-        from llm_annotator.clients.vllm_client import VLLMClient
+        # A pool is `vllm_online`-only (enforced in validation), so the server
+        # client is named directly here rather than looked up: only it takes
+        # the `base_url` that distinguishes one pool member from the next.
+        from llm_annotator.clients.vllm_online_client import VLLMOnlineClient
 
         base_urls = self.resolve_base_urls(root)
         if self.wait_for_servers:
@@ -504,7 +532,7 @@ class ClientConfig(_StrictBase):
             )
             wait_for_servers(base_urls, self.wait_for_servers)
 
-        return [VLLMClient(base_url=url, **kwargs) for url in base_urls]
+        return [VLLMOnlineClient(base_url=url, **kwargs) for url in base_urls]
 
     def build_annotator(self, root: Path, verbose: bool = False) -> Annotator:
         """Instantiate the annotator that drives this client.
@@ -860,6 +888,11 @@ class PipelineConfig(_StrictBase):
         key-by-key so a step can change a single option without repeating the
         whole block, while other keys are replaced outright.
 
+        The one exception is a step that names a *different* ``provider``: it
+        inherits no ``options`` at all, because they name fields of the
+        previous provider's runtime-options dataclass and would be rejected as
+        unknown. Its own ``options`` are kept as written.
+
         The step's block is only validated here, after merging, because on its
         own it is a fragment that need not name a ``provider`` or ``model``.
 
@@ -891,18 +924,18 @@ class PipelineConfig(_StrictBase):
         else:
             base = self.client.model_dump()
             merged = {**base, **override}
-            for nested in ("init", "options"):
-                if nested in override:
-                    merged[nested] = {**base[nested], **override[nested]}
+            if "init" in override:
+                merged["init"] = {**base["init"], **override["init"]}
 
             # A step that switches provider must not inherit the previous
             # provider's options: they belong to a different dataclass and
-            # would fail validation for a reason the user cannot act on.
-            if (
-                merged["provider"] != base["provider"]
-                and "options" not in override
-            ):
-                merged["options"] = {}
+            # would fail validation for a reason the user cannot act on. Its
+            # own options still stand -- only the inherited ones are dropped,
+            # which is why this replaces rather than skipping the merge.
+            if merged["provider"] != base["provider"]:
+                merged["options"] = dict(override.get("options") or {})
+            elif "options" in override:
+                merged["options"] = {**base["options"], **override["options"]}
 
         try:
             return ClientConfig.model_validate(merged)

@@ -61,8 +61,8 @@ class OpenAIRuntimeOptions(ProviderRuntimeOptions):
         return payload
 
 
-# OpenAIClient is declared generic so that VLLMClient can specialise it with
-# VLLMRuntimeOptions while still inheriting OpenAI's HTTP machinery. Without
+# OpenAIClient is declared generic so that VLLMOnlineClient can specialise it with
+# VLLMOnlineRuntimeOptions while still inheriting OpenAI's HTTP machinery. Without
 # the TypeVar, overriding ``generate`` / ``batch_generate`` with a different
 # options type would be a Liskov-unsafe parameter narrowing and mypy would
 # flag it.

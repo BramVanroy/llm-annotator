@@ -40,16 +40,22 @@ uv run llm-annotate examples/vllm-server-pool/pipeline.yaml --describe-steps
 
 | `kind` | When | Jobs submitted |
 | --- | --- | --- |
-| `vllm_pool` | `provider: vllm`, servers not given | GPU server array + CPU client |
-| `vllm_online` | `provider: vllm` with `base_urls`/`hosts_file`/`url_glob` | CPU client only |
+| `vllm_pool` | `provider: vllm_online`, servers not given | GPU server array + CPU client |
+| `vllm_online` | `provider: vllm_online` with `base_urls`/`hosts_file`/`url_glob` | CPU client only |
 | `vllm_offline` | `provider: vllm_offline` | one GPU job, model loaded in-process |
 | `api` | `openai` / `claude` | CPU-only job |
+
+A `vllm_pool` step must name a `model`. It is optional for `provider:
+vllm_online` in general — a client can ask a running server what it serves —
+but a submitter that has to *start* those servers has nothing to ask, so
+`submit_pipeline.sh` rejects such a step on the login node rather than after the
+GPUs have been allocated.
 
 A step sizes its own pool in the config, next to the model it belongs to:
 
 ```yaml
 client:
-  provider: vllm
+  provider: vllm_online
   model: Qwen/Qwen3-8B
   pool:
     servers: 4           # four servers for this step

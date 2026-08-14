@@ -161,7 +161,7 @@ nav:
           - Base: api/clients/base.md
           - Claude: api/clients/claude.md
           - OpenAI: api/clients/openai.md
-          - vLLM (server): api/clients/vllm_client.md
+          - vLLM (online): api/clients/vllm_online_client.md
           - vLLM (offline): api/clients/vllm_offline_client.md
           - Exceptions: api/clients/exceptions.md
       - Utils: api/utils.md

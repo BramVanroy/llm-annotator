@@ -12,11 +12,6 @@ from .clients.exceptions import ParsingError as ParsingError
 from .clients.exceptions import ProviderError as ProviderError
 from .clients.openai_client import OpenAIClient as OpenAIClient
 from .clients.openai_client import OpenAIRuntimeOptions as OpenAIRuntimeOptions
-from .clients.vllm_client import (
-    VLLMBaseRuntimeOptions as VLLMBaseRuntimeOptions,
-)
-from .clients.vllm_client import VLLMClient as VLLMClient
-from .clients.vllm_client import VLLMRuntimeOptions as VLLMRuntimeOptions
 from .clients.vllm_offline_client import (
     VLLMOfflineClient as VLLMOfflineClient,
 )
@@ -25,6 +20,13 @@ from .clients.vllm_offline_client import (
 )
 from .clients.vllm_offline_client import (
     auto_reduce_batch_size as auto_reduce_batch_size,
+)
+from .clients.vllm_online_client import (
+    VLLMBaseRuntimeOptions as VLLMBaseRuntimeOptions,
+)
+from .clients.vllm_online_client import VLLMOnlineClient as VLLMOnlineClient
+from .clients.vllm_online_client import (
+    VLLMOnlineRuntimeOptions as VLLMOnlineRuntimeOptions,
 )
 from .config import ClientConfig as ClientConfig
 from .config import DatasetConfig as DatasetConfig
@@ -60,10 +62,10 @@ __all__ = [
     "Response",
     "StepConfig",
     "VLLMBaseRuntimeOptions",
-    "VLLMClient",
+    "VLLMOnlineClient",
     "VLLMOfflineClient",
     "VLLMOfflineRuntimeOptions",
-    "VLLMRuntimeOptions",
+    "VLLMOnlineRuntimeOptions",
     "auto_reduce_batch_size",
     "configure_logging",
     "extract_prompt_prefix",

@@ -22,7 +22,11 @@ from pathlib import Path
 
 from datasets import Dataset
 
-from llm_annotator import VLLMClient, VLLMQueueAnnotator, VLLMRuntimeOptions
+from llm_annotator import (
+    VLLMOnlineClient,
+    VLLMOnlineRuntimeOptions,
+    VLLMQueueAnnotator,
+)
 
 
 EXAMPLE_TEXTS = [
@@ -215,7 +219,7 @@ def main(args: list[str] | None = None) -> None:
 
     print(f"Annotating with {len(base_urls)} vLLM server(s): {base_urls}")
     clients = [
-        VLLMClient(model=parsed.model, base_url=url) for url in base_urls
+        VLLMOnlineClient(model=parsed.model, base_url=url) for url in base_urls
     ]
 
     with VLLMQueueAnnotator(
@@ -237,7 +241,7 @@ def main(args: list[str] | None = None) -> None:
             hub_id=parsed.hub_id,
             keep_columns=parsed.prompt_field,
             keep_idx_column=parsed.keep_idx_column,
-            options=VLLMRuntimeOptions(
+            options=VLLMOnlineRuntimeOptions(
                 max_tokens=parsed.max_tokens,
                 temperature=parsed.temperature,
             ),

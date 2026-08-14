@@ -45,6 +45,11 @@ REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$REPO_ROOT"
 mkdir -p logs
 
+# MIN_SERVERS is the one knob in this group a caller is meant to set, so its
+# value is captured before the group is cleared. Empty means "all of them",
+# which each step resolves against its own server count further down.
+MIN_SERVERS_REQUESTED="${MIN_SERVERS:-}"
+
 # A value left over in this shell from an earlier run must not leak into the
 # jobs through --export=ALL; each job derives its own.
 unset POOL_DIR LOG_DIR STEP_NAME SERVER_JOB_ID NUM_SERVERS MIN_SERVERS
@@ -151,6 +156,19 @@ while IFS= read -r step_json; do
 
   case "$KIND" in
     vllm_pool)
+      # This script starts the servers, so it has to know what they serve, and
+      # the config is the only place that can come from. `model` is optional
+      # for provider `vllm_online` because a client can ask a running server
+      # what it serves -- but nothing can ask a server that does not exist yet.
+      # Catch it here rather than after four GPU allocations have been granted.
+      if [[ -z "$MODEL" ]]; then
+        echo "  step '${NAME}' needs vLLM servers to be started for it, but" \
+          "its config names no 'model'. Set 'client.model' on the step, or" \
+          "point it at servers that already exist with 'base_urls'," \
+          "'hosts_file' or 'url_glob'." >&2
+        exit 1
+      fi
+
       DRYRUN_TAG="servers${STEP_COUNT}"
       SERVER_JOB=$(submit \
         --partition="$GPU_PARTITION" \
@@ -178,7 +196,7 @@ while IFS= read -r step_json; do
         "${CLIENT_FLAGS[@]}" \
         --partition="$CLIENT_PARTITION" \
         --dependency="after:${SERVER_JOB}" \
-        --export="${CLIENT_EXPORT},POOL_DIR=${POOL_DIR},NUM_SERVERS=${SERVERS},MIN_SERVERS=${MIN_SERVERS:-${SERVERS}},SERVER_JOB_ID=${SERVER_JOB}" \
+        --export="${CLIENT_EXPORT},POOL_DIR=${POOL_DIR},NUM_SERVERS=${SERVERS},MIN_SERVERS=${MIN_SERVERS_REQUESTED:-${SERVERS}},SERVER_JOB_ID=${SERVER_JOB}" \
         slurm/vllm_annotate.sh)
       ;;
 

@@ -12,8 +12,8 @@ LLM-driven dataset annotation and generation.
 
 It supports multiple providers through pluggable clients:
 
-- vLLM offline inference: `VLLMOfflineClient`
-- vLLM server API: `VLLMClient`
+- vLLM offline inference (in-process): `VLLMOfflineClient`
+- vLLM online inference (server API): `VLLMOnlineClient`
 - OpenAI API: `OpenAIClient`
 - Anthropic API: `ClaudeClient`
 
@@ -201,7 +201,7 @@ steps:
     prompt: "Rate this question about the text.\n\n{text}\n\nQ: {question_v1}"
     output_schema_file: schemas/rating.json
     client:
-      provider: anthropic                  # a different judge
+      provider: claude                     # a different judge
       model: claude-haiku-4-5
 ```
 

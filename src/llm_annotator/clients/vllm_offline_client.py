@@ -15,7 +15,7 @@ from llm_annotator.clients.base import (
     Response,
 )
 from llm_annotator.clients.exceptions import ProviderError
-from llm_annotator.clients.vllm_client import VLLMBaseRuntimeOptions
+from llm_annotator.clients.vllm_online_client import VLLMBaseRuntimeOptions
 
 
 if TYPE_CHECKING:
@@ -110,7 +110,7 @@ class VLLMOfflineRuntimeOptions(VLLMBaseRuntimeOptions):
     """Generation options for the vLLM offline client.
 
     Extends
-    [`VLLMBaseRuntimeOptions`][llm_annotator.clients.vllm_client.VLLMBaseRuntimeOptions]
+    [`VLLMBaseRuntimeOptions`][llm_annotator.clients.vllm_online_client.VLLMBaseRuntimeOptions]
     (which provides ``top_k``, ``repetition_penalty``, and
     ``chat_template_kwargs``) with ``SamplingParams``-compatible fields for
     in-process vLLM inference.
@@ -526,7 +526,8 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
         Args:
             messages: Conversation as a list of role/content dicts.
             options: Optional generation configuration. Pass a
-                VLLMRuntimeOptions instance to use vLLM-specific settings.
+                ``VLLMOfflineRuntimeOptions`` instance to use vLLM-specific
+                settings.
             gen_kwargs: Additional provider-specific generation kwargs that are
                 not covered by ``options``. Has precedence over ``options``.
 
@@ -563,8 +564,8 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
             messages: List of conversations, where each conversation is a list
                 of role/content dicts.
             options: Optional generation configuration. Pass a
-                VLLMRuntimeOptions instance to use vLLM-specific settings
-                such as temperature, top-p, or a JSON schema.
+                ``VLLMOfflineRuntimeOptions`` instance to use vLLM-specific
+                settings such as temperature, top-p, or a JSON schema.
             gen_kwargs: Additional provider-specific generation kwargs that are
                 not covered by ``options``. Has precedence over ``options``.
 

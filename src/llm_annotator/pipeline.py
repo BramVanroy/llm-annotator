@@ -29,7 +29,7 @@ from typing import Any, Sequence
 
 from datasets import Dataset
 
-from llm_annotator.annotator import Annotator
+from llm_annotator.annotator import Annotator, VLLMQueueAnnotator
 from llm_annotator.config import (
     ClientConfig,
     PipelineConfig,
@@ -420,9 +420,14 @@ def run_pipeline(
                 active_client_key = client_key
             else:
                 # Same underlying client, but batching is per step and cheap
-                # to change without rebuilding anything.
+                # to change without rebuilding anything. `queue_size` is in
+                # the same category and is deliberately absent from
+                # `cache_key`, so it has to be refreshed here too or the step
+                # would silently run with the previous step's value.
                 annotator.batch_size = client_config.batch_size
                 annotator.num_proc = client_config.num_proc
+                if isinstance(annotator, VLLMQueueAnnotator):
+                    annotator.set_queue_size(client_config.queue_size)
 
             LOGGER.info(
                 f"{label}: {step.type} with"
@@ -518,13 +523,13 @@ def _hosts_file_override(
     for index in _resolve_selection(probe, selected):
         step = probe.steps[index]
         client = probe.step_client(step)
-        if client.provider == "vllm":
+        if client.provider == "vllm_online":
             targets[step.name] = client.model
 
     if not targets:
         raise ValueError(
             "--hosts-file points at vLLM servers, but none of the steps being"
-            f" run ({selected or 'all'}) uses provider 'vllm'."
+            f" run ({selected or 'all'}) uses provider 'vllm_online'."
         )
 
     models = {model for model in targets.values() if model is not None}

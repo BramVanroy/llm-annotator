@@ -16,14 +16,14 @@ The chunk size is controlled by the `batch_size` and `min_batch_size`
 constructor arguments:
 
 ```python
-from llm_annotator import VLLMOfflineClient, VLLMRuntimeOptions
+from llm_annotator import VLLMOfflineClient, VLLMOfflineRuntimeOptions
 
 messages = [
     [{"role": "user", "content": text}]
     for text in my_texts  # (1)!
 ]
 
-opts = VLLMRuntimeOptions(max_tokens=256, temperature=0.0)
+opts = VLLMOfflineRuntimeOptions(max_tokens=256, temperature=0.0)
 
 with VLLMOfflineClient(
     model="meta-llama/Llama-3.2-3B-Instruct",

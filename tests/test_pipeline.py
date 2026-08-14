@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from datasets import Dataset
 
-from llm_annotator.annotator import Annotator
+from llm_annotator.annotator import Annotator, VLLMQueueAnnotator
 from llm_annotator.clients.base import (
     Client,
     Provider,
@@ -656,7 +656,7 @@ def _write_mixed_config(tmp_path: Path) -> Path:
                         "name": "write",
                         "prompt": "x {text}",
                         "client": {
-                            "provider": "vllm",
+                            "provider": "vllm_online",
                             "model": "Qwen/Qwen3-8B",
                             "pool": {"servers": 4, "gpus_per_vllm_server": 2},
                         },
@@ -734,7 +734,10 @@ def test_cli_hosts_file_refuses_two_models_on_one_pool(tmp_path: Path) -> None:
             {
                 "output_dir": str(tmp_path / "out"),
                 "dataset": {"name": "stanfordnlp/imdb", "split": "test"},
-                "client": {"provider": "vllm", "model": "Qwen/Qwen3-8B"},
+                "client": {
+                    "provider": "vllm_online",
+                    "model": "Qwen/Qwen3-8B",
+                },
                 "steps": [
                     {"name": "a", "prompt": "x {text}"},
                     {
@@ -813,3 +816,46 @@ def test_batch_size_follows_the_step(
     config.steps[1].client = {"batch_size": 1}
     run_pipeline(config)
     assert seen == [2, 1]
+
+
+def test_queue_size_follows_the_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `queue_size` is deliberately absent from `cache_key`, so a reused pool
+    # would otherwise silently keep the previous step's value.
+    class PoolClient(EchoClient):
+        provider_type = Provider.VLLM_ONLINE
+
+    seen: list[int] = []
+    original = Annotator.annotate_dataset
+
+    def spy(self: Annotator, *args: Any, **kwargs: Any) -> Any:
+        assert isinstance(self, VLLMQueueAnnotator)
+        assert self.queue_size is not None  # resolved in __post_init__
+        seen.append(self.queue_size)
+        return original(self, *args, **kwargs)
+
+    def fake_build_client(
+        self: ClientConfig, root: Path
+    ) -> Client[Any] | list[Client[Any]]:
+        _ = root
+        return [PoolClient(model=self.model or "echo") for _ in range(2)]
+
+    monkeypatch.setattr(ClientConfig, "build_client", fake_build_client)
+    monkeypatch.setattr(Annotator, "annotate_dataset", spy)
+
+    config = two_step_config(
+        tmp_path,
+        client={
+            "provider": "vllm_online",
+            "model": "m",
+            "batch_size": 2,
+            "num_proc": None,
+            "base_urls": ["http://a:8000/v1", "http://b:8000/v1"],
+            "queue_size": 8,
+        },
+    )
+    # Same cache key as step 1, so the pool is reused rather than rebuilt.
+    config.steps[1].client = {"queue_size": 3}
+    run_pipeline(config)
+    assert seen == [8, 3]

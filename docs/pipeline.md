@@ -124,7 +124,7 @@ A client can be described at the top level, per step, or both:
 * **Top level plus a step block** -- the step's keys are merged over the
   defaults. Merging is one level deep: `init` and `options` are merged
   key-by-key, so a step that only changes `max_tokens` need not repeat the
-  rest.
+  rest. A step that switches `provider` is the exception, described below.
 * **Per step only** -- omit the top-level block entirely. Best when every step
   uses a different model and there is no sensible shared default; each step's
   block then has to name its own `provider` and `model`.
@@ -169,7 +169,7 @@ steps:
       model: claude-haiku-4-5
 ```
 
-`provider` accepts exactly `openai`, `claude`, `vllm` (a vLLM
+`provider` accepts exactly `openai`, `claude`, `vllm_online` (a running vLLM
 server) or `vllm_offline` (in-process vLLM) — no other spellings are
 recognized. `init` and `options` are passed
 straight through to the matching client constructor and `*RuntimeOptions`
@@ -181,16 +181,40 @@ Steps whose provider, model and `init` all match share one live client, so a
 pipeline that uses the same local model twice loads it only once. Changing only
 `options` never triggers a reload, because options are per request.
 
+One exception to the merging above: a step that names a *different* `provider`
+than the top-level block inherits no `options` from it at all. They name fields
+of the previous provider's runtime-options dataclass — `top_k` means nothing to
+Claude — and would be rejected as unknown. The step's own `options` are kept
+exactly as written:
+
+```yaml
+client:
+  provider: vllm_offline
+  model: Qwen/Qwen3-8B
+  options:
+    temperature: 0.7
+    top_k: 20
+
+steps:
+  - name: judge
+    prompt_file: prompts/judge.md
+    client:
+      provider: claude
+      model: claude-haiku-4-5
+      options:
+        max_tokens: 256   # and *only* max_tokens; nothing is inherited
+```
+
 ## Many vLLM servers
 
-Point the `vllm` provider at several servers and the pipeline uses a
+Point the `vllm_online` provider at several servers and the pipeline uses a
 [`VLLMQueueAnnotator`][llm_annotator.annotator.VLLMQueueAnnotator] instead of a
 single client. Three ways to say where the servers are, matching how the
 `slurm/` job scripts publish them:
 
 ```yaml
 client:
-  provider: vllm
+  provider: vllm_online
   model: Qwen/Qwen3-8B
   base_urls:                       # explicit
     - http://node01:8000/v1
@@ -207,7 +231,7 @@ the library never acts on it, and a local run ignores it entirely:
 
 ```yaml
 client:
-  provider: vllm
+  provider: vllm_online
   model: Qwen/Qwen3-8B
   pool:
     servers: 4

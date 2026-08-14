@@ -27,7 +27,7 @@ class Provider(StrEnum):
 
     OPENAI = auto()
     CLAUDE = auto()
-    VLLM = auto()
+    VLLM_ONLINE = auto()
     VLLM_OFFLINE = auto()
 
 
