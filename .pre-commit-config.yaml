@@ -9,6 +9,10 @@ repos:
       - id: check-yaml
         # Needed to allow the mkdocs.yml config file to be linted by pre-commit
         args: [--unsafe]
+      # Backs up .gitattributes: that pins what lands in the index, this
+      # catches CRLF in the working tree before it gets there.
+      - id: mixed-line-ending
+        args: [--fix=lf]
       # Exlclude the prompts
       - id: end-of-file-fixer
         exclude: ^(examples|src)/.*\.md$
@@ -50,5 +54,19 @@ repos:
         name: mypy
         entry: uv run mypy
         language: system
+        types: [python]
+        pass_filenames: false
+
+      # Pre-push only, and only when Python actually changed: runs the fast
+      # suite against every interpreter in the CI matrix, so version-specific
+      # breakage is caught here instead of by a red job after the push.
+      # Requires `pre-commit install --hook-type pre-push` once per clone;
+      # `pre-commit run --all-files` (what CI runs) skips it, since that
+      # defaults to the pre-commit stage.
+      - id: test-matrix
+        name: pytest on every CI Python version
+        entry: make test-matrix
+        language: system
+        stages: [pre-push]
         types: [python]
         pass_filenames: false

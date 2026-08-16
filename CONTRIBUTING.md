@@ -59,6 +59,20 @@ make test-integration
 make test-all
 ```
 
+`make test` only ever exercises the one interpreter in `.venv`. Some breakage is
+version-specific and therefore invisible there — `@dataclass(slots=True)` plus a
+zero-argument `super()`, for instance, raises `TypeError` on 3.12 but works from
+3.13 on. To run the fast suite against every interpreter the CI matrix covers:
+
+```bash
+make test-matrix
+```
+
+It creates one venv per version under `.venvs/py<X.Y>` (gitignored, hardlinked
+from uv's cache) and reads the version list straight out of
+`.github/workflows/ci.yml`, so adding a version to CI adds it here too. This is
+also wired up as a pre-push hook — see [Pre-commit Hooks](#pre-commit-hooks).
+
 Markers:
 - `slow`: tests that may load models or run substantially longer.
 - `integration`: tests that interact with external systems or real-model runtimes.
@@ -137,6 +151,18 @@ Pre-commit hooks will automatically run before you push:
 
 1. **Code Quality** (`make quality`) - Checks code style and linting
 2. **Documentation Build** - Validates that documentation builds successfully if you've modified docstrings or docs files
+
+There is also a **pre-push** hook that runs `make test-matrix` (the fast suite on
+every CI Python version) whenever the push touches a `.py` file. Because it runs
+at a different stage, it needs to be installed explicitly, once per clone:
+
+```bash
+pre-commit install --hook-type pre-push
+```
+
+Without that, `pre-commit install` only wires up the commit-stage hooks and the
+matrix never runs locally. It is skipped by `pre-commit run --all-files`, which
+is what CI uses.
 
 If the pre-commit hooks fail:
 - Fix the reported issues

@@ -1,4 +1,4 @@
-.PHONY: quality style style-check style-fix test test-fast test-slow test-integration test-all typecheck serve-docs serve-docs-versioned build-docs
+.PHONY: quality style style-check style-fix test test-fast test-slow test-integration test-all test-matrix typecheck serve-docs serve-docs-versioned build-docs
 
 PACKAGE = src/llm_annotator
 
@@ -33,6 +33,32 @@ test-integration:
 
 test-all:
 	uv run pytest
+
+# The same fast suite as `test`, but once per interpreter the CI matrix covers.
+# Version-specific breakage (a stdlib fix that only landed in 3.13, a syntax
+# feature 3.12 lacks) is invisible in a single local venv and only shows up as a
+# red job after pushing; this is the pre-push check for that.
+#
+# The version list is read out of the workflow itself so the two cannot drift.
+# `tr` strips the quotes around each version, and any stray CR that survived a
+# Windows checkout -- .gitattributes should prevent the latter, but a lone CR
+# here would silently yield an empty list rather than an error.
+PY_VERSIONS ?= $(shell tr -d '\r"' < .github/workflows/ci.yml | sed -n 's/^ *python-version: \[\(.*\)\] *$$/\1/p' | tr ',' ' ')
+# One venv per interpreter, kept next to (not on top of) the `.venv` that uv
+# manages for everyday work. uv hardlinks from its cache, so these are cheap.
+MATRIX_VENV_DIR ?= .venvs
+
+test-matrix:
+	@test -n "$(PY_VERSIONS)" || \
+		{ echo "No python-version matrix found in .github/workflows/ci.yml"; exit 1; }
+	@set -e; \
+	for v in $(PY_VERSIONS); do \
+		echo "==> Python $$v"; \
+		UV_PROJECT_ENVIRONMENT=$(MATRIX_VENV_DIR)/py$$v \
+			uv sync --locked --group dev --python "$$v" --quiet; \
+		UV_PROJECT_ENVIRONMENT=$(MATRIX_VENV_DIR)/py$$v \
+			uv run --no-sync --python "$$v" pytest -m "not slow" --no-cov; \
+	done
 
 typecheck:
 	uv run mypy $(PACKAGE) tests/ scripts/

@@ -1904,7 +1904,12 @@ class VLLMQueueAnnotator(Annotator):
                 positive.
             TypeError: If a client is not a vLLM server client.
         """
-        super().__post_init__()
+        # Explicit unbound call rather than a zero-argument `super()`:
+        # `@dataclass(slots=True)` builds a *new* class object, and on Python
+        # 3.12 the `__class__` cell captured by this method still points at the
+        # pre-slots class, so `super()` raises TypeError. CPython fixed that in
+        # 3.13; we support 3.12, so name the base class directly.
+        Annotator.__post_init__(self)
         self._logger = get_logger("annotator.vllm_queue")
 
         if not self.clients:

@@ -19,6 +19,8 @@ data/
 .idea/
 .ruff_cache
 .venv
+# Per-interpreter venvs created by `make test-matrix`.
+.venvs/
 .code-workspace
 scratches/
 results/
