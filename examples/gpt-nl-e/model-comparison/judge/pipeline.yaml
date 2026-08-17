@@ -1,0 +1,45 @@
+# Judge every model's generated QA pairs with one independent, stronger model.
+#
+# Runs after combine.py has stacked the three generation pipelines' outputs
+# into one long-format dataset (idx, title, text, question, answer,
+# source_model). One judging pass covers all three models at once because
+# `source_model` is just another column -- the judge never sees it, so it
+# cannot bias the rubric. See ../README.md for the full run order and the
+# submission command (Qwen3.8-27B-FP8's reasoning parser and speculative
+# decoding config are serving flags, passed through VLLM_EXTRA_ARGS).
+#
+#   uv run examples/gpt-nl-e/model-comparison/combine.py \
+#     --out outputs/gpt-nl-e/model-comparison/combined-qa
+
+output_dir: outputs/gpt-nl-e/model-comparison/judge
+
+verbose: true
+log_level: INFO
+
+dataset:
+  path: outputs/gpt-nl-e/model-comparison/combined-qa
+
+client:
+  provider: vllm_online
+  model: Qwen/Qwen3.8-27B-FP8
+  batch_size: 32
+  queue_size: 8
+  wait_for_servers: 1800
+  options:
+    # min_p=0.0 and presence_penalty=0.0 are the benchmarked profile's
+    # values too, but VLLMOnlineRuntimeOptions does not expose either knob
+    # yet; both are no-ops at 0.0, so omitting them changes nothing.
+    temperature: 1.0
+    top_p: 0.95
+    top_k: 20
+    repetition_penalty: 1.0
+    max_tokens: 400
+  pool:
+    servers: 1
+    gpus_per_vllm_server: 1
+
+steps:
+  - name: judge-qa
+    prompt_file: prompts/judge_qa.md
+    output_schema_file: schemas/judge.json
+    num_retries_invalid: 3

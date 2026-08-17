@@ -1,0 +1,37 @@
+# Generate grounded Dutch Wikipedia QA pairs with google/gemma-4-26B-A4B-it.
+#
+# See pipeline-granite-4.1-3b.yaml and ../README.md for the shared shape and
+# the submission command. This model is also benchmarked with MTP/speculative
+# decoding (4 tokens, draft model google/gemma-4-26B-A4B-it-assistant) -- that
+# lives in VLLM_EXTRA_ARGS at submission time, not in this file, same as the
+# other gpt-nl-e pipelines that use this model (see ../../README.md).
+
+output_dir: outputs/gpt-nl-e/model-comparison/generate/gemma-4-26b-a4b
+
+verbose: true
+log_level: INFO
+
+dataset:
+  path: outputs/gpt-nl-e/model-comparison/seed
+
+client:
+  provider: vllm_online
+  model: google/gemma-4-26B-A4B-it
+  batch_size: 16
+  queue_size: 8
+  wait_for_servers: 1800
+  options:
+    temperature: 0.8
+    top_p: 0.95
+    max_tokens: 512
+  pool:
+    servers: 1
+    gpus_per_vllm_server: 1
+
+steps:
+  - name: generate-qa
+    system_prompt_file: prompts/system.md
+    prompt_file: prompts/generate_qa.md
+    output_schema_file: schemas/qa.json
+    sort_by_length: longest_first
+    num_retries_invalid: 3

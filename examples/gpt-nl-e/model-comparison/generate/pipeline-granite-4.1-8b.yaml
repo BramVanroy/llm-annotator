@@ -1,0 +1,34 @@
+# Generate grounded Dutch Wikipedia QA pairs with ibm-granite/granite-4.1-8b-fp8.
+#
+# See pipeline-granite-4.1-3b.yaml and ../README.md for the shared shape and
+# the submission command; only the model, pool size and serving flags differ.
+
+output_dir: outputs/gpt-nl-e/model-comparison/generate/granite-4.1-8b
+
+verbose: true
+log_level: INFO
+
+dataset:
+  path: outputs/gpt-nl-e/model-comparison/seed
+
+client:
+  provider: vllm_online
+  model: ibm-granite/granite-4.1-8b-fp8
+  batch_size: 16
+  queue_size: 8
+  wait_for_servers: 1800
+  options:
+    temperature: 0.8
+    top_p: 0.95
+    max_tokens: 512
+  pool:
+    servers: 1
+    gpus_per_vllm_server: 1
+
+steps:
+  - name: generate-qa
+    system_prompt_file: prompts/system.md
+    prompt_file: prompts/generate_qa.md
+    output_schema_file: schemas/qa.json
+    sort_by_length: longest_first
+    num_retries_invalid: 3

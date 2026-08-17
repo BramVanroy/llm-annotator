@@ -1,0 +1,61 @@
+{
+  "type": "object",
+  "required": [
+    "question_relevant",
+    "question_self_contained",
+    "answer_correct",
+    "answer_grounded",
+    "hallucinated",
+    "fluency",
+    "coherence",
+    "grammar",
+    "overall_quality"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "question_relevant": {
+      "type": "boolean",
+      "description": "The question targets a concrete fact, event, definition or relation from the article, not something trivial or off-topic."
+    },
+    "question_self_contained": {
+      "type": "boolean",
+      "description": "The question never points back at the article itself."
+    },
+    "answer_correct": {
+      "type": "boolean",
+      "description": "The answer is factually correct according to the article."
+    },
+    "answer_grounded": {
+      "type": "boolean",
+      "description": "Every claim in the answer is explicitly supported by the article, with no outside knowledge."
+    },
+    "hallucinated": {
+      "type": "boolean",
+      "description": "The answer states something that is not in, or contradicts, the article."
+    },
+    "fluency": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5,
+      "description": "How fluent and natural the Dutch of the question and answer is, 1-5."
+    },
+    "coherence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5,
+      "description": "How well the answer logically addresses the question, 1-5."
+    },
+    "grammar": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5,
+      "description": "Grammatical correctness of the question and answer, 1-5."
+    },
+    "overall_quality": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5,
+      "description": "Overall usability of this pair as training data, 1-5."
+    }
+  }
+}
