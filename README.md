@@ -187,7 +187,7 @@ client:
   provider: vllm_offline
   model: Qwen/Qwen3-8B
   options:
-    max_tokens: 512
+    max_completion_tokens: 512
 
 steps:
   - name: write-qa

@@ -110,7 +110,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Batches kept in flight. Defaults to four per server.",
     )
-    parser.add_argument("--max-tokens", type=int, default=128)
+    parser.add_argument("--max-completion-tokens", type=int, default=128)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument(
         "--idx-column",
@@ -242,7 +242,7 @@ def main(args: list[str] | None = None) -> None:
             keep_columns=parsed.prompt_field,
             keep_idx_column=parsed.keep_idx_column,
             options=VLLMOnlineRuntimeOptions(
-                max_tokens=parsed.max_tokens,
+                max_completion_tokens=parsed.max_completion_tokens,
                 temperature=parsed.temperature,
             ),
         )

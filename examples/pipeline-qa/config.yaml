@@ -33,7 +33,7 @@ client:
     max_model_len: 4096
   options:
     temperature: 0.7
-    max_tokens: 512
+    max_completion_tokens: 512
 
 steps:
   # Step 1 turns each review into a question-answer pair. The schema's
@@ -64,4 +64,4 @@ steps:
       model: HuggingFaceTB/SmolLM2-360M-Instruct
       options:
         temperature: 0.0
-        max_tokens: 256
+        max_completion_tokens: 256

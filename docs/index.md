@@ -185,7 +185,9 @@ with VLLMQueueAnnotator(clients=clients, batch_size=64, verbose=True) as anno:
         prompt_template="Classify the sentiment: {text}",
         dataset_name="stanfordnlp/imdb",
         dataset_split="test",
-        options=VLLMOnlineRuntimeOptions(max_tokens=128, temperature=0.0),
+        options=VLLMOnlineRuntimeOptions(
+            max_completion_tokens=128, temperature=0.0
+        ),
     )
 ```
 

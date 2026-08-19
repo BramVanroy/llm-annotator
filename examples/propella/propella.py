@@ -85,7 +85,7 @@ def main(args: list[str] | None = None) -> None:
     )
 
     parser.add_argument("--max-model-len", type=int, default=65_536)
-    parser.add_argument("--max-tokens", type=int, default=2048)
+    parser.add_argument("--max-completion-tokens", type=int, default=2048)
     parser.add_argument("--max-num-seqs", type=int, default=8)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.90)
     parser.add_argument(
@@ -127,7 +127,9 @@ def main(args: list[str] | None = None) -> None:
 
     hub_id = parsed_args.hub_id
 
-    options = VLLMOfflineRuntimeOptions(max_tokens=parsed_args.max_tokens)
+    options = VLLMOfflineRuntimeOptions(
+        max_completion_tokens=parsed_args.max_completion_tokens
+    )
 
     quantization = "fp8" if parsed_args.use_fp8 else None
     extra_vllm_kwargs = (

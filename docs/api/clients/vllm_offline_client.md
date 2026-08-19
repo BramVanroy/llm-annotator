@@ -23,7 +23,7 @@ messages = [
     for text in my_texts  # (1)!
 ]
 
-opts = VLLMOfflineRuntimeOptions(max_tokens=256, temperature=0.0)
+opts = VLLMOfflineRuntimeOptions(max_completion_tokens=256, temperature=0.0)
 
 with VLLMOfflineClient(
     model="meta-llama/Llama-3.2-3B-Instruct",

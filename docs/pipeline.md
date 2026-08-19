@@ -109,7 +109,7 @@ Two further knobs tidy up between steps:
 * `filter_invalid: true` drops rows whose `{prefix}valid_fields` is still
   `false` after all retries, so a broken generation is not carried into the next
   step. It requires a schema, and it fails loudly if *every* row was invalid --
-  usually a sign that `max_tokens` is too small for the schema.
+  usually a sign that `max_completion_tokens` is too small for the schema.
 
 The rendered `{prefix}messages` column is dropped once a step finishes, so an
 N-step pipeline does not accumulate N copies of every prompt. Set
@@ -123,8 +123,9 @@ A client can be described at the top level, per step, or both:
   work.
 * **Top level plus a step block** -- the step's keys are merged over the
   defaults. Merging is one level deep: `init` and `options` are merged
-  key-by-key, so a step that only changes `max_tokens` need not repeat the
-  rest. A step that switches `provider` is the exception, described below.
+  key-by-key, so a step that only changes `max_completion_tokens` need not
+  repeat the rest. A step that switches `provider` is the exception, described
+  below.
 * **Per step only** -- omit the top-level block entirely. Best when every step
   uses a different model and there is no sensible shared default; each step's
   block then has to name its own `provider` and `model`.
@@ -142,14 +143,14 @@ client:
     max_model_len: 8192
   options:           # fields of the provider's runtime-options dataclass
     temperature: 0.7
-    max_tokens: 1024
+    max_completion_tokens: 1024
 
 steps:
   - name: judge
     prompt_file: prompts/judge.md
     client:
       options:
-        max_tokens: 256   # temperature is inherited
+        max_completion_tokens: 256   # temperature is inherited
 ```
 
 With no top-level block, each step carries its own complete client:
@@ -202,7 +203,7 @@ steps:
       provider: claude
       model: claude-haiku-4-5
       options:
-        max_tokens: 256   # and *only* max_tokens; nothing is inherited
+        max_completion_tokens: 256   # and *only* that; nothing is inherited
 ```
 
 ## Many vLLM servers

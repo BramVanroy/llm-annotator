@@ -8,6 +8,7 @@ logs/
 !.github/workflows/
 output/
 outputs/
+examples/**/outputs?/
 config/
 wandb/
 models/

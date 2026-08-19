@@ -38,7 +38,7 @@ def main(args: list[str] | None = None) -> None:
         help="Number of samples to process. Use -1 for the full dataset.",
     )
     parser.add_argument("--temperature", type=float, default=0.15)
-    parser.add_argument("--max-tokens", type=int, default=12_000)
+    parser.add_argument("--max-completion-tokens", type=int, default=12_000)
     parser.add_argument(
         "--dataset", default="BramVanroy/finewiki-nl-30-to-24k-tokens"
     )
@@ -75,7 +75,7 @@ def main(args: list[str] | None = None) -> None:
     )
     options = VLLMOfflineRuntimeOptions(
         temperature=parsed_args.temperature,
-        max_tokens=parsed_args.max_tokens,
+        max_completion_tokens=parsed_args.max_completion_tokens,
     )
     extra_vllm_kwargs = {
         "load_format": "mistral",

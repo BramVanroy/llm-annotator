@@ -41,7 +41,7 @@ def main(args: list[str] | None = None) -> None:
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--top-k", type=int, default=64)
-    parser.add_argument("--max-tokens", type=int, default=36_000)
+    parser.add_argument("--max-completion-tokens", type=int, default=36_000)
     parser.add_argument("--repetition-penalty", type=float, default=1.0)
     parser.add_argument(
         "--enable-thinking", action="store_true", default=False
@@ -109,7 +109,7 @@ def main(args: list[str] | None = None) -> None:
         temperature=parsed_args.temperature,
         top_p=parsed_args.top_p,
         top_k=parsed_args.top_k,
-        max_tokens=parsed_args.max_tokens,
+        max_completion_tokens=parsed_args.max_completion_tokens,
         repetition_penalty=parsed_args.repetition_penalty,
         chat_template_kwargs={"enable_thinking": parsed_args.enable_thinking},
     )
