@@ -22,6 +22,10 @@ weights are actually loaded.
 
 ```bash
 uv add "llm-annotator[vllm]"
+# you can pre-install most pre-compiled kernels so they
+# do not need to be JIT-compiled. Especially useful in
+# SLURM/server settings
+uv add "llm-annotator[vllm,vllm-kernels]"
 uv add "llm-annotator[openai]"
 uv add "llm-annotator[anthropic]"
 ```

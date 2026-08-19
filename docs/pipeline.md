@@ -47,13 +47,15 @@ interchangeable and the file suffix decides how it is parsed.
 
 ## Paths are relative to the config
 
-Every path inside a config file -- `prompt_file`, `system_prompt_file`,
-`output_schema_file`, `hosts_file`, `dataset.path` -- resolves against the
-directory holding the config file, never against your current working
-directory. A config directory is therefore self-contained and can be copied to a
-cluster or shared with a colleague as a unit.
+Every path inside a config file -- `output_dir`, `prompt_file`,
+`system_prompt_file`, `output_schema_file`, `hosts_file`, `dataset.path` --
+resolves against the directory holding the config file, never against your
+current working directory. A config directory is therefore self-contained and
+can be copied to a cluster or shared with a colleague as a unit.
 
-`output_dir` is the exception: it is used as given, so it can point anywhere.
+The `--output-dir` CLI flag is the one exception: since it is typed at the
+shell rather than written into the config, it resolves against your current
+working directory instead, the same as the `config` argument itself.
 
 ## Prompts and schemas: inline or in a file
 

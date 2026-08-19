@@ -67,9 +67,10 @@ steps:
         temperature: 0.7
       # How many servers to start for this step, and how big each one is.
       # Only read by a job submitter; ignored when you run this locally.
+      engine:
+        tensor_parallel_size: 2
       pool:
         servers: 4
-        gpus_per_vllm_server: 2
 
   # A hosted judge. This step needs no GPU at all, so on a cluster it becomes a
   # CPU-only job and the GPUs from step 1 are released before it starts.
