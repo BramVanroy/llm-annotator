@@ -1,4 +1,6 @@
 #!/bin/bash
+# sbatch vars will be overridden by submit_pipeline.sh
+# which will set things like --gres
 #SBATCH --job-name=vllm-server
 #SBATCH --partition=gpu_a100
 #SBATCH --nodes=1
@@ -17,7 +19,7 @@
 #SBATCH --ear-policy=monitoring
 #SBATCH --ear-verbose=1
 
-# One vLLM server, in its own job. Submitted as an array by
+# One vLLM server in its own job. Submitted as an array by
 # slurm/submit_pool.sh, which derives --array, --gres and --cpus-per-task from
 # NUM_SERVERS and GPUS_PER_VLLM_SERVER and overrides the headers above; a bare
 # `sbatch slurm/vllm_server.sh` starts a single one-GPU server with those
@@ -39,7 +41,6 @@ TASK_ID="${SLURM_ARRAY_TASK_ID:-0}"
 echo "Starting on $(date)"
 echo "Host: $(hostname), array task: ${TASK_ID}"
 
-# shellcheck disable=SC1091
 source "${REPO_ROOT}/slurm/vllm_common.sh"
 vllm_env_defaults
 vllm_setup_env
@@ -54,8 +55,9 @@ URL_FILE="${POOL_DIR}/${TASK_ID}.url"
 echo "Serving ${MODEL} on ${URL} with ${GPUS_PER_VLLM_SERVER} GPU(s)"
 
 # Slurm already restricts this job to GPUS_PER_VLLM_SERVER devices, so vLLM can use
-# all of the ones it can see. VLLM_EXTRA_ARGS is deliberately word-split.
-# shellcheck disable=SC2086
+# all of the ones it can see. VLLM_EXTRA_ARGS is deliberately word-split so
+# do not add spaces inside (JSON) values:
+# VLLM_EXTRA_ARGS='... --speculative-config {"model":"<assistant-repo-id>","num_speculative_tokens":4}'
 vllm serve "$MODEL" \
   --host 0.0.0.0 \
   --port "$PORT" \

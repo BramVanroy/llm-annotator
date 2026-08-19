@@ -46,8 +46,8 @@ class OpenAIRuntimeOptions(ProviderRuntimeOptions):
     def to_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {}
 
-        if self.max_tokens is not None:
-            payload["max_completion_tokens"] = self.max_tokens
+        if self.max_completion_tokens is not None:
+            payload["max_completion_tokens"] = self.max_completion_tokens
         if self.frequency_penalty is not None:
             payload["frequency_penalty"] = self.frequency_penalty
         if self.reasoning_effort is not None:

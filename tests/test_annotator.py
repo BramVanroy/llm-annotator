@@ -600,7 +600,7 @@ def test_run_annotation_keep_columns_and_validation_fields(
     def my_validator(sample: dict) -> bool:
         return bool(sample.get("response"))
 
-    options = ProviderRuntimeOptions(max_tokens=64)
+    options = ProviderRuntimeOptions(max_completion_tokens=64)
     annotator = Annotator(client=DummyClient())
     prepared_ds = Dataset.from_dict(
         {

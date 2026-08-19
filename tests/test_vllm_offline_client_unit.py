@@ -124,7 +124,7 @@ def test_runtime_options_to_payload(
 ) -> None:
     # Verifies runtime options are translated to SamplingParams-compatible dict fields.
     opts = VLLMOfflineRuntimeOptions(
-        max_tokens=10,
+        max_completion_tokens=10,
         temperature=0.1,
         top_p=0.9,
         top_k=20,
@@ -206,7 +206,7 @@ def test_warm_up_executes_with_forced_max_tokens(
     client.warm_up(
         system_message="sys",
         prompt_prefix="prefix",
-        options=VLLMOfflineRuntimeOptions(max_tokens=99),
+        options=VLLMOfflineRuntimeOptions(max_completion_tokens=99),
     )
     calls = fake_vllm_runtime["chat_calls"]
     assert isinstance(calls, list)

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -24,6 +25,62 @@ import pytest
 
 EXAMPLES_DIR = Path(__file__).parent.parent / "examples"
 ALL_EXAMPLE_SCRIPTS = sorted(EXAMPLES_DIR.rglob("*.py"))
+
+
+def test_prepare_seed_parses_json_personas(tmp_path: Path) -> None:
+    """Grouped JSON persona files should be accepted and selected by key."""
+    personas_path = tmp_path / "personas_nl.json"
+    personas_path.write_text(
+        json.dumps(
+            {
+                "social": [
+                    {"code": "alpha", "description": "A"},
+                    {"code": "beta", "description": "B"},
+                ],
+                "professional": [
+                    {"code": "gamma", "description": "C"},
+                    {"code": "delta", "description": "D"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script_path = EXAMPLES_DIR / "gpt-nl-e" / "_shared" / "prepare_seed.py"
+    spec = importlib.util.spec_from_file_location(
+        "prepare_seed_test_module", script_path
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["prepare_seed_test_module"] = module
+    spec.loader.exec_module(module)
+
+    assert module.parse_personas(personas_path, "social") == [
+        "alpha",
+        "beta",
+    ]
+    assert module.parse_personas(personas_path, "professional") == [
+        "gamma",
+        "delta",
+    ]
+
+
+def test_prepare_seed_normalizes_and_splits_sentences() -> None:
+    """Normalization should clean common unicode junk and sentence splitting should work."""
+    script_path = EXAMPLES_DIR / "gpt-nl-e" / "_shared" / "prepare_seed.py"
+    spec = importlib.util.spec_from_file_location(
+        "prepare_seed_sentence_test_module", script_path
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["prepare_seed_sentence_test_module"] = module
+    spec.loader.exec_module(module)
+
+    assert module.normalize("A\u200bB") == "ab"
+    assert module.split_sentences("Hallo wereld. Dit is tweede zin!") == [
+        "Hallo wereld.",
+        "Dit is tweede zin!",
+    ]
 
 
 @pytest.mark.parametrize(

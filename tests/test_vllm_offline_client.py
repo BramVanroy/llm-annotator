@@ -54,7 +54,7 @@ def vllm_offline_smollm_client(
         client.warm_up(
             system_message="You are a concise assistant.",
             prompt_prefix="Answer briefly.",
-            options=VLLMOfflineRuntimeOptions(max_tokens=8),
+            options=VLLMOfflineRuntimeOptions(max_completion_tokens=8),
         )
     except Exception as exc:  # pragma: no cover - environment dependent
         pytest.skip(f"Could not initialize vLLM offline test client: {exc}")
@@ -77,7 +77,7 @@ def test_generate_with_smollm(
             }
         ],
         options=VLLMOfflineRuntimeOptions(
-            max_tokens=10, temperature=0.0, seed=0
+            max_completion_tokens=10, temperature=0.0, seed=0
         ),
     )
 
@@ -97,7 +97,7 @@ def test_batch_generate_with_smollm(
             [{"role": "user", "content": "Reply with one short farewell."}],
         ],
         options=VLLMOfflineRuntimeOptions(
-            max_tokens=12, temperature=0.0, seed=1
+            max_completion_tokens=12, temperature=0.0, seed=1
         ),
     )
 
@@ -129,7 +129,7 @@ def test_guided_json_generation_with_smollm(
             }
         ],
         options=VLLMOfflineRuntimeOptions(
-            max_tokens=32,
+            max_completion_tokens=32,
             temperature=0.0,
             seed=7,
             json_schema=schema,

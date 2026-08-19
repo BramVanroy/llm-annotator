@@ -116,8 +116,9 @@ class VLLMOfflineRuntimeOptions(VLLMBaseRuntimeOptions):
     in-process vLLM inference.
 
     Attributes:
-        max_tokens: Maximum number of output tokens. Inherited from
+        max_completion_tokens: Maximum number of output tokens. Inherited from
             [`ProviderRuntimeOptions`][llm_annotator.clients.base.ProviderRuntimeOptions].
+            Forwarded to ``SamplingParams`` as ``max_tokens``.
         json_schema: Optional JSON schema dict for structured output via guided
             decoding. Inherited from ``ProviderRuntimeOptions``. When
             provided, vLLM constrains generation to valid JSON matching the
@@ -175,8 +176,8 @@ class VLLMOfflineRuntimeOptions(VLLMBaseRuntimeOptions):
         payload["n"] = self.n
         payload["presence_penalty"] = self.presence_penalty
         payload["frequency_penalty"] = self.frequency_penalty
-        if self.max_tokens is not None:
-            payload["max_tokens"] = self.max_tokens
+        if self.max_completion_tokens is not None:
+            payload["max_tokens"] = self.max_completion_tokens
         if self.temperature is not None:
             payload["temperature"] = self.temperature
         if self.top_p is not None:
@@ -270,7 +271,7 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
         ...     "required": ["label"],
         ... }
         >>> opts = VLLMOfflineRuntimeOptions(
-        ...     max_tokens=128, json_schema=schema
+        ...     max_completion_tokens=128, json_schema=schema
         ... )  # doctest: +SKIP
         >>> with VLLMOfflineClient(  # doctest: +SKIP
         ...     model="meta-llama/Llama-3.2-3B-Instruct"
@@ -425,7 +426,7 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
             system_message: Optional system message used in every request.
             prompt_prefix: Optional fixed prefix that starts every user turn.
             options: Optional generation options. Only used to derive a base
-                ``SamplingParams``; ``max_tokens`` is forced to 1 for the
+                ``SamplingParams``; the token budget is forced to 1 for the
                 warm-up run regardless of the value set here.
 
         Raises:

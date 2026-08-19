@@ -612,7 +612,7 @@ class Annotator:
                     "Warning: All samples in the batch failed to produce valid JSON fields."
                     " This might be exceptional (esp. for smaller batches)"
                     " but if it happens often it suggests a deeper issue, such"
-                    " as too few 'max_tokens' in options."
+                    " as too few 'max_completion_tokens' in options."
                 )
 
         if f"{task_prefix}valid" in results[0]:

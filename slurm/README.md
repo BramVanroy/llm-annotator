@@ -94,28 +94,15 @@ types are submitted with `--export=ALL`.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `ANNOTATE_CONFIG` | *required* | JSON/YAML pipeline config to run |
-| `GPU_PARTITION`, `SERVER_TIME` | `gpu_a100`, `04:00:00` | Server allocation |
-| `CLIENT_PARTITION`, `CLIENT_TIME` | `rome`, `05:00:00` | Client allocation |
-| `SLURM_ACCOUNT`, `CPUS_PER_GPU` | `tnsr72764`, `18` | Accounting and CPU share per GPU |
+| `GPU_PARTITION`, `SERVER_TIME` | `gpu_a100`, `04:00:00` | Server allocation. CPUs per GPU are derived from `GPU_PARTITION` (18 on `gpu_a100`, 16 on `gpu_h100`, 16 otherwise), not a separate variable. |
+| `CLIENT_PARTITION`, `CLIENT_TIME` | `rome`, `05:00:00` | Client allocation. `CLIENT_PARTITION` must be `rome` or `genoa`; cpus-per-task is set to each partition's minimal whole-node request (16 on `rome`, 24 on `genoa`), not a separate variable. |
+| `SLURM_ACCOUNT` | `tnsr72764` | Accounting |
 | `MAX_GPUS_PER_NODE` | `4` | Upper bound checked against each step's `gpus_per_vllm_server` |
-| `MIN_SERVERS` | all of them | Servers a step insists on. Lower it so one straggling job cannot hold up the run. |
+| `MIN_SERVERS` | `1` | Servers a step insists on before the client starts. Raise it to require more of the pool up front. |
 | `POOL_WAIT` | `3600` | Seconds a client waits for its servers to register |
 | `VLLM_PORT`, `MAX_MODEL_LEN`, `GPU_MEM_UTIL` | `8000`, `8192`, `0.90` | Passed to `vllm serve` |
 | `VLLM_EXTRA_ARGS` | – | Extra flags appended to `vllm serve` |
-| `CANCEL_SERVERS_ON_EXIT` | `1` | Cancel a step's server array when its client is done |
 | `OUTPUT_DIR`, `HUB_ID`, `OVERWRITE` | from the config | Override the config's `output_dir` / `hub_id`, or discard existing step output |
-
-`DRY_RUN=1` prints the submissions instead of making them, which is the quickest
-way to check what an allocation will ask for and that the chain is wired
-correctly:
-
-```sh
-ANNOTATE_CONFIG=examples/vllm-server-pool/pipeline.yaml DRY_RUN=1 \
-  ./slurm/submit_pipeline.sh
-```
-
-A bad config path or an unreadable config fails on the login node, before any
-allocation is granted.
 
 ## Resuming
 

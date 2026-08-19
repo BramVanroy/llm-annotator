@@ -108,6 +108,51 @@ def test_example_config_resolves_its_files() -> None:
     assert "{answer_v1}" in prompt
 
 
+def test_json_catalog_system_prompt_is_rendered_to_text(
+    tmp_path: Path,
+) -> None:
+    """JSON catalog files should be converted to prompt-readable text."""
+    catalog_path = tmp_path / "taxonomy.json"
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "instruction": "Use only the code.",
+                "categories": [
+                    {"code": "alpha", "description": "First category."},
+                    {"code": "beta", "description": "Second category."},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        json.dumps(
+            minimal_config(
+                steps=[
+                    {
+                        "name": "classify",
+                        "prompt": "Classify: {text}",
+                        "system_prompt_file": str(catalog_path),
+                    }
+                ]
+            )
+        ),
+        encoding="utf-8",
+    )
+    rendered = (
+        load_pipeline_config(config_path)
+        .steps[0]
+        .resolved_system_prompt(tmp_path)
+    )
+
+    assert rendered is not None
+    assert "Use only the code." in rendered
+    assert "- `alpha` — First category." in rendered
+    assert "- `beta` — Second category." in rendered
+
+
 # --- provider handling -------------------------------------------------------
 
 
@@ -153,10 +198,10 @@ def test_unknown_option_names_the_valid_ones() -> None:
 
 def test_build_options_uses_provider_dataclass() -> None:
     options = ClientConfig(
-        provider="claude", model="m", options={"max_tokens": 32}
+        provider="claude", model="m", options={"max_completion_tokens": 32}
     ).build_options()
     assert type(options).__name__ == "ClaudeRuntimeOptions"
-    assert options.max_tokens == 32
+    assert options.max_completion_tokens == 32
 
 
 def test_build_options_rejects_double_schema() -> None:
@@ -500,13 +545,13 @@ def test_step_client_merges_nested_blocks() -> None:
                 "model": "gpt-4o-mini",
                 "batch_size": 8,
                 "init": {"max_workers": 4},
-                "options": {"temperature": 0.5, "max_tokens": 100},
+                "options": {"temperature": 0.5, "max_completion_tokens": 100},
             },
             steps=[
                 {
                     "name": "a",
                     "prompt": "x",
-                    "client": {"options": {"max_tokens": 999}},
+                    "client": {"options": {"max_completion_tokens": 999}},
                 }
             ],
         )
@@ -517,7 +562,7 @@ def test_step_client_merges_nested_blocks() -> None:
     assert merged.model == "gpt-4o-mini"
     assert merged.batch_size == 8
     assert merged.init == {"max_workers": 4}
-    assert merged.options == {"temperature": 0.5, "max_tokens": 999}
+    assert merged.options == {"temperature": 0.5, "max_completion_tokens": 999}
 
 
 def test_step_client_switching_provider_drops_stale_options() -> None:
@@ -564,7 +609,7 @@ def test_step_client_switching_provider_keeps_only_its_own_options() -> None:
                     "client": {
                         "provider": "claude",
                         "model": "claude-haiku-4-5",
-                        "options": {"max_tokens": 10},
+                        "options": {"max_completion_tokens": 10},
                     },
                 }
             ],
@@ -572,7 +617,7 @@ def test_step_client_switching_provider_keeps_only_its_own_options() -> None:
     )
     merged = config.step_client(config.steps[0])
     assert merged.provider == "claude"
-    assert merged.options == {"max_tokens": 10}
+    assert merged.options == {"max_completion_tokens": 10}
 
 
 def test_bad_step_client_fails_at_load_time() -> None:

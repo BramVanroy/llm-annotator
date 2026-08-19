@@ -49,7 +49,9 @@ def offline_vllm_client(
         client.warm_up(
             system_message="You are a concise sentiment annotation assistant.",
             prompt_prefix="Read the review and classify sentiment.",
-            options=VLLMOfflineRuntimeOptions(max_tokens=16, temperature=0.0),
+            options=VLLMOfflineRuntimeOptions(
+                max_completion_tokens=16, temperature=0.0
+            ),
         )
     except Exception as exc:  # pragma: no cover - environment dependent
         pytest.skip(f"Could not initialize vLLM offline client: {exc}")
@@ -77,7 +79,7 @@ def test_annotate_imdb_smoke_with_offline_vllm(
         max_num_samples=6,
         keep_columns=["text", "label"],
         options=VLLMOfflineRuntimeOptions(
-            max_tokens=24, temperature=0.0, seed=5
+            max_completion_tokens=24, temperature=0.0, seed=5
         ),
         sort_by_length="shortest_first",
     )
@@ -118,7 +120,7 @@ def test_annotate_imdb_with_schema_and_task_prefix(
         max_num_samples=5,
         keep_columns=["text", "label"],
         options=VLLMOfflineRuntimeOptions(
-            max_tokens=32, temperature=0.0, seed=11
+            max_completion_tokens=32, temperature=0.0, seed=11
         ),
         output_schema=schema,
         task_prefix="sent_",

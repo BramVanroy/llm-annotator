@@ -97,8 +97,8 @@ class VLLMOnlineRuntimeOptions(VLLMBaseRuntimeOptions):
             payload["top_k"] = self.top_k
         if self.repetition_penalty is not None:
             payload["repetition_penalty"] = self.repetition_penalty
-        if self.max_tokens is not None:
-            payload["max_completion_tokens"] = self.max_tokens
+        if self.max_completion_tokens is not None:
+            payload["max_completion_tokens"] = self.max_completion_tokens
         if self.temperature is not None:
             payload["temperature"] = self.temperature
         if self.top_p is not None:

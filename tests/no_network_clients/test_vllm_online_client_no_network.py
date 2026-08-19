@@ -27,7 +27,7 @@ def test_vllm_online_client_uses_listed_model_when_none_given(
 def test_vllm_online_runtime_options_to_payload() -> None:
     # Verifies the shared and server-specific runtime options serialize correctly.
     base_payload = VLLMOnlineRuntimeOptions(
-        max_tokens=8,
+        max_completion_tokens=8,
         top_k=4,
         repetition_penalty=1.1,
         add_generation_prompt=False,
@@ -85,7 +85,7 @@ def test_vllm_online_batch_generate_uses_batch_endpoint(
             [{"role": "user", "content": "one"}],
             [{"role": "user", "content": "two"}],
         ],
-        options=VLLMOnlineRuntimeOptions(max_tokens=9, top_k=20),
+        options=VLLMOnlineRuntimeOptions(max_completion_tokens=9, top_k=20),
     )
 
     assert fake_openai_module["last_post_url"] == (
@@ -147,7 +147,7 @@ def test_vllm_online_batch_generate_pads_missing_choices(
             [{"role": "user", "content": "one"}],
             [{"role": "user", "content": "two"}],
         ],
-        options=VLLMOnlineRuntimeOptions(max_tokens=9),
+        options=VLLMOnlineRuntimeOptions(max_completion_tokens=9),
     )
 
     assert len(responses) == 2
@@ -183,7 +183,7 @@ def test_vllm_online_batch_generate_http_error_returns_error_responses(
             [{"role": "user", "content": "one"}],
             [{"role": "user", "content": "two"}],
         ],
-        options=VLLMOnlineRuntimeOptions(max_tokens=4),
+        options=VLLMOnlineRuntimeOptions(max_completion_tokens=4),
     )
     assert len(responses) == 2
     assert all(r.error is not None for r in responses)

@@ -24,17 +24,17 @@ class ClaudeRuntimeOptions(ProviderRuntimeOptions):
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
     """Controls the amount of effort Claude puts into generating the response, which can affect quality and latency. Higher effort levels may produce better responses but take more time and compute resources. If not specified, the provider default will be used."""
     thinking_type: Literal["enabled", "disabled", "adaptive"] | None = None
-    """When enabled, responses include thinking content blocks showing Claude's thinking process before the final answer. Requires a minimum budget of 1,024 tokens and counts towards your max_tokens limit."""
+    """When enabled, responses include thinking content blocks showing Claude's thinking process before the final answer. Requires a minimum budget of 1,024 tokens and counts towards your max_completion_tokens limit."""
     thinking_budget: int | None = None
-    """Determines how many tokens Claude can use for its internal reasoning process. Larger budgets can enable more thorough analysis for complex problems, improving response quality. Must be ≥1024 and less than max_tokens."""
+    """Determines how many tokens Claude can use for its internal reasoning process. Larger budgets can enable more thorough analysis for complex problems, improving response quality. Must be ≥1024 and less than max_completion_tokens."""
     thinking_display: Literal["summarized", "omitted", "full"] | None = None
     """When thinking is enabled (or adaptive). Controls how thinking content appears in the response. When set to summarized, thinking is returned normally. When set to omitted, thinking content is redacted but a signature is returned for multi-turn continuity. Defaults to summarized."""
 
     def to_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {}
 
-        if self.max_tokens is not None:
-            payload["max_tokens"] = self.max_tokens
+        if self.max_completion_tokens is not None:
+            payload["max_tokens"] = self.max_completion_tokens
 
         if self.effort is not None:
             if "output_config" not in payload:

@@ -24,7 +24,7 @@ def test_openai_generate_builds_payload_and_parses_response(
     response = client.generate(
         messages=[{"role": "user", "content": "Hello"}],
         options=OpenAIRuntimeOptions(
-            max_tokens=12,
+            max_completion_tokens=12,
             temperature=0.2,
             json_schema={"type": "object"},
         ),
@@ -45,7 +45,7 @@ def test_openai_generate_builds_payload_and_parses_response(
 def test_openai_runtime_options_to_payload() -> None:
     # Verifies optional OpenAI runtime fields are emitted in the payload.
     payload = OpenAIRuntimeOptions(
-        max_tokens=12,
+        max_completion_tokens=12,
         frequency_penalty=0.5,
         reasoning_effort="high",
         temperature=0.2,
@@ -121,7 +121,7 @@ def test_openai_batch_generate_preserves_input_order(
             [{"role": "user", "content": "first"}],
             [{"role": "user", "content": "second"}],
         ],
-        options=OpenAIRuntimeOptions(max_tokens=8),
+        options=OpenAIRuntimeOptions(max_completion_tokens=8),
     )
 
     assert len(responses) == 2
@@ -230,7 +230,7 @@ def test_batch_api_happy_path(
     client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(model="gpt-test")
     responses = client.batch_generate(
         messages=[[{"role": "user", "content": "ping"}]],
-        options=OpenAIRuntimeOptions(max_tokens=16),
+        options=OpenAIRuntimeOptions(max_completion_tokens=16),
         use_batch_api=True,
         poll_interval=0.0,
     )
@@ -438,7 +438,8 @@ def test_batch_api_build_request_includes_json_schema(
         0,
         [{"role": "user", "content": "x"}],
         OpenAIRuntimeOptions(
-            max_tokens=8, json_schema={"type": "object", "properties": {}}
+            max_completion_tokens=8,
+            json_schema={"type": "object", "properties": {}},
         ),
         None,
     )

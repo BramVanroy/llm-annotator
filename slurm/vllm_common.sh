@@ -1,6 +1,5 @@
 #!/bin/bash
-# Shared helpers for the vLLM server pool. It is sourced from the other SLURM scripts
-# to set variables and do some checks.
+# Shared helpers for the vLLM server pool. This file is source in the other scripts.
 #
 # The pool is one Slurm job per vLLM server: every job holds GPUS_PER_VLLM_SERVER
 # GPUs and serves a single tensor-parallel server, publishing its base URL into
@@ -43,8 +42,8 @@ vllm_env_defaults() {
   mkdir -p "$LOG_DIR" "$POOL_DIR"
 }
 
-# Everything both job types need before they can run Python: the toolchain
-# modules, an up-to-date environment, and the venv on PATH.
+# Load slurm modules, sync vllm and include vllm-kernels extra
+# to avoid compiling kernels on the fly
 vllm_setup_env() {
   module purge
   module load 2025

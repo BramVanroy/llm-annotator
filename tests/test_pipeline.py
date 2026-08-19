@@ -272,7 +272,7 @@ def test_client_is_reused_when_settings_match(
 ) -> None:
     config = two_step_config(tmp_path)
     # Same model for both steps: the (expensive) client must be built once.
-    config.steps[1].client = {"options": {"max_tokens": 16}}
+    config.steps[1].client = {"options": {"max_completion_tokens": 16}}
     run_pipeline(config)
     assert len(built_clients) == 1
 

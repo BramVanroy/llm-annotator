@@ -60,7 +60,7 @@ def test_claude_generate_builds_payload_and_parses_response(
             {"role": "user", "content": "Summarize"},
         ],
         options=ClaudeRuntimeOptions(
-            max_tokens=11,
+            max_completion_tokens=11,
             json_schema={"type": "object"},
             effort="low",
             thinking_type="adaptive",
@@ -82,7 +82,7 @@ def test_claude_generate_builds_payload_and_parses_response(
 def test_claude_runtime_options_to_payload() -> None:
     # Verifies optional Claude runtime fields are emitted in the payload.
     payload = ClaudeRuntimeOptions(
-        max_tokens=11,
+        max_completion_tokens=11,
         effort="high",
         thinking_type="enabled",
         thinking_budget=2048,

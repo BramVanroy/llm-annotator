@@ -37,22 +37,21 @@ mkdir -p logs
 : "${ANNOTATE_CONFIG:?Set ANNOTATE_CONFIG to a JSON/YAML pipeline config}"
 : "${STEP_NAME:?Set STEP_NAME to the step of that config to run}"
 : "${NUM_SERVERS:=1}"
-: "${MIN_SERVERS:=$NUM_SERVERS}"
+: "${MIN_SERVERS:=1}"
 : "${POOL_WAIT:=3600}"
-: "${CANCEL_SERVERS_ON_EXIT:=1}"
 
 echo "Starting on $(date)"
 echo "Host: $(hostname)"
 echo "Step: ${STEP_NAME} of ${ANNOTATE_CONFIG}"
 
-# shellcheck disable=SC1091
 source "${REPO_ROOT}/slurm/vllm_common.sh"
+# set up needed cache dirs and environment
 vllm_setup_env
 
-# Free the GPUs as soon as this step is done, instead of letting the server
-# jobs idle until their own time limit.
+# Free the GPUs as soon as this client dies or ends running
+# so that the GPU server does not keep running up to timelimit
 release_servers() {
-  if [[ "$CANCEL_SERVERS_ON_EXIT" == "1" && -n "${SERVER_JOB_ID:-}" ]]; then
+  if [[ -n "${SERVER_JOB_ID:-}" ]]; then
     echo "Cancelling server job ${SERVER_JOB_ID}"
     scancel "$SERVER_JOB_ID" 2> /dev/null || true
   fi
@@ -61,16 +60,14 @@ trap release_servers EXIT
 
 ANNOTATE_ARGS=(--steps "$STEP_NAME")
 
-# --- Wait for the pool, when this step has one -------------------------------
-# This waits for .url files to *appear*, i.e. for queued server jobs to start
-# running at all. It is a different problem from the config's
-# `wait_for_servers`, which polls /health on servers whose addresses are
-# already known.
+# When relying on a vllm pool, the client first waits until NUM_SERVERS are ready
+# The server each write their own url files to pool dir
 if [[ -n "${POOL_DIR:-}" ]]; then
   echo "Pool: ${POOL_DIR} (waiting for ${NUM_SERVERS} server(s))"
 
   count_urls() {
     local files=("$POOL_DIR"/*.url)
+    # check if first entry exists, if so count; otherwise 0
     [[ -e "${files[0]}" ]] && echo "${#files[@]}" || echo 0
   }
 
@@ -91,6 +88,7 @@ if [[ -n "${POOL_DIR:-}" ]]; then
     exit 1
   fi
 
+  # Create host file from the pool dir urls
   HOSTS_FILE="${POOL_DIR}/hosts.txt"
   cat "$POOL_DIR"/*.url > "$HOSTS_FILE"
   echo "Annotating over ${ready} server(s):"
@@ -99,12 +97,8 @@ if [[ -n "${POOL_DIR:-}" ]]; then
   ANNOTATE_ARGS+=(--hosts-file "$HOSTS_FILE")
 fi
 
-# --- Annotation --------------------------------------------------------------
-# Everything else about the run lives in the config. Only these three are
-# passed here, because each maps onto an existing flag that genuinely varies
-# between submissions of the same pipeline.
-# Plain `[[ ... ]] &&` would abort the script under `set -e` whenever the test
-# is false, hence the if blocks.
+# Most of the needed configuration lives in the config file
+# but some option can be overridden by env vars
 if [[ -n "${OUTPUT_DIR:-}" ]]; then
   ANNOTATE_ARGS+=(--output-dir "$OUTPUT_DIR")
 fi
@@ -115,6 +109,7 @@ if [[ "${OVERWRITE:-0}" == "1" ]]; then
   ANNOTATE_ARGS+=(--overwrite)
 fi
 
+# as always, capture the python exit code and use it to exit slurm with the same code
 set +e
 python scripts/annotate.py "$ANNOTATE_CONFIG" "${ANNOTATE_ARGS[@]}"
 ANNOTATE_RC=$?

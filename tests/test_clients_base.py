@@ -109,11 +109,13 @@ def test_client_batch_generate_defaults_to_generate() -> None:
             [{"role": "user", "content": "first"}],
             [{"role": "user", "content": "second"}],
         ],
-        options=ProviderRuntimeOptions(max_tokens=2),
+        options=ProviderRuntimeOptions(max_completion_tokens=2),
         gen_kwargs={"temperature": 0.1},
     )
 
     assert [response.text for response in responses] == ["first", "second"]
     assert len(client.generate_calls) == 2
-    assert client.generate_calls[0][1] == ProviderRuntimeOptions(max_tokens=2)
+    assert client.generate_calls[0][1] == ProviderRuntimeOptions(
+        max_completion_tokens=2
+    )
     assert client.generate_calls[0][2] == {"temperature": 0.1}

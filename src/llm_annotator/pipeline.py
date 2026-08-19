@@ -171,7 +171,8 @@ def _postprocess_step(
             raise ValueError(
                 f"Step '{step.name}': all {num_before:,} samples failed schema"
                 " validation, so there is nothing left for the next step. A"
-                " common cause is a 'max_tokens' too low for the schema."
+                " common cause is a 'max_completion_tokens' too low for the"
+                " schema."
             )
         if num_dropped:
             LOGGER.warning(

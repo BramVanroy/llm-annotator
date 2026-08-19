@@ -1053,6 +1053,71 @@ def _resolve_path(path: str | Path, root: Path) -> Path:
     return (root / candidate).resolve()
 
 
+def _render_json_catalog(payload: Any, path: str | Path) -> str:
+    """Turn a JSON persona or taxonomy catalog into prompt-readable text."""
+    if isinstance(payload, list):
+        entries = payload
+        intro = None
+    elif isinstance(payload, dict):
+        intro = payload.get("instruction")
+        for key in (
+            "professional",
+            "profession",
+            "social",
+            "categories",
+            "personas",
+            "items",
+            "codes",
+        ):
+            if key in payload:
+                entries = payload[key]
+                break
+        else:
+            entries = []
+            for value in payload.values():
+                if isinstance(value, list):
+                    entries = value
+                    break
+    else:
+        raise ValueError(
+            "JSON system prompt catalogs must decode to a list or mapping."
+        )
+
+    if not isinstance(entries, list):
+        raise ValueError(
+            "JSON system prompt catalogs must contain a list of entries."
+        )
+
+    lines: list[str] = []
+    if isinstance(intro, str) and intro.strip():
+        lines.append(intro.strip())
+
+    for item in entries:
+        if isinstance(item, str):
+            lines.append(f"- `{item.strip()}`")
+        elif isinstance(item, dict):
+            code = (
+                item.get("code")
+                or item.get("name")
+                or item.get("persona")
+                or item.get("label")
+            )
+            description = item.get("description") or item.get("detail")
+            if code is None:
+                continue
+            code = str(code).strip()
+            if description is None or str(description).strip() == "":
+                lines.append(f"- `{code}`")
+            else:
+                lines.append(f"- `{code}` — {str(description).strip()}")
+
+    if not lines:
+        raise ValueError(
+            f"JSON catalog file '{path}' did not contain any catalog entries."
+        )
+    return "\n".join(lines)
+
+
 def _read_text(path: str | Path, root: Path) -> str:
     """Read a UTF-8 text file referenced from a config file.
 
@@ -1073,6 +1138,14 @@ def _read_text(path: str | Path, root: Path) -> str:
             f"File '{path}' referenced from the config does not exist"
             f" (resolved to '{pfin}')."
         )
+
+    if pfin.suffix.lower() == ".json":
+        try:
+            payload = json.loads(pfin.read_text(encoding="utf-8"))
+            return _render_json_catalog(payload, pfin)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"JSON catalog '{pfin}' is invalid.") from exc
+
     return pfin.read_text(encoding="utf-8")
 
 
