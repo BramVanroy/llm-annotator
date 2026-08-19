@@ -110,10 +110,12 @@ class VLLMOfflineRuntimeOptions(VLLMBaseRuntimeOptions):
     """Generation options for the vLLM offline client.
 
     Extends
-    [`VLLMBaseRuntimeOptions`][llm_annotator.clients.vllm_online_client.VLLMBaseRuntimeOptions]
-    (which provides ``top_k``, ``repetition_penalty``, and
-    ``chat_template_kwargs``) with ``SamplingParams``-compatible fields for
-    in-process vLLM inference.
+    [`VLLMBaseRuntimeOptions`][llm_annotator.clients.vllm_online_client.VLLMBaseRuntimeOptions],
+    which carries everything both vLLM clients spell the same way
+    (``temperature``, ``top_p``, ``top_k``, ``repetition_penalty``,
+    ``presence_penalty``, ``frequency_penalty``, ``stop``, ``seed``, ``n``,
+    ``chat_template_kwargs`` and ``extra_body``), with the
+    ``SamplingParams`` fields that only in-process inference offers.
 
     Attributes:
         max_completion_tokens: Maximum number of output tokens. Inherited from
@@ -123,35 +125,10 @@ class VLLMOfflineRuntimeOptions(VLLMBaseRuntimeOptions):
             decoding. Inherited from ``ProviderRuntimeOptions``. When
             provided, vLLM constrains generation to valid JSON matching the
             schema.
-        top_k: Top-k sampling cutoff. Inherited from
-            ``VLLMBaseRuntimeOptions``. ``None`` uses the model default.
-        repetition_penalty: Multiplicative penalty for token repetition.
-            Inherited from ``VLLMBaseRuntimeOptions``.
-        chat_template_kwargs: Additional kwargs forwarded to the chat template.
-            Inherited from ``VLLMBaseRuntimeOptions``. Pass
-            ``{"enable_thinking": True}`` here to enable thinking mode.
-        temperature: Sampling temperature. ``None`` uses the model default.
-        top_p: Top-p nucleus sampling probability. ``None`` uses the model
-            default.
-        stop: Optional list of strings that halt generation when produced.
-        presence_penalty: Penalty applied to tokens already present in the
-            output. Defaults to ``0.0`` (vLLM default).
-        frequency_penalty: Penalty applied proportional to token frequency in
-            the output. Defaults to ``0.0`` (vLLM default).
-        seed: Optional fixed random seed for reproducible generation.
-        n: Number of independent output sequences to generate per request.
-            Defaults to ``1``.
         whitespace_pattern: Regex pattern inserted between JSON tokens during
             guided decoding. Only used when ``json_schema`` is set.
     """
 
-    temperature: float | None = None
-    top_p: float | None = None
-    stop: list[str] | None = None
-    presence_penalty: float = 0.0
-    frequency_penalty: float = 0.0
-    seed: int | None = None
-    n: int = 1
     whitespace_pattern: str | None = r"[ ]?"
 
     def to_payload(self) -> dict[str, Any]:
@@ -167,25 +144,9 @@ class VLLMOfflineRuntimeOptions(VLLMBaseRuntimeOptions):
         Raises:
             ImportError: If vLLM is not installed.
         """
-        payload: dict[str, Any] = {}
-        if self.top_k is not None:
-            payload["top_k"] = self.top_k
-        if self.repetition_penalty is not None:
-            payload["repetition_penalty"] = self.repetition_penalty
-
-        payload["n"] = self.n
-        payload["presence_penalty"] = self.presence_penalty
-        payload["frequency_penalty"] = self.frequency_penalty
+        payload = VLLMBaseRuntimeOptions.to_payload(self)
         if self.max_completion_tokens is not None:
             payload["max_tokens"] = self.max_completion_tokens
-        if self.temperature is not None:
-            payload["temperature"] = self.temperature
-        if self.top_p is not None:
-            payload["top_p"] = self.top_p
-        if self.stop is not None:
-            payload["stop"] = self.stop
-        if self.seed is not None:
-            payload["seed"] = self.seed
         if self.json_schema is not None:
             from vllm.sampling_params import StructuredOutputsParams
 
@@ -193,6 +154,8 @@ class VLLMOfflineRuntimeOptions(VLLMBaseRuntimeOptions):
                 json=self.json_schema,
                 whitespace_pattern=self.whitespace_pattern,
             )
+        if self.extra_body:
+            payload.update(self.extra_body)
         return payload
 
 

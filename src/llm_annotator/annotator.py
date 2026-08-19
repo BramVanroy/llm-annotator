@@ -533,6 +533,7 @@ class Annotator:
         *,
         batch: dict[str, list[Any]],
         options: ProviderRuntimeOptions | None,
+        gen_kwargs: dict[str, Any] | None = None,
         task_prefix: str = "",
         validate_fn: Callable | None = None,
         postprocess_fn: Callable | None = None,
@@ -546,6 +547,8 @@ class Annotator:
         Args:
             batch: Dictionary containing batch data with messages samples.
             options: Runtime options passed to the client.
+            gen_kwargs: Extra request parameters merged over ``options``,
+                for anything the options dataclass does not name.
             task_prefix: String prefix to use for internal column names.
             validate_fn: Optional custom validation function that takes a processed
                 output dictionary and must return a boolean indicating validity. If a JSON schema
@@ -569,6 +572,7 @@ class Annotator:
         responses = client.batch_generate(
             messages=messages,
             options=options,
+            gen_kwargs=gen_kwargs,
         )
 
         if len(responses) != len(messages):
@@ -659,6 +663,7 @@ class Annotator:
         *,
         batch: dict[str, list[Any]],
         options: ProviderRuntimeOptions | None,
+        gen_kwargs: dict[str, Any] | None = None,
         task_prefix: str = "",
         validate_fn: Callable | None = None,
         postprocess_fn: Callable | None = None,
@@ -670,6 +675,8 @@ class Annotator:
         Args:
             batch: Dictionary containing batch data with messages samples.
             options: Runtime options passed to the client.
+            gen_kwargs: Extra request parameters merged over ``options``,
+                for anything the options dataclass does not name.
             task_prefix: String prefix to use for internal column names.
             validate_fn: Optional custom validation function.
             postprocess_fn: Optional postprocessing function.
@@ -683,6 +690,7 @@ class Annotator:
         results = self._process_batch(
             batch=batch,
             options=options,
+            gen_kwargs=gen_kwargs,
             task_prefix=task_prefix,
             validate_fn=validate_fn,
             postprocess_fn=postprocess_fn,
@@ -707,6 +715,7 @@ class Annotator:
             retry_results = self._process_batch(
                 batch=retry_batch,
                 options=options,
+                gen_kwargs=gen_kwargs,
                 task_prefix=task_prefix,
                 validate_fn=validate_fn,
                 client=client,
@@ -734,6 +743,7 @@ class Annotator:
         *,
         prepared_dataset: Dataset,
         options: ProviderRuntimeOptions | None,
+        gen_kwargs: dict[str, Any] | None = None,
         task_prefix: str = "",
         validate_fn: Callable | None = None,
         postprocess_fn: Callable | None = None,
@@ -751,6 +761,8 @@ class Annotator:
         Args:
             prepared_dataset: The dataset still left to annotate.
             options: Runtime options passed to the client.
+            gen_kwargs: Extra request parameters merged over ``options``,
+                for anything the options dataclass does not name.
             task_prefix: String prefix to use for internal column names.
             validate_fn: Optional custom validation function.
             postprocess_fn: Optional postprocessing function.
@@ -776,6 +788,7 @@ class Annotator:
                 self._annotate_batch(
                     batch=batch,
                     options=options,
+                    gen_kwargs=gen_kwargs,
                     task_prefix=task_prefix,
                     validate_fn=validate_fn,
                     postprocess_fn=postprocess_fn,
@@ -999,6 +1012,7 @@ class Annotator:
         dataset_config: str | None = None,
         keep_columns: str | Iterable[str] | bool | None = None,
         options: ProviderRuntimeOptions | None = None,
+        gen_kwargs: dict[str, Any] | None = None,
         output_schema: str | dict[str, Any] | None = None,
         idx_column: str = "idx",
         upload_every_n_samples: int | None = 10_000,
@@ -1031,6 +1045,8 @@ class Annotator:
             dataset_config: Dataset config used for skip filtering.
             keep_columns: Columns to keep in output. ``True`` for all.
             options: Runtime options passed to the client.
+            gen_kwargs: Extra request parameters merged over ``options``,
+                for anything the options dataclass does not name.
             output_schema: Convenience JSON schema input. When provided, it is
                 injected into ``options.json_schema``.
             idx_column: Column name used as unique identifier.
@@ -1216,6 +1232,7 @@ class Annotator:
         annotated_batches = self._iter_and_annotate_batches(
             prepared_dataset=prepared_dataset,
             options=options,
+            gen_kwargs=gen_kwargs,
             task_prefix=task_prefix,
             validate_fn=validate_fn,
             postprocess_fn=postprocess_fn,
@@ -1320,6 +1337,7 @@ class Annotator:
         overwrite: bool = False,
         keep_columns: str | Iterable[str] | bool | None = None,
         options: ProviderRuntimeOptions | None = None,
+        gen_kwargs: dict[str, Any] | None = None,
         output_schema: str | dict[str, Any] | None = None,
         upload_every_n_samples: int | None = 10_000,
         max_samples_per_output_file: int = 1000,
@@ -1362,6 +1380,8 @@ class Annotator:
                 delete it manually or set ``force_data_preparation=True``.
             keep_columns: Columns to keep in the final dataset.
             options: Runtime options passed to the client.
+            gen_kwargs: Extra request parameters merged over ``options``,
+                for anything the options dataclass does not name.
             output_schema: Optional JSON schema for structured output.
             upload_every_n_samples: Upload checkpoint cadence.
             max_samples_per_output_file: Maximum samples per output file.
@@ -1420,6 +1440,7 @@ class Annotator:
             overwrite=overwrite,
             keep_columns=keep_columns,
             options=options,
+            gen_kwargs=gen_kwargs,
             output_schema=output_schema,
             idx_column=idx_column,
             upload_every_n_samples=upload_every_n_samples,
@@ -1443,6 +1464,7 @@ class Annotator:
         force_data_preparation: bool = False,
         overwrite: bool = False,
         options: ProviderRuntimeOptions | None = None,
+        gen_kwargs: dict[str, Any] | None = None,
         max_num_samples: int | None = None,
         output_schema: str | dict[str, Any] | None = None,
         idx_column: str = "idx",
@@ -1467,6 +1489,8 @@ class Annotator:
                 (which is preserved to allow resuming). If you want to overwrite the prepared data cache,
                 delete it manually or set ``force_data_preparation=True``.
             options: Runtime options passed to the client.
+            gen_kwargs: Extra request parameters merged over ``options``,
+                for anything the options dataclass does not name.
             max_num_samples: Number of times to repeat a single prompt.
             output_schema: Optional JSON schema for structured output.
             idx_column: Column name used as the stable sample identifier.
@@ -1516,6 +1540,7 @@ class Annotator:
             hub_id=hub_id,
             overwrite=overwrite,
             options=options,
+            gen_kwargs=gen_kwargs,
             output_schema=output_schema,
             idx_column=idx_column,
             upload_every_n_samples=upload_every_n_samples,
@@ -2068,6 +2093,7 @@ class VLLMQueueAnnotator(Annotator):
         *,
         prepared_dataset: Dataset,
         options: ProviderRuntimeOptions | None,
+        gen_kwargs: dict[str, Any] | None = None,
         task_prefix: str = "",
         validate_fn: Callable | None = None,
         postprocess_fn: Callable | None = None,
@@ -2083,6 +2109,8 @@ class VLLMQueueAnnotator(Annotator):
         Args:
             prepared_dataset: The dataset still left to annotate.
             options: Runtime options passed to the clients.
+            gen_kwargs: Extra request parameters merged over ``options``,
+                for anything the options dataclass does not name.
             task_prefix: String prefix to use for internal column names.
             validate_fn: Optional custom validation function.
             postprocess_fn: Optional postprocessing function.
@@ -2099,6 +2127,7 @@ class VLLMQueueAnnotator(Annotator):
         batches = prepared_dataset.iter(self.batch_size)
         batch_kwargs: dict[str, Any] = {
             "options": options,
+            "gen_kwargs": gen_kwargs,
             "task_prefix": task_prefix,
             "validate_fn": validate_fn,
             "postprocess_fn": postprocess_fn,

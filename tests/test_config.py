@@ -8,6 +8,7 @@ import pytest
 
 from llm_annotator.config import (
     ClientConfig,
+    EngineConfig,
     PipelineConfig,
     StepConfig,
     load_config_file,
@@ -76,7 +77,7 @@ def test_overrides_take_precedence(tmp_path: Path) -> None:
     config = load_pipeline_config(
         path, overrides={"output_dir": "elsewhere", "overwrite": True}
     )
-    assert config.output_dir == Path("elsewhere")
+    assert config.output_dir == tmp_path / "elsewhere"
     assert config.overwrite is True
 
 
@@ -451,17 +452,18 @@ def test_dataset_needs_exactly_one_source() -> None:
         PipelineConfig.model_validate(minimal_config(dataset={}))
 
 
-def test_step_dir_is_numbered() -> None:
+def test_step_dir_is_numbered(tmp_path: Path) -> None:
     config = PipelineConfig.model_validate(
         minimal_config(
+            config_dir=tmp_path,
             steps=[
                 {"name": "first", "prompt": "x"},
                 {"name": "second", "prompt": "y"},
-            ]
+            ],
         )
     )
-    assert config.step_dir(0) == Path("outputs/test/01-first")
-    assert config.step_dir(1) == Path("outputs/test/02-second")
+    assert config.step_dir(0) == tmp_path / "outputs/test/01-first"
+    assert config.step_dir(1) == tmp_path / "outputs/test/02-second"
 
 
 # --- client merging ----------------------------------------------------------
@@ -671,7 +673,7 @@ def test_pool_block_defaults_and_round_trip() -> None:
     assert (
         ClientConfig(
             provider="vllm_online", model="m"
-        ).pool.gpus_per_vllm_server
+        ).engine.tensor_parallel_size
         == 1
     )
 
@@ -679,10 +681,23 @@ def test_pool_block_defaults_and_round_trip() -> None:
         {
             "provider": "vllm_online",
             "model": "m",
-            "pool": {"servers": 4, "gpus_per_vllm_server": 2},
+            "engine": {"tensor_parallel_size": 2},
+            "pool": {"servers": 4},
         }
     )
-    assert (sized.pool.servers, sized.pool.gpus_per_vllm_server) == (4, 2)
+    assert (sized.pool.servers, sized.engine.tensor_parallel_size) == (4, 2)
+
+
+def test_pool_gpus_per_vllm_server_points_at_engine() -> None:
+    """The old spelling names its replacement instead of "unknown key"."""
+    with pytest.raises(ValueError, match="engine.tensor_parallel_size"):
+        ClientConfig.model_validate(
+            {
+                "provider": "vllm_online",
+                "model": "m",
+                "pool": {"servers": 4, "gpus_per_vllm_server": 2},
+            }
+        )
 
 
 def test_pool_block_rejects_nonsense() -> None:
@@ -719,7 +734,8 @@ def test_describe_steps_reports_every_step() -> None:
                     "name": "write",
                     "prompt": "x",
                     "client": {
-                        "pool": {"servers": 4, "gpus_per_vllm_server": 2}
+                        "engine": {"tensor_parallel_size": 2},
+                        "pool": {"servers": 4},
                     },
                 },
                 {
@@ -839,3 +855,85 @@ def test_cache_key_ignores_options_but_tracks_init() -> None:
     assert base.cache_key() == same_model.cache_key()
     assert base.cache_key() != other_init.cache_key()
     assert base.cache_key() != other_model.cache_key()
+
+
+def test_engine_serve_args_render() -> None:
+    """Every value shape a `vllm serve` flag can take."""
+    engine = EngineConfig(
+        tensor_parallel_size=2,
+        max_model_len=8192,
+        gpu_memory_utilization=0.9,
+        enforce_eager=True,
+        enable_prefix_caching=False,
+        speculative_config={"model": "draft", "num_speculative_tokens": 4},
+        extra={"reasoning_parser": "qwen3"},
+    )
+    args = engine.as_serve_args()
+
+    assert args[:2] == ["--tensor-parallel-size", "2"]
+    assert "--max-model-len" in args and "8192" in args
+    # A true boolean is a bare flag, a false one its --no- form.
+    assert "--enforce-eager" in args
+    assert "--no-enable-prefix-caching" in args
+    # A mapping travels as one JSON argument, so it survives a value with a
+    # space in it -- which is what shell word-splitting used to destroy.
+    spec = args[args.index("--speculative-config") + 1]
+    assert json.loads(spec) == {"model": "draft", "num_speculative_tokens": 4}
+    # `extra` keys are kebab-cased like the named ones.
+    assert args[-2:] == ["--reasoning-parser", "qwen3"]
+
+
+def test_engine_drops_unset_fields() -> None:
+    """Unset fields defer to vLLM's own defaults instead of passing None."""
+    engine = EngineConfig()
+    assert engine.as_llm_kwargs() == {"tensor_parallel_size": 1}
+    assert engine.as_serve_args() == ["--tensor-parallel-size", "1"]
+
+
+def test_engine_kwargs_match_offline_client_signature() -> None:
+    """Every named engine field is a real VLLMOfflineClient parameter."""
+    import inspect
+
+    from llm_annotator.clients.vllm_offline_client import VLLMOfflineClient
+
+    accepted = set(inspect.signature(VLLMOfflineClient.__init__).parameters)
+    assert set(EngineConfig.model_fields) - {"extra"} <= accepted
+
+
+def test_engine_rejected_for_hosted_providers() -> None:
+    with pytest.raises(ValueError, match="no use for it"):
+        ClientConfig.model_validate(
+            {
+                "provider": "claude",
+                "model": "m",
+                "engine": {"max_model_len": 4096},
+            }
+        )
+
+
+def test_engine_settings_may_not_hide_in_init() -> None:
+    """`init` and `engine` must not both be able to set the same thing."""
+    with pytest.raises(ValueError, match="Move .* from 'init' to 'engine'"):
+        ClientConfig.model_validate(
+            {
+                "provider": "vllm_offline",
+                "model": "m",
+                "init": {"max_model_len": 4096},
+            }
+        )
+
+
+def test_cache_key_tracks_engine_but_not_gen_kwargs() -> None:
+    base = ClientConfig(provider="vllm_offline", model="m")
+    other_engine = ClientConfig(
+        provider="vllm_offline",
+        model="m",
+        engine=EngineConfig(max_model_len=4096),
+    )
+    other_gen = ClientConfig(
+        provider="vllm_offline", model="m", gen_kwargs={"min_p": 0.1}
+    )
+
+    # A different engine needs a different engine; gen_kwargs are per request.
+    assert base.cache_key() != other_engine.cache_key()
+    assert base.cache_key() == other_gen.cache_key()

@@ -658,7 +658,15 @@ def _write_mixed_config(tmp_path: Path) -> Path:
                         "client": {
                             "provider": "vllm_online",
                             "model": "Qwen/Qwen3-8B",
-                            "pool": {"servers": 4, "gpus_per_vllm_server": 2},
+                            "engine": {
+                                "tensor_parallel_size": 2,
+                                "max_model_len": 8192,
+                                "speculative_config": {
+                                    "model": "draft",
+                                    "num_speculative_tokens": 4,
+                                },
+                            },
+                            "pool": {"servers": 4},
                         },
                     },
                     {
@@ -691,6 +699,42 @@ def test_cli_describe_steps_emits_json_lines(
     assert [r["kind"] for r in rows] == ["vllm_pool", "api"]
     assert rows[0]["model"] == "Qwen/Qwen3-8B"
     assert (rows[0]["servers"], rows[0]["gpus_per_vllm_server"]) == (4, 2)
+
+
+def test_cli_serve_args_prints_one_argument_per_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The output is pasteable after `vllm serve`, spaces and all."""
+    main([str(_write_mixed_config(tmp_path)), "--serve-args", "write"])
+
+    args = capsys.readouterr().out.splitlines()
+    assert args[:3] == [
+        "Qwen/Qwen3-8B",
+        "--served-model-name",
+        "Qwen/Qwen3-8B",
+    ]
+    assert args[args.index("--tensor-parallel-size") + 1] == "2"
+    assert args[args.index("--max-model-len") + 1] == "8192"
+
+    # A JSON value stays one argument even though it contains no spaces here;
+    # what matters is that it is not split across lines.
+    spec = args[args.index("--speculative-config") + 1]
+    assert json.loads(spec)["num_speculative_tokens"] == 4
+
+    # --host and --port are the node's business, not the config's.
+    assert "--host" not in args and "--port" not in args
+
+
+def test_cli_serve_args_rejects_steps_with_nothing_to_serve(
+    tmp_path: Path,
+) -> None:
+    config_path = str(_write_mixed_config(tmp_path))
+
+    with pytest.raises(ValueError, match="hosted provider"):
+        main([config_path, "--serve-args", "judge"])
+
+    with pytest.raises(ValueError, match="no step 'nope'"):
+        main([config_path, "--serve-args", "nope"])
 
 
 def test_cli_describe_steps_annotates_nothing(

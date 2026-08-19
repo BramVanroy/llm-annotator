@@ -238,13 +238,104 @@ class DatasetConfig(_StrictBase):
         return self
 
 
-class PoolConfig(_StrictBase):
-    """Shape of the vLLM server pool a step wants to run on.
+class EngineConfig(_StrictBase):
+    """How one vLLM engine is built, for either vLLM provider.
 
-    Neither number can be derived from anything else, and both have to vary per
-    step -- a 70B model needs more GPUs per server than an 8B one. This
-    describes the *pool*, not any particular scheduler: the same two numbers
-    describe a four-GPU workstation and a SLURM allocation.
+    The same field names mean the same thing whether the model is loaded in
+    process or served by ``vllm serve``; only the transport differs. A
+    ``vllm_offline`` step turns this block into ``vllm.LLM`` keyword arguments,
+    and a ``vllm_online`` step whose servers still have to be started turns it
+    into ``vllm serve`` flags, which is what
+    ``llm-annotate --serve-args <step>`` prints for a job submitter.
+
+    That shared spelling is the point: it is why a step states its GPU count
+    once, in ``tensor_parallel_size``, instead of once for the allocation and
+    once for vLLM.
+
+    Attributes:
+        tensor_parallel_size: GPUs one engine shards its weights over. For a
+            served step this is also how many GPUs its job asks for.
+        max_model_len: Maximum total sequence length, prompt plus completion.
+        gpu_memory_utilization: Fraction of each GPU's memory vLLM may claim.
+        max_num_seqs: Sequences the engine runs concurrently.
+        max_num_batched_tokens: Token budget of a single forward pass.
+        enforce_eager: Disable CUDA graphs and run eagerly.
+        quantization: Quantization method, e.g. ``"fp8"`` or ``"awq"``.
+        enable_prefix_caching: Reuse the KV cache of a shared prompt prefix.
+        enable_chunked_prefill: Split long prefills to bound peak memory.
+        speculative_config: vLLM speculative-decoding configuration.
+        extra: Any other vLLM engine argument, by its Python name. Rendered as
+            ``--kebab-case`` for ``vllm serve`` and passed verbatim to
+            ``vllm.LLM``, so one spelling covers both.
+    """
+
+    tensor_parallel_size: int = Field(default=1, ge=1)
+    max_model_len: int | None = None
+    gpu_memory_utilization: float | None = None
+    max_num_seqs: int | None = None
+    max_num_batched_tokens: int | None = None
+    enforce_eager: bool | None = None
+    quantization: str | None = None
+    enable_prefix_caching: bool | None = None
+    enable_chunked_prefill: bool | None = None
+    speculative_config: dict[str, Any] | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+    def as_llm_kwargs(self) -> dict[str, Any]:
+        """Build the keyword arguments for an in-process ``vllm.LLM``.
+
+        Unset fields are dropped rather than passed as ``None``, so vLLM's own
+        defaults apply to anything the config does not mention.
+
+        Returns:
+            Keyword arguments, with ``extra`` merged in.
+
+        Examples:
+            >>> EngineConfig(max_model_len=4096).as_llm_kwargs()
+            {'tensor_parallel_size': 1, 'max_model_len': 4096}
+        """
+        kwargs = self.model_dump(exclude={"extra"}, exclude_none=True)
+        kwargs.update(self.extra)
+        return kwargs
+
+    def as_serve_args(self) -> list[str]:
+        """Build the ``vllm serve`` flags for one server.
+
+        Returned as an argument list rather than a string so a value may
+        contain spaces; ``--speculative-config`` takes a JSON object, and
+        shell word-splitting cannot carry one.
+
+        Returns:
+            Flags for ``vllm serve``, without the model or ``--host``/``--port``.
+
+        Examples:
+            >>> EngineConfig(max_model_len=4096).as_serve_args()
+            ['--tensor-parallel-size', '1', '--max-model-len', '4096']
+            >>> EngineConfig(enforce_eager=True).as_serve_args()
+            ['--tensor-parallel-size', '1', '--enforce-eager']
+        """
+        args: list[str] = []
+        for name, value in self.as_llm_kwargs().items():
+            flag = f"--{name.replace('_', '-')}"
+            if isinstance(value, bool):
+                # vLLM's argparse spells a disabled boolean `--no-<flag>`.
+                args.append(
+                    flag if value else f"--no-{name.replace('_', '-')}"
+                )
+            elif isinstance(value, (dict, list)):
+                args.extend([flag, json.dumps(value, separators=(",", ":"))])
+            else:
+                args.extend([flag, str(value)])
+        return args
+
+
+class PoolConfig(_StrictBase):
+    """How many vLLM servers a step wants started for it.
+
+    How big each one is lives in
+    [`EngineConfig`][llm_annotator.config.EngineConfig] instead, because that
+    is a property of the engine rather than of the pool, and a ``vllm_offline``
+    step needs it without wanting a pool at all.
 
     The library itself never acts on this block; it is reported by
     ``llm-annotate --describe-steps`` so a job submitter can size the servers it
@@ -253,12 +344,21 @@ class PoolConfig(_StrictBase):
 
     Attributes:
         servers: Number of vLLM server processes to run for this step.
-        gpus_per_vllm_server: GPUs handed to each vLLM server, i.e. its
-            tensor-parallel size.
     """
 
     servers: int = Field(default=1, ge=1)
-    gpus_per_vllm_server: int = Field(default=1, ge=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _moved_gpus_per_server(cls, data: Any) -> Any:
+        """Point the old ``gpus_per_vllm_server`` key at its new home."""
+        if isinstance(data, dict) and "gpus_per_vllm_server" in data:
+            raise ValueError(
+                "'pool.gpus_per_vllm_server' moved to"
+                " 'engine.tensor_parallel_size', which both vLLM providers"
+                " read, so a step states its GPU count once."
+            )
+        return data
 
 
 class ClientConfig(_StrictBase):
@@ -291,9 +391,12 @@ class ClientConfig(_StrictBase):
         queue_size: Batches kept in flight across the pool.
         wait_for_servers: Seconds to wait for every server's ``/health``
             before starting. ``0`` disables the check.
-        pool: How many servers this step wants and how big each one is. Only
-            meaningful for ``vllm_online`` steps whose servers are started for
-            them.
+        engine: How this step's vLLM engine is built. Applies to both vLLM
+            providers; rejected for the hosted ones.
+        pool: How many servers this step wants. Only meaningful for
+            ``vllm_online`` steps whose servers are started for them.
+        gen_kwargs: Extra request parameters merged over ``options`` on every
+            generation call, for anything the options dataclass does not name.
     """
 
     provider: ProviderName = "vllm_offline"
@@ -307,7 +410,9 @@ class ClientConfig(_StrictBase):
     url_glob: str | None = None
     queue_size: int | None = None
     wait_for_servers: float = 60.0
+    engine: EngineConfig = Field(default_factory=EngineConfig)
     pool: PoolConfig = Field(default_factory=PoolConfig)
+    gen_kwargs: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("provider", mode="before")
     @classmethod
@@ -345,6 +450,28 @@ class ClientConfig(_StrictBase):
         if self.model is None and self.provider != "vllm_online":
             raise ValueError(
                 f"Provider '{self.provider}' needs an explicit 'model'."
+            )
+
+        engine_fields = set(EngineConfig.model_fields)
+        if (
+            not self.provider.startswith("vllm")
+            and self.engine != EngineConfig()
+        ):
+            raise ValueError(
+                f"'engine' configures a vLLM engine, so provider"
+                f" '{self.provider}' has no use for it. Hosted providers are"
+                " configured with 'init' and 'options'."
+            )
+
+        # `init` and `engine` would otherwise both be able to set
+        # `max_model_len` and friends, which is the duplication `engine`
+        # exists to remove.
+        misplaced = sorted(engine_fields & set(self.init))
+        if misplaced:
+            raise ValueError(
+                f"Move {misplaced} from 'init' to 'engine'. Engine settings"
+                " live there so that both vLLM providers spell them the same"
+                " way."
             )
 
         valid = {
@@ -413,8 +540,9 @@ class ClientConfig(_StrictBase):
 
         Two steps whose keys match can share one live client, which matters
         because loading a vLLM model takes minutes. Only constructor-level
-        settings appear here: ``options`` are per-request and are passed to
-        ``batch_generate``, so they never require a rebuild.
+        settings appear here: ``options`` and ``gen_kwargs`` are per-request
+        and are passed to ``batch_generate``, so they never require a rebuild.
+        ``engine`` does, because it decides how the engine itself is built.
 
         Returns:
             A stable string key.
@@ -424,6 +552,7 @@ class ClientConfig(_StrictBase):
                 "provider": self.provider,
                 "model": self.model,
                 "init": self.init,
+                "engine": self.engine.model_dump(),
                 "base_urls": self.base_urls,
                 "hosts_file": str(self.hosts_file)
                 if self.hosts_file
@@ -515,6 +644,19 @@ class ClientConfig(_StrictBase):
         kwargs = dict(self.init)
         if self.model is not None:
             kwargs["model"] = self.model
+        if self.provider == "vllm_offline":
+            engine_kwargs = self.engine.as_llm_kwargs()
+            # `extra` names arguments this class does not, so it can only
+            # travel as the client's own passthrough.
+            kwargs.update(
+                {
+                    k: v
+                    for k, v in engine_kwargs.items()
+                    if k not in self.engine.extra
+                }
+            )
+            if self.engine.extra:
+                kwargs["extra_vllm_kwargs"] = dict(self.engine.extra)
 
         if not self.is_pool():
             return _client_class(self.provider)(**kwargs)
@@ -794,7 +936,9 @@ class PipelineConfig(_StrictBase):
     finished, which makes a long pipeline restartable.
 
     Attributes:
-        output_dir: Root directory for all step artifacts and the final result.
+        output_dir: Root directory for all step artifacts and the final
+            result. A relative value resolves against ``config_dir``, same as
+            every other path in the config.
         steps: The steps to run, in order. At least one is required.
         dataset: Input dataset for the first step. Not needed when the first
             step is a ``generate`` step.
@@ -834,6 +978,12 @@ class PipelineConfig(_StrictBase):
     verbose: bool = True
     log_level: str = "INFO"
     config_dir: Path = Field(default_factory=Path.cwd)
+
+    @model_validator(mode="after")
+    def _resolve_output_dir(self) -> "PipelineConfig":
+        """Resolve a relative ``output_dir`` against ``config_dir``."""
+        self.output_dir = _resolve_path(self.output_dir, self.config_dir)
+        return self
 
     @model_validator(mode="after")
     def _check_pipeline(self) -> "PipelineConfig":
@@ -980,7 +1130,7 @@ class PipelineConfig(_StrictBase):
                     "provider": client.provider,
                     "model": client.model,
                     "servers": client.pool.servers,
-                    "gpus_per_vllm_server": client.pool.gpus_per_vllm_server,
+                    "gpus_per_vllm_server": client.engine.tensor_parallel_size,
                     "step_dir": str(self.step_dir(index)),
                 }
             )
@@ -1152,6 +1302,7 @@ def _read_text(path: str | Path, root: Path) -> str:
 __all__ = [
     "ClientConfig",
     "DatasetConfig",
+    "EngineConfig",
     "PipelineConfig",
     "PoolConfig",
     "StepConfig",

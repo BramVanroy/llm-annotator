@@ -187,3 +187,61 @@ def test_vllm_online_batch_generate_http_error_returns_error_responses(
     )
     assert len(responses) == 2
     assert all(r.error is not None for r in responses)
+
+
+def test_vllm_online_generate_nests_vllm_extensions_in_extra_body(
+    fake_openai_module: dict[str, Any],
+) -> None:
+    """The typed SDK signature only accepts OpenAI's own parameters.
+
+    vLLM's extensions have to travel inside ``extra_body`` or ``create()``
+    rejects them, which is why this client does not inherit OpenAI's
+    ``generate``.
+    """
+    client = VLLMOnlineClient(model="m")
+    client.generate(
+        messages=[{"role": "user", "content": "hi"}],
+        options=VLLMOnlineRuntimeOptions(
+            temperature=0.0,
+            top_k=4,
+            chat_template_kwargs={"enable_thinking": False},
+            extra_body={"min_p": 0.1},
+        ),
+    )
+
+    kwargs = cast(dict[str, Any], fake_openai_module["last_create_kwargs"])
+    assert kwargs["temperature"] == 0.0
+    extra_body = kwargs["extra_body"]
+    assert extra_body["top_k"] == 4
+    assert extra_body["chat_template_kwargs"] == {"enable_thinking": False}
+    assert extra_body["min_p"] == 0.1
+    # Nothing vLLM-only may leak into the typed keyword arguments.
+    assert not {"top_k", "chat_template_kwargs", "min_p"} & set(kwargs)
+
+
+def test_vllm_online_extra_body_and_gen_kwargs_reach_the_request(
+    fake_openai_module: dict[str, Any],
+) -> None:
+    """Both escape hatches land in the body the server actually receives."""
+    fake_openai_module["post_json"] = {
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": "ok"},
+            }
+        ]
+    }
+    client = VLLMOnlineClient(model="m")
+    client.batch_generate(
+        messages=[[{"role": "user", "content": "hi"}]],
+        options=VLLMOnlineRuntimeOptions(
+            temperature=0.7, extra_body={"min_p": 0.1}
+        ),
+        gen_kwargs={"temperature": 0.0, "priority": 1},
+    )
+
+    payload = cast(dict[str, Any], fake_openai_module["last_post_json"])
+    assert payload["min_p"] == 0.1
+    assert payload["priority"] == 1
+    # gen_kwargs is documented as taking precedence over options.
+    assert payload["temperature"] == 0.0

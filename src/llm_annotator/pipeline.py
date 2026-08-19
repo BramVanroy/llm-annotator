@@ -257,6 +257,7 @@ def _run_step(
         # reference what earlier steps produced.
         "keep_columns": True,
         "options": options,
+        "gen_kwargs": client_config.gen_kwargs or None,
         "output_schema": output_schema,
         "system_message": step.resolved_system_prompt(root),
         "sort_by_length": step.sort_by_length,
@@ -544,6 +545,65 @@ def _hosts_file_override(
     return {name: {"hosts_file": resolved} for name in targets}
 
 
+def _serve_args(config: PipelineConfig, step_name: str) -> list[str]:
+    """Build the ``vllm serve`` argument list for one step.
+
+    This is what lets a server job read its own serving profile out of the
+    config instead of being handed one through the environment: a job submitter
+    cannot carry a JSON value like ``--speculative-config`` through
+    ``sbatch --export``, and a pipeline whose steps use different models needs
+    a different profile per step anyway.
+
+    ``--host`` and ``--port`` are deliberately absent. The port is probed on the
+    node, because two servers of the same pool can land on one machine.
+
+    Args:
+        config: The loaded pipeline configuration.
+        step_name: Name of the step whose servers are being started.
+
+    Returns:
+        Arguments to pass to ``vllm serve``, starting with the model.
+
+    Raises:
+        ValueError: If the config has no such step, or if that step needs no
+            servers started for it.
+    """
+    for step in config.steps:
+        if step.name == step_name:
+            break
+    else:
+        raise ValueError(
+            f"Config defines no step '{step_name}'. It has"
+            f" {[s.name for s in config.steps]}."
+        )
+
+    client = config.step_client(step)
+    kind = client.kind()
+    if kind != "vllm_pool":
+        detail = {
+            "api": "runs on a hosted provider",
+            "vllm_offline": "loads the model in-process",
+            "vllm_online": "points at servers that already exist",
+        }[kind]
+        raise ValueError(
+            f"Step '{step_name}' {detail}, so there is no vLLM server to start"
+            " for it."
+        )
+    if client.model is None:
+        raise ValueError(
+            f"Step '{step_name}' names no 'model', so there is nothing to"
+            " serve. A client can ask a running server what it serves, but"
+            " nothing can ask a server that does not exist yet."
+        )
+
+    return [
+        client.model,
+        "--served-model-name",
+        client.model,
+        *client.engine.as_serve_args(),
+    ]
+
+
 def main(args: list[str] | None = None) -> None:
     """Run an annotation pipeline described by a JSON or YAML config file.
 
@@ -566,7 +626,8 @@ def main(args: list[str] | None = None) -> None:
     parser.add_argument(
         "--output-dir",
         default=None,
-        help="Override the config's 'output_dir'.",
+        help="Override the config's 'output_dir'. Resolved against the"
+        " current directory, not the config file.",
     )
     parser.add_argument(
         "--hub-id",
@@ -600,6 +661,14 @@ def main(args: list[str] | None = None) -> None:
         " whose addresses are only known at run time.",
     )
     parser.add_argument(
+        "--serve-args",
+        metavar="STEP",
+        default=None,
+        help="Print the 'vllm serve' arguments for one step's servers, one per"
+        " line, and exit. This is how a job submitter starts servers whose"
+        " profile lives in the config.",
+    )
+    parser.add_argument(
         "--describe-steps",
         action="store_true",
         help="Print one JSON object per step describing what it needs to run"
@@ -614,10 +683,15 @@ def main(args: list[str] | None = None) -> None:
         else None
     )
 
+    output_dir_override = (
+        Path(parsed.output_dir).expanduser().resolve()
+        if parsed.output_dir is not None
+        else None
+    )
     overrides = {
         key: value
         for key, value in (
-            ("output_dir", parsed.output_dir),
+            ("output_dir", output_dir_override),
             ("hub_id", parsed.hub_id),
             ("log_level", parsed.log_level),
             ("overwrite", parsed.overwrite),
@@ -637,6 +711,11 @@ def main(args: list[str] | None = None) -> None:
     if parsed.describe_steps:
         for described in config.describe_steps():
             print(json.dumps(described))
+        return
+
+    if parsed.serve_args:
+        for arg in _serve_args(config, parsed.serve_args):
+            print(arg)
         return
 
     run_pipeline(config, selected=selected)

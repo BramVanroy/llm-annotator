@@ -141,7 +141,7 @@ client:
   model: Qwen/Qwen3-8B
   batch_size: 256
   num_proc: 8
-  init:              # forwarded to the client constructor
+  engine:            # how the vLLM engine itself is built
     max_model_len: 8192
   options:           # fields of the provider's runtime-options dataclass
     temperature: 0.7
@@ -174,15 +174,59 @@ steps:
 
 `provider` accepts exactly `openai`, `claude`, `vllm_online` (a running vLLM
 server) or `vllm_offline` (in-process vLLM) — no other spellings are
-recognized. `init` and `options` are passed
-straight through to the matching client constructor and `*RuntimeOptions`
-dataclass, so every provider-specific setting is reachable; unknown option names
-are rejected at load time with the valid names listed. See
-[Provider setup](provider-info.md) for authentication.
+recognized. See [Provider setup](provider-info.md) for authentication.
 
-Steps whose provider, model and `init` all match share one live client, so a
-pipeline that uses the same local model twice loads it only once. Changing only
-`options` never triggers a reload, because options are per request.
+### Where a setting goes
+
+A `client` block has five groups, split by *when* a setting is used rather than
+by what it configures. That is the rule to remember: a setting belongs to
+whichever moment it takes effect.
+
+| Group | Key | Used when | Providers |
+| --- | --- | --- | --- |
+| Execution | `batch_size`, `num_proc`, `queue_size`, `wait_for_servers` | the annotator drives the run | all |
+| Connection | `init` | the client object is constructed | all |
+| Engine | `engine` | the vLLM engine is built | `vllm_offline`, `vllm_online` |
+| Pool | `pool` | a job submitter starts servers | `vllm_online` |
+| Request | `options`, `gen_kwargs` | every generation call | all |
+
+```yaml
+client:
+  provider: vllm_offline
+  model: Qwen/Qwen3-8B
+  batch_size: 256          # execution
+  num_proc: 8
+  init:                    # connection: the client constructor
+    on_error: warn
+  engine:                  # engine: how vLLM itself is built
+    tensor_parallel_size: 2
+    max_model_len: 8192
+  options:                 # request: sent with every prompt
+    temperature: 0.7
+    max_completion_tokens: 1024
+```
+
+`init` and `options` are passed straight through to the matching client
+constructor and `*RuntimeOptions` dataclass, so every provider-specific setting
+is reachable; unknown option names are rejected at load time with the valid
+names listed. When a dataclass does not name what you need, `options.extra_body`
+(vLLM) and `gen_kwargs` (any provider) are merged into the request as written.
+
+The groups do not overlap, and the config says so rather than letting a value
+sit in two places: an engine setting written under `init` is rejected at load
+time, and `engine` on a hosted provider is too.
+
+`engine` is the same block for both vLLM providers — same field names, same
+meaning. A `vllm_offline` step turns it into `vllm.LLM(...)` keyword arguments;
+a `vllm_online` step whose servers still have to be started turns it into
+`vllm serve` flags, which `llm-annotate <config> --serve-args <step>` prints for
+a job submitter. So moving a step between the two changes only `provider`, and a
+step states its GPU count once, in `engine.tensor_parallel_size`.
+
+Steps whose provider, model, `init` and `engine` all match share one live
+client, so a pipeline that uses the same local model twice loads it only once.
+Changing only `options` never triggers a reload, because options are per
+request.
 
 One exception to the merging above: a step that names a *different* `provider`
 than the top-level block inherits no `options` from it at all. They name fields
@@ -229,17 +273,24 @@ client:
 ```
 
 When the servers do not exist yet and something has to start them, say how many
-you want and how big each should be instead. This block only describes the pool;
-the library never acts on it, and a local run ignores it entirely:
+you want in `pool` and what each one is in `engine`. Neither block is acted on
+by the library itself; both are reported to a job submitter, and a local run
+ignores them entirely:
 
 ```yaml
 client:
   provider: vllm_online
   model: Qwen/Qwen3-8B
+  engine:
+    tensor_parallel_size: 2   # GPUs per server
+    max_model_len: 8192
+    gpu_memory_utilization: 0.90
   pool:
-    servers: 4
-    gpus_per_vllm_server: 2   # tensor-parallel size
+    servers: 4                # four such servers
 ```
+
+Because the profile is per step, one pipeline can serve a different model with
+different serving flags at each step.
 
 ## Running one step at a time
 
@@ -271,6 +322,29 @@ $ llm-annotate cfg.yaml --describe-steps
 `kind` says what the step needs to run: `vllm_pool` (servers must be started for
 it), `vllm_online` (they already exist), `vllm_offline` (loads the model
 in-process) or `api` (a hosted provider, no accelerator at all).
+
+`--serve-args` is the other half: it prints the `vllm serve` argument list for
+one step, one argument per line, so a server job reads its own serving profile
+out of the config instead of being handed one through the environment.
+
+```bash
+llm-annotate cfg.yaml --serve-args write-qa
+```
+
+```
+Qwen/Qwen3-8B
+--served-model-name
+Qwen/Qwen3-8B
+--tensor-parallel-size
+2
+--max-model-len
+8192
+```
+
+One argument per line is what keeps a value containing spaces intact —
+`--speculative-config` takes a JSON object. `--host` and `--port` are absent by
+design: the port has to be probed on the node, because two servers of one pool
+can land on the same machine.
 
 `--hosts-file` completes the picture for a scheduler: it attaches a file of
 server URLs to the selected step that runs on vLLM, and to that step only, so a
