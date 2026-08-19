@@ -30,6 +30,40 @@ uv add "llm-annotator[openai]"
 uv add "llm-annotator[anthropic]"
 ```
 
+`vllm-kernels` pulls prebuilt FlashInfer wheels that are not on PyPI; this
+repo's `pyproject.toml` points at FlashInfer's own index only for its own
+`uv sync`, and that routing is not published with the package. If you are
+adding `llm-annotator[vllm,vllm-kernels]` from PyPI into another project,
+you need to point your own installer at those indexes too:
+
+```toml
+# uv: copy these into your project's pyproject.toml
+[[tool.uv.index]]
+name = "flashinfer-cubin"
+url = "https://flashinfer.ai/whl/"
+explicit = true
+
+[[tool.uv.index]]
+name = "flashinfer-jit-cache"
+url = "https://flashinfer.ai/whl/cu130/"
+explicit = true
+
+[tool.uv.sources]
+flashinfer-cubin = { index = "flashinfer-cubin" }
+flashinfer-jit-cache = { index = "flashinfer-jit-cache" }
+```
+
+```bash
+# pip: install the kernels explicitly
+pip install "llm-annotator[vllm]" \
+    flashinfer-cubin==0.6.16.post3 flashinfer-jit-cache==0.6.16.post3 \
+    --extra-index-url https://flashinfer.ai/whl/ \
+    --extra-index-url https://flashinfer.ai/whl/cu130/
+```
+
+Without one of the above, `vllm-kernels` will fail to resolve and vLLM
+falls back to JIT-compiling FlashInfer at startup (needs `nvcc`).
+
 ## Environment variables
 
 Set only the variables you need for the provider you use:
