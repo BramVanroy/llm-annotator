@@ -41,13 +41,6 @@ vllm = [
 # Prebuilt FlashInfer kernels, to be installed next to the "vllm" extra on
 # machines that actually serve models:
 #   uv sync --extra vllm --extra vllm-kernels
-# Without them vLLM JIT-compiles those kernels the first time it serves a
-# model, which needs nvcc (gone after `module purge` on a cluster) and lets
-# several servers sharing one home directory race each other in
-# ~/.cache/flashinfer until one dies loading a half-written .so. They are kept
-# out of the "vllm" extra because together they weigh ~2.5 GB, which the dev
-# group and CI have no use for. Both versions must match the flashinfer-python
-# that vllm pins; see https://docs.flashinfer.ai/installation.html
 vllm-kernels = [
     "flashinfer-cubin==0.6.16.post3",
     "flashinfer-jit-cache==0.6.16.post3",
