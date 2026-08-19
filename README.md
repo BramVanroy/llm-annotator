@@ -26,8 +26,8 @@ Key capabilities:
   template application and sorting from model inference, enabling SLURM and
   cluster restart workflows.
 - **Multi-server vLLM**:  `VLLMQueueAnnotator` runs one workload over a pool of
-  vLLM servers (e.g. one per GPU of a multi-node allocation); see `slurm/` for
-  ready-made job scripts.
+  vLLM servers (e.g. one per GPU of a multi-node allocation); see
+  `examples/vllm-server-pool/` for a config-driven and a Python-API example.
 - Resumable processing with JSONL checkpoints.
 - Annotation of existing datasets and generation from scratch.
 - Structured outputs via JSON schema.

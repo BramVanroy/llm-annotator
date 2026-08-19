@@ -212,8 +212,8 @@ steps:
 
 Point the `vllm_online` provider at several servers and the pipeline uses a
 [`VLLMQueueAnnotator`][llm_annotator.annotator.VLLMQueueAnnotator] instead of a
-single client. Three ways to say where the servers are, matching how the
-`slurm/` job scripts publish them:
+single client. Three ways to say where the servers are, matching how a job
+submitter publishes them:
 
 ```yaml
 client:
@@ -280,9 +280,9 @@ hosted step in the same pipeline is unaffected.
 llm-annotate cfg.yaml --steps write-qa --hosts-file logs/pool_123/hosts.txt
 ```
 
-`slurm/submit_pipeline.sh` is built entirely out of these three flags; see
-[the SLURM notes](https://github.com/BramVanroy/llm-annotator/tree/main/slurm)
-for the job scripts.
+A cluster job submitter is built entirely out of these flags: it reads
+`--describe-steps` to plan the allocation, `--serve-args` to start each step's
+servers, and attaches `--hosts-file` once they are up.
 
 ## Resuming
 

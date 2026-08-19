@@ -8,8 +8,7 @@ command.
 This is the Python-API version, useful when the annotation is part of a larger
 program. For a run described entirely by a config file -- including multi-step
 pipelines where each step has its own model -- see ``pipeline.yaml`` in this
-directory and ``slurm/submit_pipeline.sh``, which reach the same annotator
-without any Python.
+directory, which reaches the same annotator without any Python.
 """
 
 from __future__ import annotations
@@ -65,7 +64,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         "--hosts-file",
         type=Path,
         help="File with one vLLM server base URL per line, as collected from"
-        " the pool directory by slurm/vllm_annotate.sh.",
+        " the pool directory by a job submitter.",
     )
     parser.add_argument(
         "--model",

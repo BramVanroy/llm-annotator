@@ -195,10 +195,11 @@ Because results are written per sample and keyed by `idx`, re-running the exact
 same call after a crash, a timeout or a preemption picks up where the previous
 attempt stopped.
 
-On a cluster you do not have to write this at all: `slurm/` holds ready-made job
-scripts that take a [config file](pipeline.md) and submit one job chain per step,
-starting the right servers for each step's own model and releasing them when that
-step is done. `examples/vllm-server-pool/` has both forms side by side.
+A cluster job submitter needs nothing beyond the [config file](pipeline.md) and
+three CLI flags to drive this: `--describe-steps` to plan the allocation,
+`--serve-args` to start each step's servers with its own model, and
+`--hosts-file` to hand them back in. `examples/vllm-server-pool/` has both the
+Python-API and config-driven forms side by side.
 
 ## Why use it
 

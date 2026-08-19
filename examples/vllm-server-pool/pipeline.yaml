@@ -2,17 +2,13 @@
 # a pool of vLLM servers writes a question-answer pair about each text, then
 # Claude rates the pair that was written.
 #
-# On a cluster, submit it with one job chain per step:
+# On a cluster, a job submitter drives it with one job chain per step: it asks
+# this file what each step needs (`llm-annotate <config> --describe-steps`),
+# starts a GPU server array for step 1 and a CPU-only job for step 2, and
+# passes each step's own servers in with --hosts-file. Nothing about the
+# allocation is repeated here or there.
 #
-#   ANNOTATE_CONFIG=examples/vllm-server-pool/pipeline.yaml \
-#     ./slurm/submit_pipeline.sh
-#
-# submit_pipeline.sh asks this file what each step needs
-# (`llm-annotate <config> --describe-steps`), starts a GPU server array for
-# step 1 and a CPU-only job for step 2, and passes each step's own servers in
-# with --hosts-file. Nothing about the allocation is repeated here or there.
-#
-# The same file runs end to end on one machine, with no SLURM involved:
+# The same file runs end to end on one machine, with no scheduler involved:
 #
 #   llm-annotate examples/vllm-server-pool/pipeline.yaml
 #
@@ -36,8 +32,8 @@ steps:
   #
   # Dropping `model` is only an option when the servers already exist: a
   # `vllm_online` client with no model asks the server which one it is serving.
-  # A submitter that has to *start* the servers has nothing to ask, so
-  # slurm/submit_pipeline.sh refuses such a step before allocating any GPU.
+  # A submitter that has to *start* the servers has nothing to ask, so it
+  # should refuse such a step before allocating any GPU.
   - name: write-qa
     prompt: |
       Read the following text and write one question that it answers, together
