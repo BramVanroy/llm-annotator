@@ -1459,8 +1459,8 @@ dependencies = [
     { name = "tabulate" },
     { name = "torch" },
     { name = "tqdm" },
-    { name = "triton", version = "3.6.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14' and sys_platform == 'darwin'" },
-    { name = "triton", version = "3.7.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14' or sys_platform != 'darwin'" },
+    { name = "triton", version = "3.6.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13' and sys_platform == 'darwin'" },
+    { name = "triton", version = "3.7.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13' or sys_platform != 'darwin'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/51/4f/6977a31451c3f7aa1deaa76506d6cdeb74ef418ad8bcba2e98f7510b26ec/humming_kernels-0.1.10.tar.gz", hash = "sha256:da3e46fb9fc9eba2a9327c2e8135ead68e390c955acd7449f97ee7c71666c8b1", size = 220110, upload-time = "2026-07-02T10:22:57.687Z" }
 wheels = [
@@ -1818,10 +1818,6 @@ vllm = [
     { name = "transformers" },
     { name = "vllm" },
 ]
-vllm-kernels = [
-    { name = "flashinfer-cubin" },
-    { name = "flashinfer-jit-cache" },
-]
 
 [package.dev-dependencies]
 dev = [
@@ -1845,21 +1841,23 @@ docs = [
     { name = "mkdocs-material" },
     { name = "mkdocstrings", extra = ["python"] },
 ]
+vllm-kernels = [
+    { name = "flashinfer-cubin" },
+    { name = "flashinfer-jit-cache" },
+]
 
 [package.metadata]
 requires-dist = [
     { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.102.0,<1" },
     { name = "colorama", specifier = ">=0.4.6,<1" },
     { name = "datasets", specifier = ">=5,<6" },
-    { name = "flashinfer-cubin", marker = "extra == 'vllm-kernels'", specifier = "==0.6.16.post3", index = "https://flashinfer.ai/whl/" },
-    { name = "flashinfer-jit-cache", marker = "extra == 'vllm-kernels'", specifier = "==0.6.16.post3", index = "https://flashinfer.ai/whl/cu130/" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=2.36.0,<3" },
     { name = "pydantic", specifier = ">=2.13.4,<3" },
     { name = "pyyaml", specifier = ">=6,<7" },
-    { name = "transformers", marker = "extra == 'vllm'", specifier = ">=5.11.0" },
+    { name = "transformers", marker = "extra == 'vllm'", specifier = ">=5.11.0,<5.15" },
     { name = "vllm", marker = "extra == 'vllm'", specifier = "==0.27.1" },
 ]
-provides-extras = ["anthropic", "openai", "vllm", "vllm-kernels"]
+provides-extras = ["anthropic", "openai", "vllm"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1882,6 +1880,10 @@ docs = [
     { name = "mkdocs-autorefs", specifier = ">=1.4.4,<2" },
     { name = "mkdocs-material", specifier = ">=9.7.6,<10" },
     { name = "mkdocstrings", extras = ["python"], specifier = ">=1.0.4,<2" },
+]
+vllm-kernels = [
+    { name = "flashinfer-cubin", specifier = "==0.6.16.post3", index = "https://flashinfer.ai/whl/" },
+    { name = "flashinfer-jit-cache", specifier = "==0.6.16.post3", index = "https://flashinfer.ai/whl/cu130/" },
 ]
 
 [[package]]
@@ -5127,7 +5129,6 @@ name = "triton"
 version = "3.6.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version == '3.13.*' and sys_platform == 'darwin'",
     "python_full_version < '3.13' and sys_platform == 'darwin'",
 ]
 
@@ -5137,6 +5138,7 @@ version = "3.7.1"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'darwin'",
+    "python_full_version == '3.13.*' and sys_platform == 'darwin'",
     "python_full_version >= '3.14' and sys_platform == 'win32'",
     "python_full_version >= '3.14' and sys_platform == 'emscripten'",
     "python_full_version >= '3.14' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32'",

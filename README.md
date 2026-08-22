@@ -72,6 +72,32 @@ uv add "llm-annotator[anthropic]"
 See [docs/provider-info.md](docs/provider-info.md) for auth environment
 variables and provider-specific setup notes.
 
+### Prebuilt vLLM kernels
+
+In the context of SLURM it may be advisable to have the vLLM kernels
+prebuilt so that time is not wasted for JIT-compilation, no storage
+contention in the case of multiprocessing, etc. Installing the kernels
+up front avoids both, which matters most when you serve models on a cluster.
+
+These kernels cannot be shipped as an extra of `llm-annotator`: `flashinfer-jit-cache`
+is not on PyPI at all (it is published per CUDA version on FlashInfer's own
+index) and the `flashinfer-cubin` on PyPI trails the releases vLLM pins
+against. An extra would therefore fail to resolve for anyone installing
+`llm-annotator` from PyPI. Install them next to the `vllm` extra instead,
+matching the `flashinfer-python` version vLLM pulled in and the CUDA version
+your torch wheel was built against:
+
+```sh
+version=$(python -c "import importlib.metadata as m; print(m.version('flashinfer-python'))")
+cuda=cu$(python -c "import torch; print(torch.version.cuda.replace('.', ''))")
+
+uv pip install "flashinfer-cubin==$version" --index-url https://flashinfer.ai/whl/
+uv pip install "flashinfer-jit-cache==$version" --index-url "https://flashinfer.ai/whl/$cuda/"
+```
+
+Use `pip install` instead of `uv pip install` if you installed with pip. The
+CUDA version comes from `torch.version.cuda`.
+
 ## Usage
 
 ### One-step convenience

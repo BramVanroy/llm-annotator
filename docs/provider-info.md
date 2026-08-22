@@ -22,19 +22,35 @@ weights are actually loaded.
 
 ```bash
 uv add "llm-annotator[vllm]"
-# you can pre-install most pre-compiled kernels so they
-# do not need to be JIT-compiled. Especially useful in
-# SLURM/server settings
-uv add "llm-annotator[vllm,vllm-kernels]"
 uv add "llm-annotator[openai]"
 uv add "llm-annotator[anthropic]"
 ```
 
-`vllm-kernels` pulls prebuilt FlashInfer wheels that are not on PyPI; this
-repo's `pyproject.toml` points at FlashInfer's own index only for its own
-`uv sync`, and that routing is not published with the package. If you are
-adding `llm-annotator[vllm,vllm-kernels]` from PyPI into another project,
-you need to point your own installer at those indexes too:
+## Prebuilt vLLM kernels
+
+vLLM runs attention through FlashInfer. Without prebuilt kernels it
+JIT-compiles them on the first request, which needs `nvcc` on the node and
+races between servers that share `~/.cache/flashinfer`. Pre-installing them is
+worth it wherever you serve models, and close to mandatory on a cluster.
+
+There is no `vllm-kernels` extra to install them for you.
+`flashinfer-jit-cache` is not on PyPI (it is published per CUDA version on
+FlashInfer's own index) and the `flashinfer-cubin` on PyPI trails the releases
+vLLM pins against, so an extra would only resolve for people who had already
+added those indexes to their own project. Install the two wheels by hand
+instead, pinned to the `flashinfer-python` version vLLM pulled in and to the
+CUDA version your torch wheel was built against:
+
+```bash
+version=$(python -c "import importlib.metadata as m; print(m.version('flashinfer-python'))")
+cuda=cu$(python -c "import torch; print(torch.version.cuda.replace('.', ''))")
+
+uv pip install "flashinfer-cubin==$version" --index-url https://flashinfer.ai/whl/
+uv pip install "flashinfer-jit-cache==$version" --index-url "https://flashinfer.ai/whl/$cuda/"
+```
+
+To keep the pins in your own project rather than installing imperatively,
+route the two packages to those indexes explicitly:
 
 ```toml
 # uv: copy these into your project's pyproject.toml
@@ -53,16 +69,15 @@ flashinfer-cubin = { index = "flashinfer-cubin" }
 flashinfer-jit-cache = { index = "flashinfer-jit-cache" }
 ```
 
+This repo does exactly that for its own checkout, where the kernels live in
+the `vllm-kernels` dependency group:
+
 ```bash
-# pip: install the kernels explicitly
-pip install "llm-annotator[vllm]" \
-    flashinfer-cubin==0.6.16.post3 flashinfer-jit-cache==0.6.16.post3 \
-    --extra-index-url https://flashinfer.ai/whl/ \
-    --extra-index-url https://flashinfer.ai/whl/cu130/
+uv sync --extra vllm --group vllm-kernels
 ```
 
-Without one of the above, `vllm-kernels` will fail to resolve and vLLM
-falls back to JIT-compiling FlashInfer at startup (needs `nvcc`).
+A dependency group is not published in the wheel metadata, so that routing
+only ever has to hold here.
 
 ## Environment variables
 
