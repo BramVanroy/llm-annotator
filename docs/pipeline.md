@@ -356,7 +356,9 @@ llm-annotate cfg.yaml --steps write-qa --hosts-file logs/pool_123/hosts.txt
 
 A cluster job submitter is built entirely out of these flags: it reads
 `--describe-steps` to plan the allocation, `--serve-args` to start each step's
-servers, and attaches `--hosts-file` once they are up.
+servers, and attaches `--hosts-file` once they are up. `slurm/` ships such a
+submitter for SLURM, with everything cluster-specific in one small
+[cluster file](slurm.md); it submits one job chain per step of a config.
 
 ## Resuming
 

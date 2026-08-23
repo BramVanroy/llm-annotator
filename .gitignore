@@ -196,3 +196,7 @@ docs/_build/
 # works in a fresh checkout
 logs/*
 !logs/.gitkeep
+
+# Site-specific SLURM settings, copied from slurm/cluster.env.example
+slurm/cluster.env
+slurm/clusters/

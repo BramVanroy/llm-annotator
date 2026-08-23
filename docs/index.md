@@ -199,7 +199,13 @@ A cluster job submitter needs nothing beyond the [config file](pipeline.md) and
 three CLI flags to drive this: `--describe-steps` to plan the allocation,
 `--serve-args` to start each step's servers with its own model, and
 `--hosts-file` to hand them back in. `examples/vllm-server-pool/` has both the
-Python-API and config-driven forms side by side.
+Python-API and config-driven forms side by side, and [`slurm/`](slurm.md) is a
+ready-made submitter built on those flags:
+
+```bash
+cp slurm/cluster.env.example slurm/cluster.env   # once, per cluster
+./slurm/submit_pipeline.sh examples/vllm-server-pool/pipeline.yaml
+```
 
 ## Why use it
 

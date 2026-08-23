@@ -1,0 +1,1 @@
+--8<-- "slurm/README.md"

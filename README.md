@@ -28,6 +28,9 @@ Key capabilities:
 - **Multi-server vLLM**:  `VLLMQueueAnnotator` runs one workload over a pool of
   vLLM servers (e.g. one per GPU of a multi-node allocation); see
   `examples/vllm-server-pool/` for a config-driven and a Python-API example.
+- **SLURM out of the box**:  `slurm/submit_pipeline.sh` turns a config into one
+  job chain per step, with everything cluster-specific in a single cluster file;
+  see [slurm/README.md](slurm/README.md).
 - Resumable processing with JSONL checkpoints.
 - Annotation of existing datasets and generation from scratch.
 - Structured outputs via JSON schema.
@@ -237,6 +240,22 @@ a re-run, so an interrupted pipeline resumes rather than starting over.
 
 A complete, runnable example lives in [examples/pipeline-qa/](examples/pipeline-qa/),
 and the full key reference is in [docs/pipeline.md](docs/pipeline.md).
+
+### Run it on SLURM
+
+The same config runs on a cluster without a scheduler-specific rewrite. Fill in
+one small cluster file (partitions, accounting, cores per GPU) and submit:
+
+```sh
+cp slurm/cluster.env.example slurm/cluster.env
+./slurm/submit_pipeline.sh --dry-run my-pipeline.yaml   # inspect the jobs
+./slurm/submit_pipeline.sh my-pipeline.yaml
+```
+
+Each step becomes its own job chain: a step served by vLLM gets a GPU server
+array plus a client, a step on a hosted API gets a CPU-only job, and GPUs are
+released as soon as the step that needed them is done. Details in
+[slurm/README.md](slurm/README.md).
 
 See the documentation for more examples, including:
 - Structured output with JSON schemas
