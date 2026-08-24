@@ -1,0 +1,33 @@
+# Generate grounded Dutch Wikipedia QA pairs with ibm-granite/granite-4.1-3b-fp8.
+
+output_dir: ../outputs/generate/granite-4.1-3b
+
+verbose: true
+log_level: INFO
+
+dataset:
+  path: ../outputs/seed
+
+client:
+  provider: vllm_online
+  model: ibm-granite/granite-4.1-3b-fp8
+  batch_size: 16
+  queue_size: 8
+  wait_for_servers: 1800
+  options:
+    max_completion_tokens: 512
+  engine:
+    tensor_parallel_size: 1
+    gpu_memory_utilization: 0.90
+    max_num_seqs: 1024
+    max_num_batched_tokens: 16384
+  pool:
+    servers: 1
+
+steps:
+  - name: generate-qa
+    system_prompt_file: prompts/system.md
+    prompt_file: prompts/generate_qa.md
+    output_schema_file: schemas/qa.json
+    sort_by_length: longest_first
+    num_retries_invalid: 3

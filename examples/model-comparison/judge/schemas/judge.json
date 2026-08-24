@@ -1,0 +1,50 @@
+{
+  "type": "object",
+  "required": [
+    "question_relevant",
+    "question_self_contained",
+    "answer_correct",
+    "answer_grounded",
+    "fluency",
+    "coherence"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "question_relevant": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5,
+      "description": "How well the question targets a concrete fact, event, definition or relation from the article, 1 (off-topic or trivial) to 5 (a substantive fact the article really covers)."
+    },
+    "question_self_contained": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5,
+      "description": "How well the question stands on its own, 1 (only makes sense next to the article) to 5 (fully understandable to a reader who never saw the article)."
+    },
+    "answer_correct": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5,
+      "description": "How factually correct the answer is according to the article, 1 (contradicts the article) to 5 (entirely correct)."
+    },
+    "answer_grounded": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5,
+      "description": "How well every claim in the answer is supported by the article, 1 (contains fabricated or contradicting claims) to 5 (every claim explicitly supported, no outside knowledge)."
+    },
+    "fluency": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5,
+      "description": "How fluent, natural and grammatical the Dutch of the question and answer is, 1 (stilted or full of errors) to 5 (reads as written by a native speaker)."
+    },
+    "coherence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5,
+      "description": "How well the answer logically addresses the question, 1 (does not answer it) to 5 (answers it precisely and completely)."
+    }
+  }
+}

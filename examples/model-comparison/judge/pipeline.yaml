@@ -1,0 +1,57 @@
+# Judge every model's generated QA pairs with one independent, stronger model.
+#
+# Runs after combine.py has stacked the three generation pipelines' outputs
+# into one long-format dataset (idx, title, text, question, answer, source_model).
+# See ../README.md for the full run order and the submission command.
+
+output_dir: ../outputs/judge
+
+# combine.py's output already has an `idx` column (its stitch/sort key), and
+# idx_column must not already exist in the source dataset.
+idx_column: sample_idx
+
+verbose: true
+log_level: INFO
+
+dataset:
+  path: ../outputs/combined-qa
+
+client:
+  provider: vllm_online
+  model: Qwen/Qwen3.6-27B-FP8
+  batch_size: 32
+  queue_size: 8
+  wait_for_servers: 1800
+  options:
+    # Deliberately not the model card's general-purpose sampling settings
+    # (https://huggingface.co/Qwen/Qwen3.6-27B-FP8#api-usage): a judge should
+    # return the same score for the same pair, so it greedy-decodes. At
+    # temperature 0 the card's top_p/top_k do nothing, so they are left unset.
+    temperature: 0.0
+    # 1.0 is vLLM's "no penalty"; 0.0 is not a neutral value but a degenerate
+    # one. The rubric is six same-shaped "field": <1-5> pairs, and any penalty
+    # above 1.0 would discourage reusing a score already emitted earlier in the
+    # object -- manufacturing spread across the six criteria that the pair
+    # itself does not justify, contaminating the numbers the leaderboard
+    # averages. (presence_penalty would do the same, but the vllm_online client
+    # does not expose it; its default is 0.0, i.e. off, which is what we want.)
+    repetition_penalty: 1.0
+    max_completion_tokens: 300
+    chat_template_kwargs:
+      enable_thinking: false
+  engine:
+    tensor_parallel_size: 2
+    gpu_memory_utilization: 0.90
+    extra:
+      reasoning_parser: qwen3
+    speculative_config:
+      method: qwen3_next_mtp
+      num_speculative_tokens: 2
+  pool:
+    servers: 1
+
+steps:
+  - name: judge-qa
+    prompt_file: prompts/judge_qa.md
+    output_schema_file: schemas/judge.json
+    num_retries_invalid: 3

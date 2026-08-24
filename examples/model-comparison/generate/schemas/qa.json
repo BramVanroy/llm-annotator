@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "required": ["question", "answer"],
+  "additionalProperties": false,
+  "properties": {
+    "question": {
+      "type": "string",
+      "description": "A question that is answerable purely from the article."
+    },
+    "answer": {
+      "type": "string",
+      "description": "The answer to the question, grounded in the article."
+    }
+  }
+}
