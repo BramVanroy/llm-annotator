@@ -1,0 +1,94 @@
+# Persona-grounded Dutch Wikipedia QA, generated with Qwen/Qwen3.6-35B-A3B-FP8.
+#
+# Two steps on one model, so they share a config: the second reads the
+# `question` column the first wrote. Step 1 runs with thinking off (the
+# question is a one-liner and does not need a reasoning budget); step 2 runs
+# with thinking on, because its trace is the reasoning half of the training
+# data.
+#
+# Step 2 is served with `--reasoning-parser qwen3`, so vLLM hands the trace
+# back separately and the annotator writes it to `answer-question_reasoning`,
+# leaving `answer-question_response` as the answer alone. It has no
+# `output_schema`: the answer is free text, and there is nothing to constrain.
+
+output_dir: ../outputs/generate
+
+verbose: true
+log_level: INFO
+
+dataset:
+  path: ../outputs/seed
+
+client:
+  provider: vllm_online
+  model: Qwen/Qwen3.6-35B-A3B-FP8
+  batch_size: 16
+  queue_size: 8
+  wait_for_servers: 1800
+  options:
+    # The model card's non-thinking sampling profile; step 2 overrides it with
+    # the thinking one.
+    temperature: 0.7
+    top_p: 0.8
+    top_k: 20
+    max_completion_tokens: 256
+    chat_template_kwargs:
+      enable_thinking: false
+  engine:
+    tensor_parallel_size: 2
+    gpu_memory_utilization: 0.90
+    # Prompt (article capped at 2560 words by prepare_seed.py, plus persona
+    # and instructions) plus the 3072-token completion budget of step 2, with
+    # headroom. Far below the model's 128k, which would waste KV cache.
+    max_model_len: 12288
+    max_num_seqs: 256
+    max_num_batched_tokens: 8192
+    # The instruction block is identical across every row and sits before the
+    # article, so the prefix cache actually gets reused.
+    enable_prefix_caching: true
+  pool:
+    servers: 4
+
+steps:
+  - name: write-question
+    system_prompt_file: prompts/system_question.md
+    prompt_file: prompts/write_question.md
+    output_schema_file: schemas/question.json
+    sort_by_length: longest_first
+    num_retries_invalid: 3
+    # A row without a well-formed question has nothing for step 2 to answer,
+    # and answering is the expensive step.
+    filter_invalid: true
+    drop_columns:
+      - write-question_response
+
+  - name: answer-question
+    system_prompt_file: prompts/system_answer.md
+    prompt_file: prompts/answer_question.md
+    sort_by_length: longest_first
+    client:
+      options:
+        # The model card's thinking profile.
+        temperature: 0.6
+        top_p: 0.95
+        top_k: 20
+        # Reasoning trace plus answer. Traces that hit this cap come back with
+        # finish_reason == "length" and are dropped by ../filter_rows.py.
+        max_completion_tokens: 3072
+        chat_template_kwargs:
+          enable_thinking: true
+      # `engine` is replaced wholesale by a step override, not merged key by
+      # key like `options`, so the whole block is repeated here rather than
+      # just the one line that differs. Check it with
+      # `llm-annotate <config> --serve-args answer-question`.
+      engine:
+        tensor_parallel_size: 2
+        gpu_memory_utilization: 0.90
+        max_model_len: 12288
+        max_num_seqs: 256
+        max_num_batched_tokens: 8192
+        enable_prefix_caching: true
+        extra:
+          # Without this the trace stays inside the message content, tags and
+          # all, and `answer-question_reasoning` is empty.
+          reasoning_parser: qwen3

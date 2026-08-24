@@ -1,0 +1,60 @@
+# Score every generated pair with a second, independent model.
+#
+# Runs after ../split_reasoning.py has separated the reasoning trace from the
+# answer, so the judge sees the answer alone. See ../README.md for the run
+# order.
+
+output_dir: ../outputs/judge
+
+# split_reasoning.py carries the generation stage's `idx` through as the
+# provenance key, and idx_column must not already exist in the source dataset.
+idx_column: sample_idx
+
+verbose: true
+log_level: INFO
+
+dataset:
+  path: ../outputs/qa-split
+
+client:
+  provider: vllm_online
+  model: Qwen/Qwen3.6-27B-FP8
+  batch_size: 32
+  queue_size: 8
+  wait_for_servers: 1800
+  options:
+    # A judge should return the same score for the same pair, so it
+    # greedy-decodes instead of using the model card's sampling settings. At
+    # temperature 0 top_p/top_k do nothing, so they are left unset.
+    temperature: 0.0
+    # 1.0 is vLLM's "no penalty"; 0.0 is degenerate rather than neutral. The
+    # rubric is seven same-shaped "field": <1-5> pairs, and any penalty above
+    # 1.0 would discourage reusing a score already emitted earlier in the
+    # object, manufacturing spread across criteria that the pair itself does
+    # not justify.
+    repetition_penalty: 1.0
+    max_completion_tokens: 320
+    chat_template_kwargs:
+      enable_thinking: false
+  engine:
+    tensor_parallel_size: 2
+    gpu_memory_utilization: 0.90
+    # Article plus rubric plus the pair; no long completion to leave room for.
+    max_model_len: 8192
+    max_num_seqs: 256
+    max_num_batched_tokens: 8192
+    enable_prefix_caching: true
+    extra:
+      # Thinking is off, so this parses nothing in the normal case. It is the
+      # safety net for a row where the model opens a <think> block anyway:
+      # the block is kept out of the JSON the schema is validated against.
+      reasoning_parser: qwen3
+  pool:
+    servers: 2
+
+steps:
+  - name: judge-qa
+    prompt_file: prompts/judge_qa.md
+    output_schema_file: schemas/judge.json
+    sort_by_length: longest_first
+    num_retries_invalid: 3
