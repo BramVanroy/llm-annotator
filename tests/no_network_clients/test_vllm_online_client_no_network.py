@@ -245,3 +245,43 @@ def test_vllm_online_extra_body_and_gen_kwargs_reach_the_request(
     assert payload["priority"] == 1
     # gen_kwargs is documented as taking precedence over options.
     assert payload["temperature"] == 0.0
+
+
+def test_vllm_online_process_response_reads_reasoning_content(
+    fake_openai_module: dict[str, Any],
+) -> None:
+    # Verifies the online vLLM client inherits reasoning_content parsing,
+    # which is what a server started with --reasoning-parser returns.
+    _ = fake_openai_module
+    from openai.types.chat.chat_completion import ChatCompletion
+
+    client = VLLMOnlineClient(model="served-vllm-model")
+    completion = ChatCompletion.model_validate(
+        {
+            "id": "chatcmpl-fake",
+            "created": 0,
+            "object": "chat.completion",
+            "model": "served-vllm-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": "Antwerpen",
+                        "reasoning_content": "The article names Antwerpen.",
+                    },
+                }
+            ],
+            "usage": {
+                "completion_tokens": 4,
+                "prompt_tokens": 1,
+                "total_tokens": 5,
+            },
+        }
+    )
+
+    response = client._process_response(completion)
+
+    assert response.reasoning == "The article names Antwerpen."
+    assert response.text == "Antwerpen"

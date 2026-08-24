@@ -71,6 +71,14 @@ class Response:
     full_response: object | None = None
     error: str | None = None
     error_type: str | None = None
+    reasoning: str | None = None
+    """The model's reasoning trace, separated from ``text`` by the provider.
+
+    Only set when the provider hands the trace back as its own field: a vLLM
+    server started with ``--reasoning-parser``, or a Claude request with a
+    thinking budget. A reasoning model served without such a parser returns
+    its trace inside ``text`` instead, tags and all, and this stays ``None``.
+    """
 
 
 class Client(ABC, Generic[T_Options]):
@@ -128,8 +136,8 @@ class Client(ABC, Generic[T_Options]):
             partial: Optional partial
                 [`Response`][llm_annotator.clients.base.Response] built before
                 the error was detected. Its ``text``, ``stop_reason``,
-                ``num_output_tokens``, and ``full_response`` fields are
-                preserved in the returned error ``Response``.
+                ``num_output_tokens``, ``full_response`` and ``reasoning``
+                fields are preserved in the returned error ``Response``.
 
         Returns:
             An error [`Response`][llm_annotator.clients.base.Response]. Only
@@ -170,6 +178,7 @@ class Client(ABC, Generic[T_Options]):
             else None,
             error=response_error,
             error_type=type(provider_error).__name__,
+            reasoning=partial.reasoning if partial is not None else None,
         )
 
     def __enter__(self) -> Self:

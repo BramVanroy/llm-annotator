@@ -128,6 +128,14 @@ class OpenAIClient(Client[T_OpenAIOptions]):
             if choice and choice.message.content
             else ""
         )
+        # vLLM servers started with --reasoning-parser return the trace here,
+        # outside the content. It is not part of the OpenAI schema, so it
+        # arrives as an extra field on the message model.
+        reasoning = (
+            getattr(choice.message, "reasoning_content", None)
+            if choice
+            else None
+        )
 
         partial = Response(
             text=text,
@@ -136,6 +144,7 @@ class OpenAIClient(Client[T_OpenAIOptions]):
             provider=self.provider_type,
             num_output_tokens=num_output_tokens,
             full_response=response,
+            reasoning=reasoning.strip() if reasoning else None,
         )
 
         try:

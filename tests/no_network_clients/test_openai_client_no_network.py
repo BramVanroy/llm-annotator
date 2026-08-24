@@ -96,6 +96,63 @@ def test_openai_process_response_stop_reason_error(
     assert response.stop_reason == "length"
 
 
+def _completion(message: dict[str, Any]) -> Any:
+    """Build a real ChatCompletion around one assistant message."""
+    from openai.types.chat.chat_completion import ChatCompletion
+
+    return ChatCompletion.model_validate(
+        {
+            "id": "chatcmpl-fake",
+            "created": 0,
+            "object": "chat.completion",
+            "model": "fake-model",
+            "choices": [
+                {"index": 0, "finish_reason": "stop", "message": message}
+            ],
+            "usage": {
+                "completion_tokens": 4,
+                "prompt_tokens": 1,
+                "total_tokens": 5,
+            },
+        }
+    )
+
+
+def test_openai_process_response_reads_reasoning_content(
+    fake_openai_module: dict[str, Any],
+) -> None:
+    # Verifies a vLLM reasoning parser's trace lands in Response.reasoning.
+    _ = fake_openai_module
+    client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(model="gpt-test")
+
+    response = client._process_response(
+        _completion(
+            {
+                "role": "assistant",
+                "content": " the answer ",
+                "reasoning_content": " first I think ",
+            }
+        )
+    )
+
+    assert response.reasoning == "first I think"
+    assert response.text == "the answer"
+
+
+def test_openai_process_response_without_reasoning_content(
+    fake_openai_module: dict[str, Any],
+) -> None:
+    # Verifies a plain completion leaves Response.reasoning unset.
+    _ = fake_openai_module
+    client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(model="gpt-test")
+
+    response = client._process_response(
+        _completion({"role": "assistant", "content": "the answer"})
+    )
+
+    assert response.reasoning is None
+
+
 def test_openai_generate_request_error_raises(
     fake_openai_module: dict[str, Any],
 ) -> None:

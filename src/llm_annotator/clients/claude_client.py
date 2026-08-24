@@ -98,13 +98,19 @@ class ClaudeClient(Client[ClaudeRuntimeOptions]):
         num_output_tokens = getattr(response.usage, "output_tokens", None)
 
         text_chunks: list[str] = []
+        thinking_chunks: list[str] = []
         for block in response.content:
-            if getattr(block, "type", None) != "text":
-                continue
-            block_text = getattr(block, "text", None)
-            if isinstance(block_text, str):
-                text_chunks.append(block_text)
+            block_type = getattr(block, "type", None)
+            if block_type == "text":
+                block_text = getattr(block, "text", None)
+                if isinstance(block_text, str):
+                    text_chunks.append(block_text)
+            elif block_type == "thinking":
+                block_thinking = getattr(block, "thinking", None)
+                if isinstance(block_thinking, str):
+                    thinking_chunks.append(block_thinking)
         content = "\n".join(text_chunks).strip()
+        thinking = "\n".join(thinking_chunks).strip()
 
         partial = Response(
             text=content,
@@ -113,6 +119,7 @@ class ClaudeClient(Client[ClaudeRuntimeOptions]):
             provider=self.provider_type,
             num_output_tokens=num_output_tokens,
             full_response=response,
+            reasoning=thinking or None,
         )
 
         try:

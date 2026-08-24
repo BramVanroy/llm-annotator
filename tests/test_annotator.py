@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import types
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -629,6 +630,7 @@ def test_run_annotation_keep_columns_and_validation_fields(
         "num_tokens",
         "error",
         "error_type",
+        "reasoning",
         "valid",
     ]
     assert done["valid"] == [True]
@@ -917,7 +919,90 @@ def test_run_annotation_keeps_all_columns_when_requested(
         "num_tokens",
         "error",
         "error_type",
+        "reasoning",
     ]
+
+
+class ReasoningClient(DummyClient):
+    """A client whose provider hands back a reasoning trace of its own."""
+
+    def generate(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        options: ProviderRuntimeOptions | None = None,
+        gen_kwargs: dict[str, Any] | None = None,
+    ) -> Response:
+        response = super().generate(
+            messages=messages, options=options, gen_kwargs=gen_kwargs
+        )
+        return replace(response, reasoning="because of X")
+
+
+def test_run_annotation_writes_reasoning_column(tmp_path: Path) -> None:
+    # Verifies a provider-separated reasoning trace gets its own column.
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": [0],
+            "tp_messages": [[{"role": "user", "content": "Q: a"}]],
+        }
+    )
+
+    done = Annotator(client=ReasoningClient()).run_annotation(
+        output_dir=tmp_path / "with-reasoning",
+        prompt_template="Q: {text}",
+        prepared_dataset=prepared_ds,
+        task_prefix="tp_",
+    )
+
+    assert done["tp_reasoning"] == ["because of X"]
+
+
+def test_run_annotation_reasoning_column_is_none_without_a_trace(
+    tmp_path: Path,
+) -> None:
+    # Verifies the column is still written for a provider that returns none,
+    # so stacking rows from any client keeps one Arrow schema.
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": [0],
+            "messages": [[{"role": "user", "content": "Q: a"}]],
+        }
+    )
+
+    done = Annotator(client=DummyClient()).run_annotation(
+        output_dir=tmp_path / "no-reasoning",
+        prompt_template="Q: {text}",
+        prepared_dataset=prepared_ds,
+    )
+
+    assert done["reasoning"] == [None]
+
+
+def test_load_progress_files_unions_mismatched_columns(
+    tmp_path: Path,
+    dummy_annotator: Annotator,
+) -> None:
+    # Verifies a run whose progress files were written by two library
+    # versions still loads, with the older rows padded out.
+    progress_dir = tmp_path / "progress_backup"
+    progress_dir.mkdir()
+    # `error` is null in every row of the first file, so that file types it
+    # as null; the union has to take the second file's concrete type.
+    (progress_dir / "progress_0.jsonl").write_text(
+        '{"idx": 0, "response": "old", "error": null}\n', encoding="utf-8"
+    )
+    (progress_dir / "progress_1.jsonl").write_text(
+        '{"idx": 1, "response": "new", "error": "boom",'
+        ' "reasoning": "because"}\n',
+        encoding="utf-8",
+    )
+
+    ds = dummy_annotator._load_progress_files(progress_dir).sort("idx")
+
+    assert ds["response"] == ["old", "new"]
+    assert ds["error"] == [None, "boom"]
+    assert ds["reasoning"] == [None, "because"]
 
 
 def test_prepare_data_strips_original_columns(tmp_path: Path) -> None:

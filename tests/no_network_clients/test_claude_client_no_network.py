@@ -134,6 +134,39 @@ def test_claude_process_response_handles_mixed_blocks_and_error(
     assert parsed.stop_reason == "max_tokens"
 
 
+def test_claude_process_response_collects_thinking_blocks(
+    fake_anthropic_module: dict[str, Any],
+) -> None:
+    # Verifies thinking blocks are separated from the text of the answer.
+    _ = fake_anthropic_module
+    client = object.__new__(ClaudeClient)
+    client.model = "claude-test"
+    client.max_workers = 1
+    client.on_error = "ignore"
+    client._logger = cast(
+        Any,
+        types.SimpleNamespace(
+            warning=lambda _msg: None, debug=lambda _msg: None
+        ),
+    )
+
+    response = types.SimpleNamespace(
+        usage=types.SimpleNamespace(output_tokens=9),
+        stop_reason="end_turn",
+        model="claude-fake",
+        content=[
+            types.SimpleNamespace(type="thinking", thinking="step one"),
+            types.SimpleNamespace(type="thinking", thinking="step two"),
+            types.SimpleNamespace(type="text", text="the answer"),
+        ],
+    )
+
+    parsed = client._process_response(response)  # type: ignore[arg-type]
+
+    assert parsed.reasoning == "step one\nstep two"
+    assert parsed.text == "the answer"
+
+
 def test_claude_generate_request_error_raises(
     fake_anthropic_module: dict[str, Any],
 ) -> None:

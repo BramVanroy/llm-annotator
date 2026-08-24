@@ -80,8 +80,15 @@ Each step writes several kinds of column:
   exactly those two columns, which is what the next step's prompt refers to.
 * **Bookkeeping columns**, namespaced by the step's `task_prefix` (which
   defaults to `<name>_`): `{prefix}response`, `{prefix}finish_reason`,
-  `{prefix}num_tokens`, `{prefix}error`, `{prefix}error_type` and, when a schema
-  is set, `{prefix}valid_fields`.
+  `{prefix}num_tokens`, `{prefix}error`, `{prefix}error_type`,
+  `{prefix}reasoning` and, when a schema is set, `{prefix}valid_fields`.
+
+`{prefix}reasoning` holds a reasoning model's trace, separated from the answer
+in `{prefix}response`. It is only filled when the provider hands the trace back
+as its own field: a vLLM step needs `engine.extra.reasoning_parser` set (see
+[Providers and models](#providers-and-models)), and a `claude` step needs a
+thinking budget. Without one, a reasoning model returns its trace inside
+`{prefix}response` instead, tags and all, and this column stays `None`.
 
 Because schema properties are *not* prefixed, two steps that use the same
 property name would collide. Use `rename` to give a step's output its final

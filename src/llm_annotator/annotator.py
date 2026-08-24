@@ -30,9 +30,12 @@ from typing import Counter as CounterType
 
 from datasets import (
     Dataset,
+    Features,
+    concatenate_datasets,
     get_dataset_split_names,
     load_dataset,
 )
+from datasets.exceptions import DatasetGenerationError
 from huggingface_hub import (
     create_branch,
     create_repo,
@@ -482,6 +485,7 @@ class Annotator:
             - A key '{prefix}response' containing the raw model output text.
             - A key '{prefix}finish_reason' indicating why generation stopped.
             - A key '{prefix}num_tokens' indicating the number of tokens in the output.
+            - A key '{prefix}reasoning' containing the model's reasoning trace, or None when the provider did not return one separately.
 
             And if an output_schema is provided, also:
                 - Keys from the output_schema with their parsed values (or None if parsing failed).
@@ -493,6 +497,10 @@ class Annotator:
             f"{task_prefix}num_tokens": response.num_output_tokens,
             f"{task_prefix}error": response.error,
             f"{task_prefix}error_type": response.error_type,
+            # Always written, like error/error_type: the per-sample dicts are
+            # stacked into one Dataset, so a key that is present on only some
+            # rows would break the schema.
+            f"{task_prefix}reasoning": response.reasoning,
         }
 
         if response.error is not None:
@@ -1552,6 +1560,56 @@ class Annotator:
             keep_idx_column=keep_idx_column,
         )
 
+    def _load_progress_files(self, process_pdout: Path) -> Dataset:
+        """Read every progress file in a directory back into one dataset.
+
+        The fast path hands the whole directory to ``load_dataset``, which
+        needs every file to share one schema. Files written by different
+        library versions do not: a release that adds a bookkeeping column
+        leaves a run that was already in flight with older files that lack it.
+        Rather than making such a run unresumable, fall back to reading each
+        file on its own and padding the missing columns with nulls.
+
+        Args:
+            process_pdout: Directory holding the ``*.jsonl`` progress files.
+
+        Returns:
+            One dataset with the union of every file's columns.
+        """
+        try:
+            return load_dataset(
+                "json", data_dir=str(process_pdout), split="train"
+            )
+        except DatasetGenerationError:
+            self._logger.warning(
+                f"The progress files in '{process_pdout}' do not all have the"
+                " same columns, which happens when a run is resumed by a"
+                " different version of this library. Reading them one by one"
+                " and filling the missing columns with nulls."
+            )
+
+        parts = [
+            load_dataset("json", data_files=str(pfin), split="train")
+            for pfin in sorted(process_pdout.glob("*.jsonl"))
+        ]
+        # A column that happens to be null in every row of one file is typed
+        # "null" there, so prefer any file that gives it a concrete type.
+        features = Features()
+        for part in parts:
+            for column, feature in part.features.items():
+                known = features.get(column)
+                if known is None or getattr(known, "dtype", None) == "null":
+                    features[column] = feature
+
+        padded = []
+        for part in parts:
+            missing = [c for c in features if c not in part.column_names]
+            for column in missing:
+                part = part.add_column(column, [None] * part.num_rows)
+            padded.append(part.cast(features) if missing else part)
+
+        return concatenate_datasets(padded)
+
     def _post_annotate(
         self,
         *,
@@ -1578,9 +1636,7 @@ class Annotator:
         Returns:
             The concatenated dataset of all annotation results (JSON-invalid samples are NOT removed)
         """
-        ds = load_dataset(
-            "json", data_dir=str(process_pdout), split="train"
-        ).sort(idx_column)
+        ds = self._load_progress_files(process_pdout).sort(idx_column)
 
         # A sample can only be written twice if two processes wrote to the same
         # progress directory (e.g. a requeued job whose predecessor was still

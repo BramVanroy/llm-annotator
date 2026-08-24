@@ -71,6 +71,7 @@ def test_client_handle_error_warns_and_preserves_partial(
         provider=Provider.CLAUDE,
         num_output_tokens=3,
         full_response={"raw": True},
+        reasoning="half a thought",
     )
 
     response = client._handle_error(
@@ -84,6 +85,7 @@ def test_client_handle_error_warns_and_preserves_partial(
     assert response.provider == Provider.CLAUDE
     assert response.num_output_tokens == 3
     assert response.full_response == {"raw": True}
+    assert response.reasoning == "half a thought"
     assert response.error == "demo context: boom"
     assert response.error_type == "ProviderError"
 
