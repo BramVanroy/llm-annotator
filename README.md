@@ -34,6 +34,8 @@ Key capabilities:
 - Resumable processing with JSONL checkpoints.
 - Annotation of existing datasets and generation from scratch.
 - Structured outputs via JSON schema.
+- Reasoning traces in their own column, for thinking models on either vLLM
+  provider or on Claude.
 - Retry and validation hooks for robust pipelines.
 - Optional Hugging Face Hub upload cadence for both prepared data and outputs.
 - Context-manager cleanup of client resources.

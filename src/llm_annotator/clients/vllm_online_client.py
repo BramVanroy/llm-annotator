@@ -289,6 +289,16 @@ class VLLMOnlineClient(OpenAIClient[VLLMOnlineRuntimeOptions]):
         The OpenAI Batch API is not supported; passing ``use_batch_api=True`` raises
         a [`ConfigurationError`][llm_annotator.clients.exceptions.ConfigurationError].
 
+        !!! note "No per-sample token counts on this path"
+
+            That endpoint reports one ``usage`` block for the whole batch
+            rather than one per choice, so ``num_output_tokens`` is ``None`` on
+            every [`Response`][llm_annotator.clients.base.Response] it returns,
+            and a step's ``{prefix}num_tokens`` column is ``None`` with it.
+            Everything else, including ``reasoning``, is per sample as usual.
+            Use [`generate`][llm_annotator.clients.vllm_online_client.VLLMOnlineClient.generate]
+            or the offline provider when the token counts matter.
+
         Args:
             messages: List of message lists, where each list is a conversation.
             options: Optional generation configuration.

@@ -42,8 +42,7 @@ client:
   engine:
     tensor_parallel_size: 2
     gpu_memory_utilization: 0.90
-    extra:
-      reasoning_parser: qwen3
+    reasoning_parser: qwen3
     speculative_config:
       method: qwen3_next_mtp
       num_speculative_tokens: 2

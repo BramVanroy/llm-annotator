@@ -216,6 +216,8 @@ cp slurm/cluster.env.example slurm/cluster.env   # once, per cluster
 - Resume interrupted generation runs from JSONL checkpoints.
 - Validate and post-process outputs with custom callables.
 - Enforce structured responses through JSON schemas.
+- Keep a thinking model's reasoning trace in its own column, separated from the
+  answer; see [Annotating from a config file](pipeline.md#how-steps-see-each-others-output).
 - Upload incrementally to the Hugging Face Hub.
 
 ## Development

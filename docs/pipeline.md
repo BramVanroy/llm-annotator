@@ -101,6 +101,15 @@ whenever the request carries a thinking budget. Without a parser a reasoning
 model returns its trace inside `{prefix}response`, tags and all, and this column
 stays `None`.
 
+!!! note "`{prefix}num_tokens` on a `vllm_online` step"
+
+    A `vllm_online` step sends each batch to vLLM's batch endpoint, which
+    reports one `usage` block for the whole batch instead of one per sample, so
+    `{prefix}num_tokens` is `None` on that provider. Every other column,
+    `{prefix}reasoning` included, is per sample as usual. Use `vllm_offline` if
+    you need the counts, for instance to see how much of the budget a reasoning
+    trace is eating.
+
 Because schema properties are *not* prefixed, two steps that use the same
 property name would collide. Use `rename` to give a step's output its final
 name:
