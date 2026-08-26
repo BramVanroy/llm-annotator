@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import functools
 import gc
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -20,6 +20,7 @@ from llm_annotator.clients.vllm_online_client import VLLMBaseRuntimeOptions
 
 if TYPE_CHECKING:
     from vllm import LLM, RequestOutput
+    from vllm.reasoning import ReasoningParser
 
 
 def _is_oom_error(exc: BaseException) -> bool:
@@ -190,6 +191,8 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
         language_model_only: If True, all non-text modalities are disabled,
             saving some memory.
         speculative_config: Optional dict of vLLM speculative decoding config parameters.
+        reasoning_parser: Name of the vLLM reasoning parser that splits a
+            thinking model's trace from its answer, e.g. ``"qwen3"``.
         extra_vllm_kwargs: Additional keyword arguments forwarded to
             ``vllm.LLM``. Explicit constructor arguments take precedence
             over any conflicting keys here.
@@ -264,6 +267,7 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
         enable_chunked_prefill: bool = True,
         language_model_only: bool = True,
         speculative_config: dict[str, Any] | None = None,
+        reasoning_parser: str | None = None,
         extra_vllm_kwargs: dict[str, Any] | None = None,
         on_error: OnError = "warn",
         batch_size: int | None = None,
@@ -289,6 +293,10 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
                 disabled, saving some memory. Defaults to ``True``.
             speculative_config: Optional dict of vLLM speculative decoding
                 config parameters.
+            reasoning_parser: Name of the vLLM reasoning parser that splits a
+                thinking model's trace from its answer, e.g. ``"qwen3"``.
+                ``vllm.LLM`` does no such splitting itself, so without it the
+                trace stays inline in the generated text.
             extra_vllm_kwargs: Additional keyword arguments forwarded to
                 ``vllm.LLM``. Explicit constructor arguments take precedence
                 over any conflicting keys here.
@@ -316,6 +324,8 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
         self._enable_chunked_prefill = enable_chunked_prefill
         self._language_model_only = language_model_only
         self._speculative_config = speculative_config or {}
+        self._reasoning_parser_name = reasoning_parser
+        self._reasoning_parser: ReasoningParser | None = None
         self._extra_vllm_kwargs: dict[str, Any] = extra_vllm_kwargs or {}
         self._batch_size = batch_size
         self._min_batch_size = min_batch_size
@@ -439,6 +449,60 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
         except Exception as exc:
             self._handle_error(exc, context="vLLM offline warm-up failed")
 
+    def _split_reasoning(
+        self,
+        text: str,
+        prompt_token_ids: Sequence[int] | None = None,
+    ) -> tuple[str | None, str]:
+        """Separate a reasoning trace from the answer in one generation.
+
+        The served vLLM entrypoint does this itself when started with
+        ``--reasoning-parser``; ``vllm.LLM`` does not, so the same parser is
+        applied here to give both providers the same two columns. Without a
+        configured parser the text is returned untouched, trace and all.
+
+        The prompt decides whether there is a trace to look for at all. A chat
+        template asked for ``enable_thinking: False`` closes the thinking block
+        itself, so everything the model then writes is answer. Without this
+        check the parser would see no closing tag in the output and, by its own
+        rule that an unterminated trace runs to the end, hand back the whole
+        answer as reasoning and an empty answer.
+
+        Args:
+            text: The raw generated text of one sequence.
+            prompt_token_ids: Token ids of the prompt that produced it, used to
+                tell whether the template already ended the thinking block.
+
+        Returns:
+            The trace (``None`` when there is none) and the answer.
+        """
+        if not self._reasoning_parser_name:
+            return None, text.strip()
+
+        if self._reasoning_parser is None:
+            from vllm.reasoning import ReasoningParserManager
+
+            self._ensure_pipeline_loaded()
+            parser_cls = ReasoningParserManager.get_reasoning_parser(
+                self._reasoning_parser_name
+            )
+            self._reasoning_parser = parser_cls(
+                cast("LLM", self._pipe).get_tokenizer()
+            )
+
+        if prompt_token_ids and self._reasoning_parser.is_reasoning_end(
+            list(prompt_token_ids)
+        ):
+            return None, text.strip()
+
+        # `request` is part of the parser interface but unused by the
+        # non-streaming path, which reads the text alone.
+        reasoning, content = self._reasoning_parser.extract_reasoning(
+            text,
+            None,  # type: ignore[arg-type]
+        )
+        return (reasoning or None), (content or "").strip()
+
     def _process_response(self, response: RequestOutput) -> Response:
         """Convert a single vLLM RequestOutput to a structured Response.
 
@@ -452,14 +516,18 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
         output = response.outputs[0]
         num_output_tokens = len(output.token_ids) if output.token_ids else None
         finish_reason = output.finish_reason
+        reasoning, text = self._split_reasoning(
+            output.text or "", getattr(response, "prompt_token_ids", None)
+        )
 
         partial = Response(
-            text=output.text.strip() if output.text else "",
+            text=text,
             stop_reason=finish_reason,
             model=self.model,
             provider=self.provider_type,
             num_output_tokens=num_output_tokens,
             full_response=response,
+            reasoning=reasoning,
         )
 
         try:

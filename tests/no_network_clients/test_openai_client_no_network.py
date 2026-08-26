@@ -118,10 +118,13 @@ def _completion(message: dict[str, Any]) -> Any:
     )
 
 
-def test_openai_process_response_reads_reasoning_content(
+@pytest.mark.parametrize("field", ["reasoning", "reasoning_content"])
+def test_openai_process_response_reads_reasoning(
     fake_openai_module: dict[str, Any],
+    field: str,
 ) -> None:
-    # Verifies a vLLM reasoning parser's trace lands in Response.reasoning.
+    # Verifies the trace is picked up under either name an OpenAI-compatible
+    # server may use: vLLM emits `reasoning`, others `reasoning_content`.
     _ = fake_openai_module
     client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(model="gpt-test")
 
@@ -130,7 +133,7 @@ def test_openai_process_response_reads_reasoning_content(
             {
                 "role": "assistant",
                 "content": " the answer ",
-                "reasoning_content": " first I think ",
+                field: " first I think ",
             }
         )
     )

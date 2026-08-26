@@ -263,6 +263,13 @@ class EngineConfig(_StrictBase):
         quantization: Quantization method, e.g. ``"fp8"`` or ``"awq"``.
         enable_prefix_caching: Reuse the KV cache of a shared prompt prefix.
         enable_chunked_prefill: Split long prefills to bound peak memory.
+        reasoning_parser: Name of the vLLM reasoning parser that separates a
+            thinking model's trace from its answer, e.g. ``"qwen3"`` or
+            ``"deepseek_r1"``. Set it and the step writes ``{prefix}reasoning``
+            instead of leaving the trace inline in ``{prefix}response``. A
+            served step renders it as ``--reasoning-parser``; an offline step
+            hands it to the client, which parses the trace itself with vLLM's
+            own parser, since ``vllm.LLM`` does no such splitting.
         speculative_config: vLLM speculative-decoding configuration.
         extra: Any other vLLM engine argument, by its Python name. Rendered as
             ``--kebab-case`` for ``vllm serve`` and passed verbatim to
@@ -278,6 +285,7 @@ class EngineConfig(_StrictBase):
     quantization: str | None = None
     enable_prefix_caching: bool | None = None
     enable_chunked_prefill: bool | None = None
+    reasoning_parser: str | None = None
     speculative_config: dict[str, Any] | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
 
@@ -286,6 +294,10 @@ class EngineConfig(_StrictBase):
 
         Unset fields are dropped rather than passed as ``None``, so vLLM's own
         defaults apply to anything the config does not mention.
+        ``reasoning_parser`` rides along here because
+        [`build_client`][llm_annotator.config.ClientConfig.build_client] feeds
+        this dict to the offline client's constructor, which keeps it rather
+        than forwarding it: ``vllm.LLM`` does not take it.
 
         Returns:
             Keyword arguments, with ``extra`` merged in.

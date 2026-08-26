@@ -69,6 +69,36 @@ class OpenAIRuntimeOptions(ProviderRuntimeOptions):
 T_OpenAIOptions = TypeVar("T_OpenAIOptions", bound=ProviderRuntimeOptions)
 
 
+REASONING_FIELDS = ("reasoning", "reasoning_content")
+"""Names an OpenAI-compatible server may use for a reasoning trace it returns
+outside the message content. Neither is in the OpenAI schema, so both arrive as
+extra fields on the message model. vLLM emits ``reasoning``; several hosted
+OpenAI-compatible APIs emit ``reasoning_content``."""
+
+
+def _message_reasoning(message: object) -> str | None:
+    """Read the reasoning trace off a chat message, whatever the server calls it.
+
+    Args:
+        message: The ``message`` of one chat-completion choice.
+
+    Returns:
+        The trace, stripped, or ``None`` when the server returned none.
+
+    Examples:
+        >>> from types import SimpleNamespace
+        >>> _message_reasoning(SimpleNamespace(reasoning=" first I think "))
+        'first I think'
+        >>> _message_reasoning(SimpleNamespace(content="no trace")) is None
+        True
+    """
+    for field in REASONING_FIELDS:
+        value = getattr(message, field, None)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 class OpenAIClient(Client[T_OpenAIOptions]):
     """Client wrapper for OpenAI APIs."""
 
@@ -128,14 +158,7 @@ class OpenAIClient(Client[T_OpenAIOptions]):
             if choice and choice.message.content
             else ""
         )
-        # vLLM servers started with --reasoning-parser return the trace here,
-        # outside the content. It is not part of the OpenAI schema, so it
-        # arrives as an extra field on the message model.
-        reasoning = (
-            getattr(choice.message, "reasoning_content", None)
-            if choice
-            else None
-        )
+        reasoning = _message_reasoning(choice.message) if choice else None
 
         partial = Response(
             text=text,
@@ -144,7 +167,7 @@ class OpenAIClient(Client[T_OpenAIOptions]):
             provider=self.provider_type,
             num_output_tokens=num_output_tokens,
             full_response=response,
-            reasoning=reasoning.strip() if reasoning else None,
+            reasoning=reasoning,
         )
 
         try:

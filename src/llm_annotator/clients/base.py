@@ -72,12 +72,13 @@ class Response:
     error: str | None = None
     error_type: str | None = None
     reasoning: str | None = None
-    """The model's reasoning trace, separated from ``text`` by the provider.
+    """The model's reasoning trace, separated from ``text``.
 
-    Only set when the provider hands the trace back as its own field: a vLLM
-    server started with ``--reasoning-parser``, or a Claude request with a
-    thinking budget. A reasoning model served without such a parser returns
-    its trace inside ``text`` instead, tags and all, and this stays ``None``.
+    Set when a thinking model's trace can be told apart from its answer: a
+    vLLM server started with ``--reasoning-parser``, an offline vLLM client
+    given a ``reasoning_parser`` name, or a Claude request with a thinking
+    budget. A reasoning model run without a parser returns its trace inside
+    ``text``, tags and all, and this stays ``None``.
     """
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import sys
 import types
 from typing import Any
 
@@ -59,6 +60,9 @@ def fake_vllm_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
                 model_executor=types.SimpleNamespace(shutdown=lambda: None),
                 engine_core=types.SimpleNamespace(shutdown=lambda: None),
             )
+
+        def get_tokenizer(self) -> str:
+            return "tok"
 
         def chat(
             self,
@@ -163,6 +167,121 @@ def test_load_pipeline_explicit_args_override_extras(
     assert isinstance(kwargs, dict)
     assert kwargs["max_model_len"] == 512
     assert kwargs["foo"] == "bar"
+    client.destroy()
+
+
+def test_split_reasoning_without_a_parser_leaves_the_text_alone(
+    fake_vllm_runtime: dict[str, Any],
+) -> None:
+    # Verifies the trace stays inline when no reasoning parser is configured,
+    # which is what vllm.LLM returns on its own.
+    _ = fake_vllm_runtime
+    client = VLLMOfflineClient(model="m")
+
+    assert client._split_reasoning(" <think>hm</think> answer ") == (
+        None,
+        "<think>hm</think> answer",
+    )
+
+
+def test_split_reasoning_uses_the_configured_parser(
+    fake_vllm_runtime: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Verifies a configured parser is built once, from the engine's tokenizer,
+    # and splits the trace off the answer.
+    _ = fake_vllm_runtime
+    built: list[Any] = []
+
+    class FakeParser:
+        def __init__(self, tokenizer: Any) -> None:
+            built.append(tokenizer)
+
+        def extract_reasoning(
+            self, text: str, request: Any
+        ) -> tuple[str | None, str | None]:
+            reasoning, _, content = text.partition("</think>")
+            return reasoning.replace("<think>", ""), content
+
+        def is_reasoning_end(self, token_ids: list[int]) -> bool:
+            # Stands in for a template that closed the block in the prompt.
+            return token_ids == [99]
+
+    # The fake vllm of `fake_vllm_runtime` is a module, not a package, so the
+    # submodule the client imports has to be registered by hand.
+    monkeypatch.setitem(
+        sys.modules,
+        "vllm.reasoning",
+        types.SimpleNamespace(
+            ReasoningParserManager=types.SimpleNamespace(
+                get_reasoning_parser=lambda name: FakeParser
+            )
+        ),
+    )
+    client = VLLMOfflineClient(model="m", reasoning_parser="qwen3")
+
+    assert client._split_reasoning("<think>hm</think> answer") == (
+        "hm",
+        "answer",
+    )
+    # Second call reuses the parser instead of rebuilding it per sample.
+    client._split_reasoning("<think>again</think> more")
+    assert built == ["tok"]
+
+
+def test_split_reasoning_skips_parsing_when_the_prompt_ended_thinking(
+    fake_vllm_runtime: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Verifies a step run with thinking off keeps its answer. The parser sees
+    # no closing tag in such output and would otherwise call the whole answer
+    # reasoning, leaving the response empty.
+    _ = fake_vllm_runtime
+
+    class FakeParser:
+        def __init__(self, tokenizer: Any) -> None:
+            pass
+
+        def extract_reasoning(
+            self, text: str, request: Any
+        ) -> tuple[str | None, str | None]:
+            return text, None
+
+        def is_reasoning_end(self, token_ids: list[int]) -> bool:
+            return token_ids == [99]
+
+    monkeypatch.setitem(
+        sys.modules,
+        "vllm.reasoning",
+        types.SimpleNamespace(
+            ReasoningParserManager=types.SimpleNamespace(
+                get_reasoning_parser=lambda name: FakeParser
+            )
+        ),
+    )
+    client = VLLMOfflineClient(model="m", reasoning_parser="qwen3")
+
+    # Prompt closed the thinking block: the answer survives untouched.
+    assert client._split_reasoning('{"rating": 4}', [99]) == (
+        None,
+        '{"rating": 4}',
+    )
+    # Prompt left it open: the parser decides, as before.
+    assert client._split_reasoning("still thinking", [1]) == (
+        "still thinking",
+        "",
+    )
+
+
+def test_reasoning_parser_is_not_passed_to_the_engine(
+    fake_vllm_runtime: dict[str, Any],
+) -> None:
+    # Verifies the parser name stays with the client: vllm.LLM does not take
+    # it, so forwarding it would break engine construction.
+    client = VLLMOfflineClient(model="m", reasoning_parser="qwen3")
+    client._ensure_pipeline_loaded()
+
+    assert "reasoning_parser" not in fake_vllm_runtime["llm_kwargs"]
     client.destroy()
 
 

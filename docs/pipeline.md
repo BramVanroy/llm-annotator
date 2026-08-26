@@ -84,11 +84,22 @@ Each step writes several kinds of column:
   `{prefix}reasoning` and, when a schema is set, `{prefix}valid_fields`.
 
 `{prefix}reasoning` holds a reasoning model's trace, separated from the answer
-in `{prefix}response`. It is only filled when the provider hands the trace back
-as its own field: a vLLM step needs `engine.extra.reasoning_parser` set (see
-[Providers and models](#providers-and-models)), and a `claude` step needs a
-thinking budget. Without one, a reasoning model returns its trace inside
-`{prefix}response` instead, tags and all, and this column stays `None`.
+in `{prefix}response`. For either vLLM provider it is filled when the step names
+a parser:
+
+```yaml
+client:
+  engine:
+    reasoning_parser: qwen3   # or deepseek_r1, granite, gemma4, glm45, ...
+```
+
+A served step passes that to `vllm serve` as `--reasoning-parser`, which splits
+the trace off before it reaches the client. An offline step splits it with the
+same vLLM parser inside the client, since `vllm.LLM` returns the trace inline.
+A `claude` step needs no parser: it fills the column from the thinking blocks
+whenever the request carries a thinking budget. Without a parser a reasoning
+model returns its trace inside `{prefix}response`, tags and all, and this column
+stays `None`.
 
 Because schema properties are *not* prefixed, two steps that use the same
 property name would collide. Use `rename` to give a step's output its final
