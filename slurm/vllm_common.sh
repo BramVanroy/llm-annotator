@@ -234,6 +234,26 @@ vllm_wait_until_ready() {
       fi
       sleep 10
     done
-    echo "Ready: ${url}"
+    # SECONDS counts from the job script's own start, so this is the time
+    # from job start to ready -- the number to compare against SERVER_TIME
+    # when sizing it for a new model or config. Formatted the same way
+    # SERVER_TIME itself is (sbatch's [d-]hh:mm:ss), so the two can be read
+    # side by side.
+    echo "Ready: ${url} ($(vllm_format_hms "$SECONDS") since job start)"
   done
+}
+
+# Format a duration in seconds the way sbatch's --time expects it:
+# hh:mm:ss, or d-hh:mm:ss once it spans a day.
+vllm_format_hms() {
+  local total="$1" days hours mins secs
+  days=$(( total / 86400 ))
+  hours=$(( (total % 86400) / 3600 ))
+  mins=$(( (total % 3600) / 60 ))
+  secs=$(( total % 60 ))
+  if (( days > 0 )); then
+    printf '%d-%02d:%02d:%02d' "$days" "$hours" "$mins" "$secs"
+  else
+    printf '%02d:%02d:%02d' "$hours" "$mins" "$secs"
+  fi
 }

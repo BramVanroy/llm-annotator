@@ -35,7 +35,6 @@ cd "$REPO_ROOT"
 : "${ANNOTATE_CONFIG:?Set ANNOTATE_CONFIG to a JSON/YAML pipeline config}"
 : "${STEP_NAME:?Set STEP_NAME to the step of that config to run}"
 : "${NUM_SERVERS:=1}"
-: "${MIN_SERVERS:=1}"
 : "${POOL_WAIT:=3600}"
 
 echo "Starting on $(date)"
@@ -83,9 +82,9 @@ if [[ -n "${POOL_DIR:-}" ]]; then
     ready=$(count_urls)
   done
 
-  if (( ready < MIN_SERVERS )); then
-    echo "Only ${ready} of ${NUM_SERVERS} server(s) registered in ${POOL_DIR}," \
-      "need at least ${MIN_SERVERS}. See the vllm-${STEP_NAME}_*.err logs." >&2
+  if (( ready == 0 )); then
+    echo "No server registered in ${POOL_DIR}." \
+      "See the vllm-${STEP_NAME}_*.err logs." >&2
     exit 1
   fi
 

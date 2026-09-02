@@ -47,7 +47,7 @@ Options:
 Common environment overrides (all optional, see slurm/README.md):
   OUTPUT_DIR, HUB_ID, OVERWRITE=1   override the config for this run
   EXTRA_DEPENDENCY=afterok:123456   hang the chain off another job
-  MIN_SERVERS, POOL_WAIT            how much of a pool a client waits for
+  POOL_WAIT                         how long a client waits for its servers
   CANCEL_SERVERS_ON_EXIT=0          keep servers alive after their step ends
   SERVER_TIME, CLIENT_TIME, ...     one-off overrides of the cluster file
 EOF
@@ -97,13 +97,9 @@ if [[ ! -f "$ANNOTATE_CONFIG" ]]; then
   exit 1
 fi
 
-# How many servers of its pool a client insists on before it starts. Left empty
-# here so the job script's own default applies when it is not set.
-MIN_SERVERS_REQUESTED="${MIN_SERVERS:-}"
-
 # A value left over in this shell from an earlier run must not leak into the
 # jobs through --export=ALL; each job derives its own.
-unset POOL_DIR STEP_NAME SERVER_JOB_ID NUM_SERVERS MIN_SERVERS MODEL
+unset POOL_DIR STEP_NAME SERVER_JOB_ID NUM_SERVERS MODEL
 
 if [[ -x "${VENV_PATH}/bin/llm-annotate" ]]; then
   ANNOTATE_CMD=("${VENV_PATH}/bin/llm-annotate")
@@ -253,8 +249,8 @@ while IFS= read -r step_json; do
         exit 1
       fi
 
-      # An array job, so the whole pool is one id for the client to depend on
-      # and one id to cancel.
+      # An array job, so the whole pool is one id to cancel and one pool
+      # directory for the client to watch.
       SERVER_JOB=$(submit \
         "${ACCOUNT_FLAGS[@]}" \
         --time="$SERVER_TIME" \
@@ -275,14 +271,19 @@ while IFS= read -r step_json; do
       (( DRY_RUN )) || mkdir -p "$POOL_DIR"
       echo "  servers: array ${SERVER_JOB}, ${SERVERS} x ${GPUS_PER_VLLM_SERVER} GPU(s) serving ${MODEL}"
 
-      # `after`, not `afterok`: the client starts as soon as the array begins
-      # running and waits for the servers to report in itself.
+      # No Slurm dependency on SERVER_JOB: for a job array, `after:<jobid>` is
+      # only satisfied once every element has started, not the first one, so
+      # gating the client on it can leave an already-ready server sitting
+      # idle behind pool-mates that are still queued (e.g. behind a per-user
+      # GPU quota) -- burning that server's own time limit before the client
+      # ever gets to use it. The client is submitted on the same dependency
+      # as the servers instead, and waits for them itself via POOL_WAIT.
       CLIENT_JOB=$(submit \
         "${CLIENT_FLAGS[@]}" \
         "${CPU_FLAGS[@]}" \
         "${CLIENT_SBATCH_ARGS[@]}" \
-        --dependency="after:${SERVER_JOB}" \
-        --export="${STEP_EXPORT},POOL_DIR=${POOL_DIR},NUM_SERVERS=${SERVERS},MIN_SERVERS=${MIN_SERVERS_REQUESTED:-1},SERVER_JOB_ID=${SERVER_JOB}" \
+        "${DEP[@]}" \
+        --export="${STEP_EXPORT},POOL_DIR=${POOL_DIR},NUM_SERVERS=${SERVERS},SERVER_JOB_ID=${SERVER_JOB}" \
         slurm/vllm_annotate.sh)
       ;;
 

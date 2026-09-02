@@ -184,6 +184,18 @@ Ports are `VLLM_PORT + array task id`, then probed upward for the first free one
 Two array tasks can land on the same node (a 4-GPU node fits two
 `tensor_parallel_size: 2` servers), so a fixed port would collide.
 
+The client carries no Slurm dependency on its own step's server array. For a
+job array, Slurm's `after:<jobid>` dependency is satisfied only once *every*
+array element has started, not the first one — so gating the client's start
+on it would leave an already-ready server sitting idle behind pool-mates that
+are still queued (a per-user GPU quota is enough to do this: one server can
+occupy the whole quota, so the rest of the pool queues behind it), burning
+that server's own `SERVER_TIME` before the client ever gets to use it.
+Instead, the client job is submitted on the same dependency as the server
+array (so it still waits for the *previous* step to finish) and, once
+running, waits for its own step's servers to register itself, via
+`POOL_WAIT`.
+
 When a step finishes, its client `scancel`s that step's server array instead of
 leaving GPU jobs idling until their time limit. Set `CANCEL_SERVERS_ON_EXIT=0`
 to keep them alive.
@@ -198,8 +210,7 @@ are submitted with `--export=ALL`.
 | --- | --- | --- |
 | `ANNOTATE_CONFIG` | *the positional argument* | JSON/YAML pipeline config to run |
 | `EXTRA_DEPENDENCY` | – | Slurm dependency expression (e.g. `afterok:123456`) the chain waits for. Applied to the **first** submitted step only; later steps inherit it through their predecessor, which is what lets several submissions be chained into one workflow. |
-| `MIN_SERVERS` | `1` | Servers a step insists on before the client starts. Raise it to require more of the pool up front. |
-| `POOL_WAIT` | `3600` | Seconds a client waits for its servers to register |
+| `POOL_WAIT` | `3600` | Seconds a client waits for at least one of its servers to register |
 | `VLLM_PORT` | `8000` | Base port a server starts probing from. The array task id is added to it, then the first free port is taken. |
 | `READY_TIMEOUT` | `1800` | Seconds a server waits for its own `/health` before giving up |
 | `CANCEL_SERVERS_ON_EXIT` | `1` | Whether a finished client `scancel`s its step's server array. `0` leaves the GPUs running. |
