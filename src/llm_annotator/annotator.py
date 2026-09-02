@@ -301,6 +301,7 @@ class Annotator:
         dataset: Dataset | None = None,
         dataset_config: str | None = None,
         data_dir: str | None = None,
+        data_files: str | list[str] | dict[str, str | list[str]] | None = None,
         dataset_split: str | None = None,
         max_num_samples: int | None = None,
         shuffle_seed: int | None = None,
@@ -323,6 +324,7 @@ class Annotator:
             dataset: Pre-loaded dataset to use instead of loading from name/path.
             dataset_config: Dataset configuration name (optional).
             data_dir: Data directory for local datasets (optional).
+            data_files: Specific file(s) for local datasets (optional).
             dataset_split: Specific split to load (optional).
             max_num_samples: Maximum number of samples to process.
             shuffle_seed: Seed for dataset shuffling (optional).
@@ -373,7 +375,10 @@ class Annotator:
         # Split verification and defaulting
         if dataset_name:
             split_names = get_dataset_split_names(
-                dataset_name, config_name=dataset_config
+                dataset_name,
+                config_name=dataset_config,
+                data_dir=data_dir,
+                data_files=data_files,
             )
             if not dataset_split:
                 if len(split_names) == 1:
@@ -393,6 +398,7 @@ class Annotator:
                 dataset_name,
                 name=dataset_config,
                 data_dir=data_dir,
+                data_files=data_files,
                 split=dataset_split,
             )
 
@@ -840,6 +846,7 @@ class Annotator:
         dataset: Dataset | None = None,
         dataset_config: str | None = None,
         data_dir: str | None = None,
+        data_files: str | list[str] | dict[str, str | list[str]] | None = None,
         dataset_split: str | None = None,
         max_num_samples: int | None = None,
         shuffle_seed: int | None = None,
@@ -872,6 +879,7 @@ class Annotator:
             dataset: Pre-loaded dataset to use instead of loading from name/path.
             dataset_config: Dataset configuration name (optional).
             data_dir: Data directory for local datasets (optional).
+            data_files: Specific file(s) for local datasets (optional).
             dataset_split: Specific split to load (optional).
             max_num_samples: Maximum number of samples to prepare.
             shuffle_seed: Seed for dataset shuffling.
@@ -962,6 +970,7 @@ class Annotator:
             dataset=dataset,
             dataset_config=dataset_config,
             data_dir=data_dir,
+            data_files=data_files,
             dataset_split=dataset_split,
             max_num_samples=max_num_samples,
             shuffle_seed=shuffle_seed,
@@ -1369,6 +1378,7 @@ class Annotator:
         dataset: Dataset | None = None,
         dataset_config: str | None = None,
         data_dir: str | None = None,
+        data_files: str | list[str] | dict[str, str | list[str]] | None = None,
         dataset_split: str | None = None,
         max_num_samples: int | None = None,
         shuffle_seed: int | None = None,
@@ -1411,6 +1421,7 @@ class Annotator:
             dataset: Pre-loaded dataset to annotate instead of loading one.
             dataset_config: Dataset configuration name.
             data_dir: Data directory for local datasets.
+            data_files: Specific file(s) for local datasets.
             dataset_split: Dataset split to load.
             max_num_samples: Maximum number of samples to annotate.
             shuffle_seed: Seed for dataset shuffling.
@@ -1472,6 +1483,7 @@ class Annotator:
             dataset=dataset,
             dataset_config=dataset_config,
             data_dir=data_dir,
+            data_files=data_files,
             dataset_split=dataset_split,
             max_num_samples=max_num_samples,
             shuffle_seed=shuffle_seed,

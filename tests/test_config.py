@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from llm_annotator.config import (
     ClientConfig,
+    DatasetConfig,
     EngineConfig,
     PipelineConfig,
     StepConfig,
@@ -461,6 +462,30 @@ def test_dataset_needs_exactly_one_source() -> None:
         )
     with pytest.raises(ValueError, match="exactly one of 'name' or 'path'"):
         PipelineConfig.model_validate(minimal_config(dataset={}))
+
+
+@pytest.mark.parametrize(
+    "data_files",
+    [
+        "data.jsonl",
+        ["a.jsonl", "b.jsonl"],
+        {"train": "train.jsonl", "test": ["a.jsonl", "b.jsonl"]},
+    ],
+)
+def test_dataset_config_accepts_data_files_shapes(
+    data_files: str | list[str] | dict[str, str | list[str]],
+) -> None:
+    config = DatasetConfig.model_validate(
+        {"name": "json", "data_files": data_files}
+    )
+    assert config.data_files == data_files
+
+
+def test_dataset_config_data_dir_and_data_files_reject_path() -> None:
+    with pytest.raises(ValueError, match="only apply to 'name'"):
+        DatasetConfig.model_validate({"path": "b", "data_dir": "d"})
+    with pytest.raises(ValueError, match="only apply to 'name'"):
+        DatasetConfig.model_validate({"path": "b", "data_files": "data.jsonl"})
 
 
 def test_step_dir_is_numbered(tmp_path: Path) -> None:

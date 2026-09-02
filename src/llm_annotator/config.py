@@ -207,8 +207,10 @@ class DatasetConfig(_StrictBase):
     """Source dataset for the first step of a pipeline.
 
     Exactly one of ``name`` or ``path`` is used: ``name`` is handed to
-    ``datasets.load_dataset`` (a Hub id or a builder name), ``path`` loads a
-    dataset previously written with ``save_to_disk``.
+    ``datasets.load_dataset`` (a Hub id or a builder name, e.g. ``"json"`` to
+    load a local directory of JSON Lines files via ``data_dir`` or
+    ``data_files``), ``path`` loads a dataset previously written with
+    ``save_to_disk``. ``data_dir`` and ``data_files`` only apply to ``name``.
 
     Attributes:
         name: Hub dataset id or builder name.
@@ -216,6 +218,8 @@ class DatasetConfig(_StrictBase):
         config: Dataset configuration name.
         split: Split to load. Required when the dataset has several splits.
         data_dir: Data directory for local/loader datasets.
+        data_files: Specific file(s) for local/loader datasets, as a single
+            path, a list of paths, or a mapping of split name to path(s).
         max_num_samples: Truncate the dataset to this many samples.
         shuffle_seed: Shuffle the dataset with this seed before truncating.
     """
@@ -225,6 +229,7 @@ class DatasetConfig(_StrictBase):
     config: str | None = None
     split: str | None = None
     data_dir: str | None = None
+    data_files: str | list[str] | dict[str, str | list[str]] | None = None
     max_num_samples: int | None = None
     shuffle_seed: int | None = None
 
@@ -234,6 +239,12 @@ class DatasetConfig(_StrictBase):
         if (self.name is None) == (self.path is None):
             raise ValueError(
                 "Provide exactly one of 'name' or 'path' in the dataset block."
+            )
+        if self.path is not None and (
+            self.data_dir is not None or self.data_files is not None
+        ):
+            raise ValueError(
+                "'data_dir' and 'data_files' only apply to 'name', not 'path'."
             )
         return self
 

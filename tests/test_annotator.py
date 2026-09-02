@@ -604,7 +604,7 @@ def test_load_dataset_with_dataset_name_split_selection(
 
     monkeypatch.setattr(
         "llm_annotator.annotator.get_dataset_split_names",
-        lambda dataset_name, config_name=None: ["train"],
+        lambda dataset_name, config_name=None, **kwargs: ["train"],
     )
     monkeypatch.setattr(
         "llm_annotator.annotator.load_dataset",
@@ -630,7 +630,10 @@ def test_load_dataset_split_validation_errors(
 
     monkeypatch.setattr(
         "llm_annotator.annotator.get_dataset_split_names",
-        lambda dataset_name, config_name=None: ["train", "test"],
+        lambda dataset_name, config_name=None, **kwargs: [
+            "train",
+            "test",
+        ],
     )
 
     with pytest.raises(ValueError, match="multiple splits"):
@@ -649,6 +652,49 @@ def test_load_dataset_split_validation_errors(
             dataset_split="validation",
             prompt_fields=("text",),
         )
+
+
+def test_load_dataset_from_local_jsonl_data_dir(tmp_path: Path) -> None:
+    # Exercises the real datasets.load_dataset/get_dataset_split_names calls
+    # (not mocked) against a local directory of .jsonl files, the scenario
+    # 'name: "json"' + 'data_dir' is meant to support.
+    (tmp_path / "data.jsonl").write_text(
+        "\n".join(json.dumps({"text": t}) for t in ["a", "b", "c"]),
+        encoding="utf-8",
+    )
+    annotator = Annotator(client=DummyClient(), verbose=False)
+
+    loaded = annotator._load_dataset(
+        prompt_template="Q: {text}",
+        idx_column="idx",
+        dataset_name="json",
+        data_dir=str(tmp_path),
+        prompt_fields=("text",),
+    )
+
+    assert len(loaded) == 3
+    assert "messages" in loaded.column_names
+
+
+def test_load_dataset_from_local_jsonl_data_files(tmp_path: Path) -> None:
+    # 'data_files' selects specific files instead of a whole directory.
+    (tmp_path / "keep.jsonl").write_text(
+        json.dumps({"text": "a"}) + "\n", encoding="utf-8"
+    )
+    (tmp_path / "skip.jsonl").write_text(
+        json.dumps({"text": "b"}) + "\n", encoding="utf-8"
+    )
+    annotator = Annotator(client=DummyClient(), verbose=False)
+
+    loaded = annotator._load_dataset(
+        prompt_template="Q: {text}",
+        idx_column="idx",
+        dataset_name="json",
+        data_files=str(tmp_path / "keep.jsonl"),
+        prompt_fields=("text",),
+    )
+
+    assert len(loaded) == 1
 
 
 def test_run_annotation_output_schema_validation(tmp_path: Path) -> None:

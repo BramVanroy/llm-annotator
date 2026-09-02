@@ -17,6 +17,7 @@ from llm_annotator.clients.base import (
 from llm_annotator.config import ClientConfig, PipelineConfig
 from llm_annotator.pipeline import (
     _hosts_file_override,
+    _load_input_dataset,
     main,
     run_pipeline,
 )
@@ -140,6 +141,19 @@ def source_dataset(tmp_path: Path, num_rows: int = 4) -> Path:
     return path
 
 
+def source_jsonl_dir(tmp_path: Path, num_rows: int = 4) -> Path:
+    """Write a directory of .jsonl files holding a tiny source dataset."""
+    path = tmp_path / "source_jsonl"
+    path.mkdir()
+    (path / "data.jsonl").write_text(
+        "\n".join(
+            json.dumps({"text": f"document {i}"}) for i in range(num_rows)
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def qa_schema() -> dict[str, Any]:
     return {
         "type": "object",
@@ -212,6 +226,82 @@ def three_step_config(tmp_path: Path) -> PipelineConfig:
             ],
         }
     )
+
+
+# --- source dataset loading ---------------------------------------------------
+
+
+def test_load_input_dataset_reads_a_save_to_disk_path(tmp_path: Path) -> None:
+    config = two_step_config(tmp_path)
+    dataset = _load_input_dataset(config)
+    assert dataset is not None
+    assert len(dataset) == 4
+    assert dataset.column_names == ["text"]
+
+
+def test_load_input_dataset_resolves_relative_to_config_dir(
+    tmp_path: Path,
+) -> None:
+    source_dataset(tmp_path, num_rows=3)
+    config = PipelineConfig.model_validate(
+        {
+            "output_dir": tmp_path / "out",
+            "config_dir": tmp_path,
+            "dataset": {"path": "source"},
+            "client": {"provider": "openai", "model": "m"},
+            "steps": [{"name": "one", "prompt": "1 {text}"}],
+        }
+    )
+    dataset = _load_input_dataset(config)
+    assert dataset is not None
+    assert len(dataset) == 3
+
+
+def test_load_input_dataset_returns_none_for_a_hub_style_source(
+    tmp_path: Path,
+) -> None:
+    # A Hub id or builder name is resolved later, by annotate_dataset.
+    config = PipelineConfig.model_validate(
+        {
+            "output_dir": tmp_path / "out",
+            "config_dir": tmp_path,
+            "dataset": {"name": "json", "data_dir": str(tmp_path)},
+            "client": {"provider": "openai", "model": "m"},
+            "steps": [{"name": "one", "prompt": "1 {text}"}],
+        }
+    )
+    assert _load_input_dataset(config) is None
+
+
+def test_pipeline_runs_over_a_local_jsonl_data_dir(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    # 'name: "json"' + 'data_dir' should load a folder of .jsonl files end
+    # to end, exercising the real datasets.load_dataset call.
+    jsonl_dir = source_jsonl_dir(tmp_path, num_rows=3)
+    config = two_step_config(
+        tmp_path,
+        dataset={"name": "json", "data_dir": str(jsonl_dir)},
+    )
+    dataset = run_pipeline(config)
+    assert len(dataset) == 3
+    assert {"text", "question_v1", "rating"} <= set(dataset.column_names)
+
+
+def test_pipeline_runs_over_local_jsonl_data_files(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    # 'data_files' selects specific files instead of a whole directory.
+    jsonl_dir = source_jsonl_dir(tmp_path, num_rows=2)
+    config = two_step_config(
+        tmp_path,
+        dataset={
+            "name": "json",
+            "data_files": str(jsonl_dir / "data.jsonl"),
+        },
+    )
+    dataset = run_pipeline(config)
+    assert len(dataset) == 2
 
 
 # --- chaining ----------------------------------------------------------------
