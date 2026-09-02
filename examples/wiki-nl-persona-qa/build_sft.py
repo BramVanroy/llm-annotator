@@ -42,6 +42,8 @@ CARRIED_COLUMNS = (
     "url",
     "persona",
     "question_type",
+    "question_length",
+    "answer_length",
 )
 """Provenance kept on every SFT row. The article itself is deliberately not
 carried: it is the grounding for generation, not part of the training sample,

@@ -27,13 +27,16 @@ the same weights.
 Five stages, run in this order:
 
 1. `prepare_seed.py` filters `HuggingFaceFW/finewiki` (`nl` config) for
-   non-stub articles short enough to fit one context window, samples N of them,
-   and gives each one a random persona from `nvidia/Nemotron-Personas-Belgium`
-   (`nl_BE` split) and a random question type.
+   non-stub articles, splits anything longer than one context window into
+   several chunks along its `## ` section headings instead of dropping it,
+   drops articles and chunks that look malformed or non-prose (see
+   "Chunking and quality gates" below), samples N chunks, and gives each one
+   a random persona from `nvidia/Nemotron-Personas-Belgium` (`nl_BE` split),
+   a random question type, and a random question/answer length.
 2. `generate/pipeline-qa.yaml` is one config with two steps on one model:
-   `write-question` produces a `question` column against a JSON schema, then
-   `answer-question` answers it with thinking on. Its trace lands in
-   `answer-question_reasoning` and the answer alone in
+   `write-question` writes free-text questions, renamed straight to a
+   `question` column, then `answer-question` answers it with thinking on. Its
+   trace lands in `answer-question_reasoning` and the answer alone in
    `answer-question_response`, because that step is served with
    `--reasoning-parser qwen3`.
 3. `filter_rows.py` drops the rows that are unusable before any GPU is spent
@@ -45,11 +48,43 @@ Five stages, run in this order:
 
 Stages 1, 3 and 5 are plain CPU scripts; 2 and 4 want GPUs and go to Slurm.
 
+## Chunking and quality gates
+
+An article longer than `--max-words` is split on its `## ` section headings
+rather than dropped: `pack_sections` glues consecutive whole sections into
+chunks first-fit, in order, so every chunk is at most `--max-words` words and
+none overlap. A section that alone exceeds `--max-words` (rare, but "History"
+sections can run long) is cut to the last complete sentence that fits, and
+whatever is left of it is discarded rather than carried into another chunk.
+Sentence splitting uses a blank spaCy Dutch pipeline with only a rule-based
+sentencizer (the `spacy` extra: `uv sync --extra spacy`), no model download
+needed.
+
+Two gates run alongside that, both there because finewiki's markdown is not
+always well-formed:
+
+- `keep_section_sizes` drops an article outright if one of its sections runs
+  into the hundreds of thousands of characters. That is not a long section,
+  it is leftover markup or a raw table dump, and past a point it would blow
+  spaCy's own `nlp.max_length` (1,000,000 characters by default) besides.
+  `--max-section-chars` (default 200,000) is set far above any real section
+  so this only catches that kind of malformed content.
+- `keep_running_text` drops a chunk that reads as a table or bullet list
+  rather than running prose. Neither carries normal sentence-ending
+  punctuation, so the sentencizer reads a table as one giant "sentence"
+  (average words/sentence far above `--max-avg-sentence-words`, default 60)
+  or a list of short items as a run of short fragments (average far below
+  `--min-avg-sentence-words`, default 4). Ordinary prose lands in between.
+
+Both gates are heuristics tuned against `HuggingFaceFW/finewiki`'s actual
+mess, not a general prose classifier; read a sample of what they drop with
+`--num-samples 500` before trusting the defaults on a very different corpus.
+
 ## Where the variability comes from
 
 Half a million questions written from one prompt collapse into one voice asking
-one kind of question. Two cheap levers spread them out, both decided in
-`prepare_seed.py` rather than by the model:
+one kind of question, at one length. Four cheap levers spread them out, all
+decided in `prepare_seed.py` rather than by the model:
 
 - **Persona.** A one-sentence Belgian-Dutch persona per article ("Ilse Sebrechts
   is een uiterst gedisciplineerde verzekeringsconsulent uit Oostende...") shapes
@@ -59,14 +94,25 @@ one kind of question. Two cheap levers spread them out, both decided in
   chronologie, vergelijking, gevolg), assigned at random. Letting the model pick
   its own type instead collapses onto "feit" for most articles, which is exactly
   the diversity problem the persona is there to solve.
+- **Question length.** Either a one-sentence question, or a few sentences that
+  open with an invented, generic reason for asking (out of interest, for work,
+  for a project, because a kid asked) before the question itself. 60/40 short
+  to long.
+- **Answer length.** Either one paragraph or two to four, weighted per row by
+  `question_type`: `uitleg`, `chronologie`, `vergelijking` and `gevolg` draw
+  the longer option 70% of the time, `feit` and `definitie` only 15%, so the
+  answer's depth tracks what the question actually needs instead of varying
+  independently of it.
 
 The persona reaches `write-question` and stops there. It is who *asks*; an
 answer conditioned on it would put the persona into the assistant turn, which is
 the half that becomes the training target. The prompt also forbids naming the
-persona inside the question ("als verpleegkundige vraag ik me af"), so the
-persona shows up as register and angle, never as content. For the same reason
-the judge never sees it: a judge that knew the persona would reward questions
-that describe their asker.
+persona's literal profession, name, city or age inside the question, so the
+persona shows up as register and angle rather than as a stated fact; only a
+long question may add a generic reason for asking ("voor mijn werk", "mijn
+kleinkind vroeg me dit"), and even then it must stay generic rather than quote
+the persona description. For the same reason the judge never sees the persona:
+a judge that knew it would reward questions that describe their asker.
 
 ## Rubric
 
@@ -101,8 +147,8 @@ be thrown away anyway.
 `enable_thinking: true` and is served with `--reasoning-parser qwen3`. Without
 the parser vLLM leaves `<think>...</think>` inside the message content; with it,
 the trace arrives separately and the annotator writes it to
-`answer-question_reasoning` (added in v0.13.0). The step has no `output_schema`,
-since the answer is free text.
+`answer-question_reasoning` (added in v0.13.0). Neither step has an
+`output_schema`: both the question and the answer are free text.
 
 A trace that talks about "het artikel" is a problem the answer prompt cannot
 fully prevent: at inference time there is no article, so such a trace teaches
@@ -118,13 +164,25 @@ Check any change to it with `llm-annotate <config> --serve-args answer-question`
 ## Running it
 
 ```sh
-# 1. Seed. Raise --num-samples for the real run; 500 is a sane smoke test.
-uv run examples/wiki-nl-persona-qa/prepare_seed.py \
-  --num-samples 50000 --num-proc 16 \
+# 0. Once per clone: prepare_seed.py needs spaCy for sentence-level
+# truncation and the running-text quality gate.
+uv sync --dev --extra spacy
+
+# 1. Seed. Defaults to every chunk that passes the quality filter.
+# Optional: relevant for certain SLURM envs: point the datasets cache at the node's
+# local disk, not the NFS-mounted home: num-proc workers writing shards to a
+# network filesystem concurrently is what turns this into a multi-hour crawl
+# instead of a few minutes.
+export HF_HOME=/tmp/$USER/hf_home
+uv run --frozen examples/wiki-nl-persona-qa/prepare_seed.py \
+  --num-proc "$(nproc)" \
   --out examples/wiki-nl-persona-qa/outputs/seed
 
 # 2. Question + answer, two chained steps on one model.
-ANNOTATE_CONFIG=examples/wiki-nl-persona-qa/generate/pipeline-qa.yaml \
+# You may have to execute this command multiple commands to complete
+# it on your hardware but do not worry: rerunning the script just continues
+# where it left of
+CLIENT_TIME=04:00:00 SERVER_TIME=03:30:00 ANNOTATE_CONFIG=examples/wiki-nl-persona-qa/generate/pipeline-qa.yaml \
   ./slurm/submit_pipeline.sh
 
 # 3. Filter, once the generate jobs have finished.
@@ -154,19 +212,22 @@ the real ones from a speed benchmark for these models on your GPUs.
 
 Relative to `examples/wiki-nl-persona-qa/outputs/`:
 
-- `seed`: `title`, `text`, `url`, `persona`, `question_type`.
+- `seed`: `title`, `text`, `url`, `chunk_index`, `num_chunks`, `persona`,
+  `question_type`, `question_length`, `answer_length`. `chunk_index` /
+  `num_chunks` are `0`/`1` for an article that fit within `--max-words`
+  untouched, and mark which piece of a split article `text` holds otherwise.
 - `generate/final`: the seed plus `question`, `answer-question_response` (the
   answer), `answer-question_reasoning` (the trace) and both steps' bookkeeping
   columns.
 - `qa-split`: `idx`, `title`, `url`, `text`, `persona`, `question_type`,
-  `question`, `reasoning`, `answer`, `has_reasoning`,
-  `reasoning_mentions_source`, `num_tokens`.
+  `question_length`, `answer_length`, `question`, `reasoning`, `answer`,
+  `has_reasoning`, `reasoning_mentions_source`, `num_tokens`.
 - `qa-split_filter_stats.json`: rows in and out, the keep rate, how many rows
   carry a trace, and a count per drop reason.
 - `judge/final`: the above plus the seven rubric fields.
 - `sft/plain`: `messages` (user question, assistant answer), the rubric scores,
-  `quality_score`, and `idx` / `title` / `url` / `persona` / `question_type` for
-  provenance.
+  `quality_score`, and `idx` / `title` / `url` / `persona` / `question_type` /
+  `question_length` / `answer_length` for provenance.
 - `sft/reasoning`: the subset that has a usable trace. Same columns, with the
   assistant turn rendered as `<think>\n...\n</think>\n\nanswer`, plus `thinking`
   and `content` as separate columns so the trace can be re-rendered for a
@@ -180,10 +241,11 @@ Relative to `examples/wiki-nl-persona-qa/outputs/`:
   not context for the trained model. A retrieval-style variant that keeps it as
   a system message is a different dataset; build it by carrying `text` through
   `build_sft.py`.
-- **No deduplication.** 2M finewiki articles sampled without replacement give
-  distinct articles, but two personas can still produce near-identical questions
-  about the same popular topic. Near-duplicate filtering on the question column
-  belongs before training, not here.
+- **No deduplication.** Chunks are sampled without replacement, but a long
+  article split into several chunks can end up contributing more than one of
+  them, and two personas can still produce near-identical questions about the
+  same popular topic. Near-duplicate filtering on the question column belongs
+  before training, not here.
 - **One judge, one pass.** Nothing measures how stable the judge's own 1-5
   ratings are, so the thresholds are a quality filter, not a calibrated
   measurement. Judging a sample twice would quantify that, at twice the cost.

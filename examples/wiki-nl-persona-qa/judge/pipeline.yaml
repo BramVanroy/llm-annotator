@@ -21,7 +21,6 @@ client:
   model: Qwen/Qwen3.6-27B-FP8
   batch_size: 32
   queue_size: 8
-  wait_for_servers: 1800
   options:
     # A judge should return the same score for the same pair, so it
     # greedy-decodes instead of using the model card's sampling settings. At
@@ -48,8 +47,9 @@ client:
     # the safety net for a row where the model opens a <think> block anyway:
     # the block is kept out of the JSON the schema is validated against.
     reasoning_parser: qwen3
-  pool:
-    servers: 2
+    speculative_config:
+      method: qwen3_next_mtp
+      num_speculative_tokens: 2
 
 steps:
   - name: judge-qa

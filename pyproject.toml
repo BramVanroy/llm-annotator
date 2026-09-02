@@ -44,6 +44,11 @@ anthropic = [
 openai = [
     "openai>=2.36.0,<3",
 ]
+# Used by examples/wiki-nl-persona-qa/prepare_seed.py to sentence-split an
+# oversized section. A blank pipeline + sentencizer only, no model download.
+spacy = [
+    "spacy>=3.8,<4",
+]
 
 [dependency-groups]
 # Prebuilt FlashInfer kernels for machines that actually serve models:

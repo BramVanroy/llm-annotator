@@ -112,6 +112,8 @@ def filter_generated(
                 "text": row.get("text") or "",
                 "persona": row.get("persona") or "",
                 "question_type": row.get("question_type") or "",
+                "question_length": row.get("question_length") or "",
+                "answer_length": row.get("answer_length") or "",
                 "question": question,
                 "reasoning": reasoning,
                 "answer": answer,
