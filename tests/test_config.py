@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from llm_annotator.config import (
     ClientConfig,
@@ -340,6 +341,16 @@ def test_task_prefix_defaults_to_step_name() -> None:
         ).resolved_task_prefix()
         == "p_"
     )
+
+
+def test_max_consecutive_failed_batches_defaults_and_rejects_negative() -> (
+    None
+):
+    assert (
+        StepConfig(name="s", prompt="x").max_consecutive_failed_batches == 10
+    )
+    with pytest.raises(ValidationError):
+        StepConfig(name="s", prompt="x", max_consecutive_failed_batches=-1)
 
 
 def test_resolved_prompts_repeats_single_prompt() -> None:

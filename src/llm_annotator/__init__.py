@@ -10,6 +10,9 @@ from .clients.exceptions import ConfigurationError as ConfigurationError
 from .clients.exceptions import LLMClientError as LLMClientError
 from .clients.exceptions import ParsingError as ParsingError
 from .clients.exceptions import ProviderError as ProviderError
+from .clients.exceptions import (
+    TooManyConsecutiveFailedBatchesError as TooManyConsecutiveFailedBatchesError,
+)
 from .clients.openai_client import OpenAIClient as OpenAIClient
 from .clients.openai_client import OpenAIRuntimeOptions as OpenAIRuntimeOptions
 from .clients.vllm_offline_client import (

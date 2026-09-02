@@ -327,6 +327,7 @@ class VLLMOnlineClient(OpenAIClient[VLLMOnlineRuntimeOptions]):
             )
         # avoid unused variable warning for poll_interval, which is ignored
         _ = poll_interval
+        import httpx
         from openai.types.chat.chat_completion import ChatCompletion
 
         options = options or self._default_options()
@@ -355,6 +356,18 @@ class VLLMOnlineClient(OpenAIClient[VLLMOnlineRuntimeOptions]):
             response = http_client.post(batch_url, json=request_payload)
             response.raise_for_status()
             data = response.json()
+        except httpx.HTTPStatusError as exc:
+            # exc's own message drops the response body, which is where
+            # vLLM puts the actual reason (e.g. context length, unsupported
+            # param), so surface it explicitly instead of just the status.
+            error_response = self._handle_error(
+                ProviderError(
+                    f"vLLM batch endpoint returned"
+                    f" {exc.response.status_code}: {exc.response.text}"
+                ),
+                context="vLLM batch request failed",
+            )
+            return [error_response for _ in messages]
         except Exception as exc:
             error_response = self._handle_error(
                 exc, context="vLLM batch request failed"

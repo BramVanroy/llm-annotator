@@ -51,6 +51,9 @@ from llm_annotator.clients.base import (
     ProviderRuntimeOptions,
     Response,
 )
+from llm_annotator.clients.exceptions import (
+    TooManyConsecutiveFailedBatchesError,
+)
 from llm_annotator.clients.vllm_offline_client import VLLMOfflineClient
 from llm_annotator.logging_utils import get_logger
 from llm_annotator.utils import (
@@ -1031,6 +1034,7 @@ class Annotator:
         num_retries_invalid: int = 5,
         system_message: str | None = None,
         keep_idx_column: bool = False,
+        max_consecutive_failed_batches: int = 10,
     ) -> Dataset:
         """Run model generation on already prepared annotation inputs.
 
@@ -1066,12 +1070,20 @@ class Annotator:
             num_retries_invalid: Number of retries for invalid outputs.
             system_message: Optional system message for chat prompts.
             keep_idx_column: Whether to keep idx column in final dataset.
+            max_consecutive_failed_batches: Abort the run once this many
+                batches in a row come back with every sample errored (e.g. a
+                vLLM server that died mid-run), instead of continuing to
+                dispatch batches against a backend that isn't responding.
+                Set to 0 to disable.
 
         Returns:
             Final concatenated annotation dataset.
 
         Raises:
             ValueError: If no prepared data source can be resolved.
+            TooManyConsecutiveFailedBatchesError: If
+                ``max_consecutive_failed_batches`` consecutive batches fail
+                entirely.
         """
         upload_every_n_samples = upload_every_n_samples or 0
         if (
@@ -1082,6 +1094,12 @@ class Annotator:
                 "'max_samples_per_output_file' must be None or 0 or a positive integer"
             )
         max_samples_per_output_file = max_samples_per_output_file or 0
+
+        if max_consecutive_failed_batches < 0:
+            raise ValueError(
+                "'max_consecutive_failed_batches' must be 0 or a positive"
+                " integer"
+            )
 
         if upload_every_n_samples < 0 or not isinstance(
             upload_every_n_samples, int
@@ -1247,6 +1265,7 @@ class Annotator:
             num_retries_invalid=num_retries_invalid,
         )
 
+        consecutive_failed_batches = 0
         try:
             for batch, results in annotated_batches:
                 batch_size = len(batch[idx_column])
@@ -1298,6 +1317,26 @@ class Annotator:
                             processed_n_samples=processed_n_samples,
                         )
                         fhout = pfout.open("a", encoding="utf-8")
+
+                batch_failed = bool(results) and all(
+                    res.get(f"{task_prefix}error") is not None
+                    for res in results
+                )
+                consecutive_failed_batches = (
+                    consecutive_failed_batches + 1 if batch_failed else 0
+                )
+                if (
+                    max_consecutive_failed_batches
+                    and consecutive_failed_batches
+                    >= max_consecutive_failed_batches
+                ):
+                    raise TooManyConsecutiveFailedBatchesError(
+                        f"{consecutive_failed_batches} consecutive batches"
+                        " failed entirely; aborting instead of continuing"
+                        " to burn compute against a backend that isn't"
+                        " responding. Last error:"
+                        f" {results[-1].get(f'{task_prefix}error')}"
+                    )
         finally:
             # Closing the generator lets alternative execution strategies
             # (e.g. the multi-server queue) shut their workers down when the
@@ -1353,6 +1392,7 @@ class Annotator:
         postprocess_fn: Callable | None = None,
         num_retries_invalid: int = 5,
         keep_idx_column: bool = False,
+        max_consecutive_failed_batches: int = 10,
     ) -> Dataset:
         """Annotate an existing dataset in one call.
 
@@ -1397,12 +1437,18 @@ class Annotator:
             postprocess_fn: Optional postprocessing callback.
             num_retries_invalid: Number of retries for invalid outputs.
             keep_idx_column: Whether to keep the index column in the result.
+            max_consecutive_failed_batches: Abort the run once this many
+                batches in a row come back with every sample errored.
+                Set to 0 to disable.
 
         Returns:
             The concatenated annotation dataset.
 
         Raises:
             TypeError: If no prompt template is provided.
+            TooManyConsecutiveFailedBatchesError: If
+                ``max_consecutive_failed_batches`` consecutive batches fail
+                entirely.
         """
         if prompt_template is None:
             prompt_template = full_prompt_template
@@ -1459,6 +1505,7 @@ class Annotator:
             num_retries_invalid=num_retries_invalid,
             system_message=system_message,
             keep_idx_column=keep_idx_column,
+            max_consecutive_failed_batches=max_consecutive_failed_batches,
         )
 
     @destroy_on_error
@@ -1483,6 +1530,7 @@ class Annotator:
         postprocess_fn: Callable | None = None,
         num_retries_invalid: int = 5,
         keep_idx_column: bool = False,
+        max_consecutive_failed_batches: int = 10,
     ) -> Dataset:
         """Generate a new dataset from prompts.
 
@@ -1509,12 +1557,18 @@ class Annotator:
             postprocess_fn: Optional postprocessing callback.
             num_retries_invalid: Number of retries for invalid outputs.
             keep_idx_column: Whether to keep the index column in the result.
+            max_consecutive_failed_batches: Abort the run once this many
+                batches in a row come back with every sample errored.
+                Set to 0 to disable.
 
         Returns:
             The concatenated annotation dataset.
 
         Raises:
             ValueError: If no prompts are provided.
+            TooManyConsecutiveFailedBatchesError: If
+                ``max_consecutive_failed_batches`` consecutive batches fail
+                entirely.
         """
         if isinstance(prompts, str):
             if max_num_samples is None:
@@ -1558,6 +1612,7 @@ class Annotator:
             postprocess_fn=postprocess_fn,
             num_retries_invalid=num_retries_invalid,
             keep_idx_column=keep_idx_column,
+            max_consecutive_failed_batches=max_consecutive_failed_batches,
         )
 
     def _load_progress_files(self, process_pdout: Path) -> Dataset:
@@ -2178,7 +2233,10 @@ class VLLMQueueAnnotator(Annotator):
             ``{col_name: [value_0, value_1, ...]}`` and ``results`` is a list
             of result dicts with one item per sample. They remain aligned by
             position, so ``results[i]`` corresponds to the sample at
-            ``batch[col][i]`` for each column ``col``.
+            ``batch[col][i]`` for each column ``col``. Note that
+            [`run_annotation`][llm_annotator.annotator.Annotator.run_annotation]'s
+            consecutive-failed-batch count is therefore also in completion
+            order here, not dataset order.
         """
         batches = prepared_dataset.iter(self.batch_size)
         batch_kwargs: dict[str, Any] = {

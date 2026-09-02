@@ -16,6 +16,9 @@ from llm_annotator.clients.base import (
     ProviderRuntimeOptions,
     Response,
 )
+from llm_annotator.clients.exceptions import (
+    TooManyConsecutiveFailedBatchesError,
+)
 
 
 class FakeVLLMOnlineClient(Client[ProviderRuntimeOptions]):
@@ -668,3 +671,73 @@ def test_retries_invalid_samples(tmp_path: Path) -> None:
 
     assert result["valid"] == [True, True, True, True]
     assert seen["n"] == 8
+
+
+class AlwaysFailingVLLMClient(Client[ProviderRuntimeOptions]):
+    """Stand-in for a vLLM server that answers every request with an error."""
+
+    provider_type = Provider.VLLM_ONLINE
+
+    def __init__(self, *, base_url: str = "http://worker") -> None:
+        super().__init__(model="fake-model", on_error="ignore")
+        self.base_url = base_url
+        self.destroy_called = 0
+
+    def _process_response(self, response: Any) -> Response:
+        raise NotImplementedError
+
+    def _handle_stop_reason(
+        self, *, stop_reason: str | None, num_output_tokens: int | None
+    ) -> None:
+        _ = stop_reason
+        _ = num_output_tokens
+
+    def generate(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        options: ProviderRuntimeOptions | None = None,
+        gen_kwargs: dict[str, Any] | None = None,
+    ) -> Response:
+        raise NotImplementedError
+
+    def batch_generate(
+        self,
+        *,
+        messages: list[list[dict[str, str]]],
+        options: ProviderRuntimeOptions | None = None,
+        gen_kwargs: dict[str, Any] | None = None,
+    ) -> list[Response]:
+        return [
+            Response(
+                text="",
+                error="connection refused",
+                error_type="ProviderError",
+                provider=self.provider_type,
+                model=self.model,
+            )
+            for _ in messages
+        ]
+
+    def destroy(self) -> None:
+        self.destroy_called += 1
+
+
+def test_raises_after_consecutive_failed_batches(tmp_path: Path) -> None:
+    # Verifies the circuit breaker fires through the queue annotator's
+    # out-of-order batch completion, not just the base class's serial loop.
+    clients = [
+        AlwaysFailingVLLMClient(base_url=f"http://w{i}") for i in range(2)
+    ]
+    annotator = VLLMQueueAnnotator(clients=clients, batch_size=1, queue_size=2)
+
+    with pytest.raises(
+        TooManyConsecutiveFailedBatchesError, match="3 consecutive batches"
+    ):
+        annotator.run_annotation(
+            output_dir=tmp_path / "out",
+            prepared_dataset=_make_dataset(10),
+            max_consecutive_failed_batches=3,
+        )
+
+    assert all(client.destroy_called == 1 for client in clients)

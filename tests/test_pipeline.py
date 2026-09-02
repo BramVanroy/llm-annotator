@@ -862,6 +862,33 @@ def test_batch_size_follows_the_step(
     assert seen == [2, 1]
 
 
+def test_max_consecutive_failed_batches_follows_the_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Verifies StepConfig.max_consecutive_failed_batches reaches
+    # annotate_dataset, defaulting for one step and overridden for the next.
+    seen: list[int] = []
+    original = Annotator.annotate_dataset
+
+    def spy(self: Annotator, *args: Any, **kwargs: Any) -> Any:
+        seen.append(kwargs["max_consecutive_failed_batches"])
+        return original(self, *args, **kwargs)
+
+    def fake_build_client(
+        self: ClientConfig, root: Path
+    ) -> Client[Any] | list[Client[Any]]:
+        _ = root
+        return EchoClient(model=self.model or "echo")
+
+    monkeypatch.setattr(ClientConfig, "build_client", fake_build_client)
+    monkeypatch.setattr(Annotator, "annotate_dataset", spy)
+
+    config = two_step_config(tmp_path)
+    config.steps[1].max_consecutive_failed_batches = 3
+    run_pipeline(config)
+    assert seen == [10, 3]
+
+
 def test_queue_size_follows_the_step(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

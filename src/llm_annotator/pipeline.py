@@ -263,6 +263,7 @@ def _run_step(
         "sort_by_length": step.sort_by_length,
         "num_retries_invalid": step.num_retries_invalid,
         "max_samples_per_output_file": step.max_samples_per_output_file,
+        "max_consecutive_failed_batches": step.max_consecutive_failed_batches,
         "upload_every_n_samples": step.upload_every_n_samples,
         "hub_id": step.hub_id,
         "overwrite": config.overwrite,

@@ -753,6 +753,10 @@ class StepConfig(_StrictBase):
         sort_by_length: Sort prompts by length for more efficient batching.
         num_retries_invalid: Retries for samples that fail schema validation.
         max_samples_per_output_file: Samples per JSONL progress file.
+        max_consecutive_failed_batches: Abort the step once this many
+            batches in a row come back with every sample errored, instead
+            of continuing to burn compute against an unresponsive backend.
+            0 disables the check.
         upload_every_n_samples: Hub progress-backup cadence. Needs ``hub_id``.
         hub_id: Optional Hub dataset id for this step's prepared-data and
             progress backup, which makes a crashed step resumable from the Hub.
@@ -780,6 +784,7 @@ class StepConfig(_StrictBase):
     sort_by_length: bool | Literal["shortest_first", "longest_first"] = False
     num_retries_invalid: int = Field(default=5, ge=0)
     max_samples_per_output_file: int = Field(default=1000, ge=0)
+    max_consecutive_failed_batches: int = Field(default=10, ge=0)
     upload_every_n_samples: int | None = None
     hub_id: str | None = None
     rename: dict[str, str] = Field(default_factory=dict)

@@ -189,6 +189,36 @@ def test_vllm_online_batch_generate_http_error_returns_error_responses(
     assert all(r.error is not None for r in responses)
 
 
+def test_vllm_online_batch_generate_surfaces_http_status_error_body(
+    fake_openai_module: dict[str, Any],
+) -> None:
+    # Verifies the server's error body (e.g. why vLLM rejected the request)
+    # is preserved instead of being dropped by raise_for_status()'s message.
+    import httpx
+
+    class FailingHTTPClient:
+        def post(self, url: str, json: dict[str, object]) -> httpx.Response:
+            _ = json
+            request = httpx.Request("POST", url)
+            return httpx.Response(
+                400,
+                request=request,
+                json={"error": "n must be 1 for batch requests"},
+            )
+
+    _ = fake_openai_module
+    client = VLLMOnlineClient(model="served-vllm-model", on_error="ignore")
+    cast(Any, client._client)._client = FailingHTTPClient()
+
+    responses = client.batch_generate(
+        messages=[[{"role": "user", "content": "one"}]],
+        options=VLLMOnlineRuntimeOptions(max_completion_tokens=4),
+    )
+    assert len(responses) == 1
+    assert responses[0].error is not None
+    assert "n must be 1 for batch requests" in responses[0].error
+
+
 def test_vllm_online_generate_nests_vllm_extensions_in_extra_body(
     fake_openai_module: dict[str, Any],
 ) -> None:

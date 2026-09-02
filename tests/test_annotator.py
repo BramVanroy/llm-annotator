@@ -21,6 +21,9 @@ from llm_annotator.clients.base import (
     Response,
 )
 from llm_annotator.clients.claude_client import ClaudeClient
+from llm_annotator.clients.exceptions import (
+    TooManyConsecutiveFailedBatchesError,
+)
 from llm_annotator.clients.openai_client import OpenAIClient
 from llm_annotator.clients.vllm_offline_client import VLLMOfflineClient
 from llm_annotator.clients.vllm_online_client import VLLMOnlineClient
@@ -298,6 +301,107 @@ def test_run_annotation_retries_invalid(
 
     assert len(out) == 2
     assert calls["n"] >= 2
+
+
+def test_run_annotation_raises_after_consecutive_failed_batches(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Verifies the circuit breaker aborts once too many batches in a row
+    # come back with every sample errored, instead of running to completion.
+    annotator = Annotator(
+        client=DummyClient(on_error="ignore"), batch_size=1, verbose=False
+    )
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": list(range(5)),
+            "text": [str(i) for i in range(5)],
+            "messages": [
+                [{"role": "user", "content": f"Q: {i}"}] for i in range(5)
+            ],
+        }
+    )
+
+    def _always_failing_batch(
+        self: Annotator, **kwargs: Any
+    ) -> list[dict[str, Any]]:
+        batch = kwargs["batch"]
+        size = len(batch["idx"])
+        return [
+            {
+                "response": None,
+                "finish_reason": None,
+                "num_tokens": None,
+                "error": "boom",
+                "error_type": "ProviderError",
+            }
+            for _ in range(size)
+        ]
+
+    monkeypatch.setattr(Annotator, "_process_batch", _always_failing_batch)
+
+    with pytest.raises(
+        TooManyConsecutiveFailedBatchesError, match="3 consecutive batches"
+    ):
+        annotator.run_annotation(
+            output_dir=tmp_path / "out",
+            prompt_template="Q: {text}",
+            prepared_dataset=prepared_ds,
+            num_retries_invalid=0,
+            max_consecutive_failed_batches=3,
+        )
+
+
+def test_run_annotation_consecutive_failure_count_resets_on_success(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Verifies a batch that isn't fully failed resets the consecutive count,
+    # so an alternating pass/fail run under the threshold does not raise.
+    annotator = Annotator(
+        client=DummyClient(on_error="ignore"), batch_size=1, verbose=False
+    )
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": list(range(7)),
+            "text": [str(i) for i in range(7)],
+            "messages": [
+                [{"role": "user", "content": f"Q: {i}"}] for i in range(7)
+            ],
+        }
+    )
+
+    calls = {"n": 0}
+
+    def _every_third_batch_succeeds(
+        self: Annotator, **kwargs: Any
+    ) -> list[dict[str, Any]]:
+        calls["n"] += 1
+        batch = kwargs["batch"]
+        size = len(batch["idx"])
+        failed = calls["n"] % 3 != 0
+        return [
+            {
+                "response": None if failed else "ok",
+                "finish_reason": None if failed else "stop",
+                "num_tokens": None if failed else 1,
+                "error": "boom" if failed else None,
+                "error_type": "ProviderError" if failed else None,
+            }
+            for _ in range(size)
+        ]
+
+    monkeypatch.setattr(
+        Annotator, "_process_batch", _every_third_batch_succeeds
+    )
+
+    out = annotator.run_annotation(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        prepared_dataset=prepared_ds,
+        num_retries_invalid=0,
+        max_consecutive_failed_batches=3,
+    )
+
+    assert len(out) == 7
 
 
 def test_run_annotation_guard_rails(tmp_path: Path) -> None:
