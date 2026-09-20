@@ -2214,7 +2214,7 @@ class VLLMQueueAnnotator(Annotator):
                 " (provider 'vllm_online'), got"
                 f" '{type(client).__name__}'."
             )
-        if self._destroyed.is_set():
+        if self._shutdown_started.is_set() or self._destroyed.is_set():
             client.destroy()
             return
         if self._has_client_base_url_locked(getattr(client, "base_url", None)):

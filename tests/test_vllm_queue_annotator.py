@@ -458,6 +458,20 @@ def test_late_client_after_destroy_is_cleaned_up() -> None:
     assert late.destroy_called == 1
 
 
+def test_late_client_after_shutdown_start_is_cleaned_up() -> None:
+    first = FakeVLLMOnlineClient(base_url="http://w0")
+    late = FakeVLLMOnlineClient(base_url="http://w1")
+    annotator = VLLMQueueAnnotator(clients=[first], batch_size=1)
+
+    annotator._shutdown_started.set()
+    annotator.add_client(late)
+
+    assert [getattr(client, "base_url") for client in annotator.clients] == [
+        "http://w0"
+    ]
+    assert late.destroy_called == 1
+
+
 def test_checked_out_client_is_not_requeued_after_destroy() -> None:
     started = threading.Event()
     release = threading.Event()
