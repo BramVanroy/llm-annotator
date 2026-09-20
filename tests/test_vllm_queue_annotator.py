@@ -173,6 +173,24 @@ def test_queue_size_defaults_and_floor() -> None:
         VLLMQueueAnnotator(clients=clients, queue_size=0)
 
 
+def test_per_client_concurrency_defaults_and_validates() -> None:
+    clients = [FakeVLLMOnlineClient(base_url=f"http://w{i}") for i in range(3)]
+    annotator = VLLMQueueAnnotator(
+        clients=clients, max_concurrent_batches_per_client=2
+    )
+
+    assert annotator.max_concurrent_batches_per_client == 2
+    assert annotator.queue_size == 24
+    annotator.set_max_concurrent_batches_per_client(3)
+    assert annotator.max_concurrent_batches_per_client == 3
+    assert annotator.queue_size == 24
+
+    with pytest.raises(ValueError, match="positive integer"):
+        VLLMQueueAnnotator(
+            clients=clients, max_concurrent_batches_per_client=0
+        )
+
+
 def test_set_queue_size_resolves_like_the_constructor() -> None:
     # Reusing a pool for another workload must go through the same
     # normalisation, or `queue_size` would stop holding a resolved value.
@@ -284,6 +302,28 @@ def test_clients_run_in_parallel(tmp_path: Path) -> None:
 
     assert len(result) == 16
     assert all(client.n_batches > 0 for client in clients)
+
+
+def test_multiple_batches_per_client_run_in_parallel(tmp_path: Path) -> None:
+    # A server may have several requests in flight without increasing their
+    # batch size.
+    barrier = threading.Barrier(3)
+    client = FakeVLLMOnlineClient(barrier=barrier)
+    annotator = VLLMQueueAnnotator(
+        clients=[client],
+        batch_size=1,
+        queue_size=3,
+        max_concurrent_batches_per_client=3,
+    )
+
+    result = annotator.run_annotation(
+        output_dir=tmp_path / "out",
+        prepared_dataset=_make_dataset(3),
+        keep_idx_column=True,
+    )
+
+    assert len(result) == 3
+    assert client.n_batches == 3
 
 
 def test_queue_size_bounds_in_flight_batches(tmp_path: Path) -> None:
