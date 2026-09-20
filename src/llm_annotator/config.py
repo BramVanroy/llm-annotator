@@ -809,15 +809,13 @@ class ClientConfig(_StrictBase):
     def _watch_pool(self, root: Path, annotator: VLLMQueueAnnotator) -> None:
         """Add configured vLLM servers to an active pool as they become ready."""
         expected_servers = self._expected_pool_size(root)
-        if len(annotator.clients) >= expected_servers:
+        if annotator.client_count() >= expected_servers:
             return
 
         kwargs = dict(self.init)
         if self.model is not None:
             kwargs["model"] = self.model
-        known_urls = {
-            str(getattr(client, "base_url")) for client in annotator.clients
-        }
+        known_urls = annotator.client_base_urls()
 
         def discover() -> list[str]:
             try:
@@ -828,7 +826,7 @@ class ClientConfig(_StrictBase):
         def watch() -> None:
             while (
                 not annotator.is_shutting_down
-                and len(annotator.clients) < expected_servers
+                and annotator.client_count() < expected_servers
             ):
                 for url in discover():
                     if annotator.is_shutting_down:
@@ -847,7 +845,7 @@ class ClientConfig(_StrictBase):
                     known_urls.add(url)
                     if annotator.is_shutting_down:
                         return
-                    if len(annotator.clients) >= expected_servers:
+                    if annotator.client_count() >= expected_servers:
                         return
                 if annotator.wait_for_shutdown(timeout=5):
                     return

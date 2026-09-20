@@ -424,6 +424,14 @@ def test_pool_watcher_stops_after_destroy(
         def wait_for_shutdown(self, timeout: float) -> bool:
             return self._closed.wait(timeout)
 
+        def client_count(self) -> int:
+            return len(self.clients)
+
+        def client_base_urls(self) -> set[str]:
+            return {
+                str(getattr(client, "base_url")) for client in self.clients
+            }
+
         def add_client(self, client: Any) -> None:
             self.added.append(client)
 

@@ -2216,6 +2216,18 @@ class VLLMQueueAnnotator(Annotator):
         """Block until the pool is shutting down or the timeout elapses."""
         return self._shutdown_started.wait(timeout)
 
+    def client_count(self) -> int:
+        """Return the current number of pool members."""
+        with self._clients_lock:
+            return len(self.clients)
+
+    def client_base_urls(self) -> set[str]:
+        """Return the base URLs currently registered in the pool."""
+        with self._clients_lock:
+            return {
+                str(getattr(client, "base_url")) for client in self.clients
+            }
+
     def set_max_concurrent_batches_per_client(
         self, max_concurrent_batches_per_client: int
     ) -> None:
