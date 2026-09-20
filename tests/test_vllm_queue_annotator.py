@@ -458,6 +458,57 @@ def test_late_client_after_destroy_is_cleaned_up() -> None:
     assert late.destroy_called == 1
 
 
+def test_checked_out_client_is_not_requeued_after_destroy() -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingClient(FakeVLLMOnlineClient):
+        def batch_generate(
+            self,
+            *,
+            messages: list[list[dict[str, str]]],
+            options: ProviderRuntimeOptions | None = None,
+            gen_kwargs: dict[str, Any] | None = None,
+        ) -> list[Response]:
+            started.set()
+            assert release.wait(5)
+            return super().batch_generate(
+                messages=messages, options=options, gen_kwargs=gen_kwargs
+            )
+
+    client = BlockingClient(base_url="http://w0")
+    annotator = VLLMQueueAnnotator(
+        clients=[client], batch_size=1, max_concurrent_batches_per_client=1
+    )
+    batch = next(_make_dataset(1).iter(1))
+    completed: dict[str, Any] = {}
+
+    thread = threading.Thread(
+        target=lambda: completed.setdefault(
+            "result",
+            annotator._annotate_batch_on_free_client(
+                batch,
+                options=None,
+                gen_kwargs=None,
+                task_prefix="",
+                validate_fn=None,
+                postprocess_fn=None,
+                num_retries_invalid=5,
+            ),
+        )
+    )
+    thread.start()
+    assert started.wait(5)
+
+    annotator.destroy()
+    release.set()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert "result" in completed
+    assert annotator._client_pool.qsize() == 0
+
+
 def test_multiple_batches_per_client_run_in_parallel(tmp_path: Path) -> None:
     # A server may have several requests in flight without increasing their
     # batch size.

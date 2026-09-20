@@ -2221,6 +2221,7 @@ class VLLMQueueAnnotator(Annotator):
             client.destroy()
             return
         cast(list[Client[Any]], self.clients).append(client)
+        self.max_workers = max(self.max_workers or 0, self._max_workers)
         for _ in range(self.max_concurrent_batches_per_client):
             self._client_pool.put(client)
         self.set_queue_size(self._requested_queue_size)
@@ -2243,7 +2244,9 @@ class VLLMQueueAnnotator(Annotator):
         """Return the base URLs currently registered in the pool."""
         with self._clients_lock:
             return {
-                str(getattr(client, "base_url")) for client in self.clients
+                str(base_url)
+                for client in self.clients
+                if (base_url := getattr(client, "base_url", None)) is not None
             }
 
     def set_max_concurrent_batches_per_client(
@@ -2371,7 +2374,7 @@ class VLLMQueueAnnotator(Annotator):
         finally:
             with self._clients_lock:
                 self._checked_out_clients -= 1
-                if not self._shutdown_started.is_set():
+                if not self._destroyed.is_set():
                     self._client_pool.put(client)
 
         return batch, results

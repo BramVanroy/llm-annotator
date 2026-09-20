@@ -797,7 +797,9 @@ class ClientConfig(_StrictBase):
     def _expected_pool_size(self, root: Path) -> int:
         """Return how many distinct vLLM servers this pool can grow to."""
         if self.base_urls:
-            return max(self.pool.servers, len(list(dict.fromkeys(self.base_urls))))
+            return max(
+                self.pool.servers, len(list(dict.fromkeys(self.base_urls)))
+            )
         try:
             return max(
                 self.pool.servers,
@@ -808,8 +810,13 @@ class ClientConfig(_StrictBase):
 
     def _watch_pool(self, root: Path, annotator: VLLMQueueAnnotator) -> None:
         """Add configured vLLM servers to an active pool as they become ready."""
-        expected_servers = self._expected_pool_size(root)
-        if annotator.client_count() >= expected_servers:
+        static_urls = (
+            set(dict.fromkeys(self.base_urls)) if self.base_urls else None
+        )
+        if (
+            static_urls is not None
+            and annotator.client_base_urls() >= static_urls
+        ):
             return
 
         kwargs = dict(self.init)
@@ -824,10 +831,7 @@ class ClientConfig(_StrictBase):
                 return []
 
         def watch() -> None:
-            while (
-                not annotator.is_shutting_down
-                and annotator.client_count() < expected_servers
-            ):
+            while not annotator.is_shutting_down:
                 for url in discover():
                     if annotator.is_shutting_down:
                         return
@@ -848,8 +852,8 @@ class ClientConfig(_StrictBase):
                     known_urls.add(url)
                     if annotator.is_shutting_down:
                         return
-                    if annotator.client_count() >= expected_servers:
-                        return
+                if static_urls is not None and known_urls >= static_urls:
+                    return
                 if annotator.wait_for_shutdown(timeout=5):
                     return
 

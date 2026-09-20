@@ -11,6 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 import llm_annotator.config as config_mod
+from llm_annotator.clients import vllm_online_client as vllm_online_client_mod
 from llm_annotator.config import (
     ClientConfig,
     DatasetConfig,
@@ -465,6 +466,75 @@ def test_pool_watcher_stops_after_destroy(
     assert ready_check_finished.wait(5)
 
     assert annotator.added == []
+
+
+def test_pool_watcher_keeps_polling_dynamic_discovery(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client = ClientConfig(
+        provider="vllm_online", model="m", url_glob="pool_*/*.url"
+    )
+    added = threading.Event()
+    resolve_calls = 0
+
+    class FakeAnnotator:
+        def __init__(self) -> None:
+            self.clients = [
+                type("ClientRef", (), {"base_url": "http://w0:8000/v1"})()
+            ]
+            self.added: list[Any] = []
+            self._closed = threading.Event()
+
+        @property
+        def is_shutting_down(self) -> bool:
+            return self._closed.is_set()
+
+        def wait_for_shutdown(self, timeout: float) -> bool:
+            _ = timeout
+            return self._closed.wait(0.01)
+
+        def client_count(self) -> int:
+            return len(self.clients)
+
+        def client_base_urls(self) -> set[str]:
+            return {str(client.base_url) for client in self.clients}
+
+        def add_client(self, discovered_client: Any) -> None:
+            self.clients.append(discovered_client)
+            self.added.append(discovered_client)
+            added.set()
+            self._closed.set()
+
+    class FakeDiscoveredClient:
+        def __init__(self, *, base_url: str, **kwargs: Any) -> None:
+            _ = kwargs
+            self.base_url = base_url
+
+    def fake_resolve(self: ClientConfig, root: Path) -> list[str]:
+        _ = self
+        _ = root
+        nonlocal resolve_calls
+        resolve_calls += 1
+        if resolve_calls == 1:
+            return ["http://w0:8000/v1"]
+        return ["http://w0:8000/v1", "http://w1:8000/v1"]
+
+    monkeypatch.setattr(
+        config_mod, "_server_is_ready", lambda url, timeout: True
+    )
+    monkeypatch.setattr(ClientConfig, "resolve_base_urls", fake_resolve)
+    monkeypatch.setattr(
+        vllm_online_client_mod, "VLLMOnlineClient", FakeDiscoveredClient
+    )
+    annotator = FakeAnnotator()
+
+    client._watch_pool(tmp_path, annotator)  # type: ignore[arg-type]
+
+    assert added.wait(5)
+    assert resolve_calls >= 2
+    assert [added_client.base_url for added_client in annotator.added] == [
+        "http://w1:8000/v1"
+    ]
 
 
 # --- step validation ---------------------------------------------------------
