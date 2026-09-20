@@ -808,8 +808,13 @@ class ClientConfig(_StrictBase):
                 return []
 
         def watch() -> None:
-            while len(annotator.clients) < max_workers:
+            while (
+                not annotator.is_destroyed
+                and len(annotator.clients) < max_workers
+            ):
                 for url in discover():
+                    if annotator.is_destroyed:
+                        return
                     if url in known_urls or not _server_is_ready(url, 5):
                         continue
                     from llm_annotator.clients.vllm_online_client import (
@@ -820,6 +825,8 @@ class ClientConfig(_StrictBase):
                         VLLMOnlineClient(base_url=url, **kwargs)
                     )
                     known_urls.add(url)
+                    if annotator.is_destroyed:
+                        return
                     if len(annotator.clients) >= max_workers:
                         return
                 time.sleep(5)

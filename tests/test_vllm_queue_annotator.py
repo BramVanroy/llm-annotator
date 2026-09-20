@@ -117,6 +117,19 @@ class FakeVLLMOnlineClient(Client[ProviderRuntimeOptions]):
         self.destroy_called += 1
 
 
+def test_add_client_after_destroy_releases_client() -> None:
+    existing = FakeVLLMOnlineClient()
+    late = FakeVLLMOnlineClient()
+    annotator = VLLMQueueAnnotator(clients=[existing], max_workers=2)
+
+    annotator.destroy()
+    annotator.add_client(late)
+
+    assert annotator.is_destroyed
+    assert annotator.clients == [existing]
+    assert late.destroy_called == 1
+
+
 def _make_dataset(
     n_samples: int, *, task_prefix: str = "", idx_column: str = "idx"
 ) -> Dataset:

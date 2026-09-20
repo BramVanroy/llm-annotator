@@ -17,6 +17,7 @@ from math import ceil
 from os import cpu_count
 from pathlib import Path
 from queue import SimpleQueue
+from threading import Event, Lock
 from typing import (
     Any,
     Callable,
@@ -2045,6 +2046,8 @@ class VLLMQueueAnnotator(Annotator):
     client: Client = field(init=False, repr=False)
     _client_pool: SimpleQueue[Client[Any]] = field(init=False, repr=False)
     _requested_queue_size: int | None = field(init=False, repr=False)
+    _destroyed: Event = field(init=False, repr=False)
+    _clients_lock: Lock = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         """Validate the pool, derive the defaults, and fill the client queue.
@@ -2085,6 +2088,8 @@ class VLLMQueueAnnotator(Annotator):
         # Load balancing: a batch is only dispatched once a client is free, so
         # a slow server never gets a backlog while another one idles.
         self._client_pool = SimpleQueue()
+        self._destroyed = Event()
+        self._clients_lock = Lock()
         for client in self.clients:
             self._client_pool.put(client)
 
@@ -2153,9 +2158,18 @@ class VLLMQueueAnnotator(Annotator):
                 " (provider 'vllm_online'), got"
                 f" '{type(client).__name__}'."
             )
-        cast(list[Client[Any]], self.clients).append(client)
-        self._client_pool.put(client)
-        self.set_queue_size(self._requested_queue_size)
+        with self._clients_lock:
+            if self._destroyed.is_set():
+                client.destroy()
+                return
+            cast(list[Client[Any]], self.clients).append(client)
+            self._client_pool.put(client)
+            self.set_queue_size(self._requested_queue_size)
+
+    @property
+    def is_destroyed(self) -> bool:
+        """Whether the annotator has begun releasing its clients."""
+        return self._destroyed.is_set()
 
     def destroy(self) -> None:
         """Clean up the resources of every client in the pool. Since clients
@@ -2170,8 +2184,12 @@ class VLLMQueueAnnotator(Annotator):
         Raises:
             BaseException: The first error raised by a client, if any.
         """
+        with self._clients_lock:
+            self._destroyed.set()
+            clients = list(self.clients)
+
         first_error: BaseException | None = None
-        for client in self.clients:
+        for client in clients:
             try:
                 client.destroy()
             except BaseException as exc:  # noqa: BLE001 - re-raised below
