@@ -2057,6 +2057,7 @@ class VLLMQueueAnnotator(Annotator):
     _shutdown_started: Event = field(init=False, repr=False)
     _destroyed: Event = field(init=False, repr=False)
     _clients_lock: Lock = field(init=False, repr=False)
+    _checked_out_clients: int = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         """Validate the pool, derive the defaults, and fill the client queue.
@@ -2106,6 +2107,7 @@ class VLLMQueueAnnotator(Annotator):
         self._shutdown_started = Event()
         self._destroyed = Event()
         self._clients_lock = Lock()
+        self._checked_out_clients = 0
         self._rebuild_client_pool()
 
     @property
@@ -2230,11 +2232,12 @@ class VLLMQueueAnnotator(Annotator):
             ValueError: If the requested limit is not positive.
             RuntimeError: If called while annotation is in progress.
         """
-        if self._client_pool.qsize() != self._max_workers:
-            raise RuntimeError(
-                "'max_concurrent_batches_per_client' can only be changed"
-                " between annotation runs."
-            )
+        with self._clients_lock:
+            if self._checked_out_clients:
+                raise RuntimeError(
+                    "'max_concurrent_batches_per_client' can only be changed"
+                    " between annotation runs."
+                )
         self.max_concurrent_batches_per_client = (
             self._resolve_max_concurrent_batches_per_client(
                 max_concurrent_batches_per_client
@@ -2323,11 +2326,15 @@ class VLLMQueueAnnotator(Annotator):
             The batch together with one result per sample, in order.
         """
         client = self._client_pool.get()
+        with self._clients_lock:
+            self._checked_out_clients += 1
         try:
             results = self._annotate_batch(
                 batch=batch, client=client, **kwargs
             )
         finally:
+            with self._clients_lock:
+                self._checked_out_clients -= 1
             self._client_pool.put(client)
 
         return batch, results

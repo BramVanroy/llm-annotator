@@ -224,13 +224,29 @@ def test_per_client_concurrency_defaults_and_validates() -> None:
 
 
 def test_per_client_concurrency_cannot_change_mid_run() -> None:
-    annotator = VLLMQueueAnnotator(clients=[FakeVLLMOnlineClient()])
-    client = annotator._client_pool.get()
+    barrier = threading.Barrier(2)
+    client = FakeVLLMOnlineClient(barrier=barrier)
+    annotator = VLLMQueueAnnotator(clients=[client])
+    batch = {"messages": [[{"role": "user", "content": "hi"}]], "idx": [0]}
+
+    worker = threading.Thread(
+        target=annotator._annotate_batch_on_free_client,
+        args=(batch,),
+        kwargs={"options": None},
+        daemon=True,
+    )
+    worker.start()
+    for _ in range(100):
+        if client.n_batches:
+            break
+        threading.Event().wait(0.01)
+    assert client.n_batches == 1
 
     with pytest.raises(RuntimeError, match="between annotation runs"):
         annotator.set_max_concurrent_batches_per_client(2)
 
-    annotator._client_pool.put(client)
+    barrier.wait(timeout=1)
+    worker.join(timeout=1)
     assert annotator.max_concurrent_batches_per_client == 4
 
 
