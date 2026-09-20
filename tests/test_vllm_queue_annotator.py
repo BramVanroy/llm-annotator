@@ -223,6 +223,17 @@ def test_per_client_concurrency_defaults_and_validates() -> None:
         )
 
 
+def test_per_client_concurrency_cannot_change_mid_run() -> None:
+    annotator = VLLMQueueAnnotator(clients=[FakeVLLMOnlineClient()])
+    client = annotator._client_pool.get()
+
+    with pytest.raises(RuntimeError, match="between annotation runs"):
+        annotator.set_max_concurrent_batches_per_client(2)
+
+    annotator._client_pool.put(client)
+    assert annotator.max_concurrent_batches_per_client == 4
+
+
 def test_set_queue_size_resolves_like_the_constructor() -> None:
     # Reusing a pool for another workload must go through the same
     # normalisation, or `queue_size` would stop holding a resolved value.

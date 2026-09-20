@@ -2228,7 +2228,13 @@ class VLLMQueueAnnotator(Annotator):
 
         Raises:
             ValueError: If the requested limit is not positive.
+            RuntimeError: If called while annotation is in progress.
         """
+        if self._client_pool.qsize() != self._max_workers:
+            raise RuntimeError(
+                "'max_concurrent_batches_per_client' can only be changed"
+                " between annotation runs."
+            )
         self.max_concurrent_batches_per_client = (
             self._resolve_max_concurrent_batches_per_client(
                 max_concurrent_batches_per_client
