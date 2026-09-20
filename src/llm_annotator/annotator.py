@@ -2173,7 +2173,7 @@ class VLLMQueueAnnotator(Annotator):
             self.set_queue_size(self._requested_queue_size)
 
     @property
-    def is_destroyed(self) -> bool:
+    def is_shutting_down(self) -> bool:
         """Whether the annotator has begun releasing its clients."""
         return self._shutdown_started.is_set()
 

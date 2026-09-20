@@ -125,7 +125,7 @@ def test_add_client_after_destroy_releases_client() -> None:
     annotator.destroy()
     annotator.add_client(late)
 
-    assert annotator.is_destroyed
+    assert annotator.is_shutting_down
     assert annotator.clients == [existing]
     assert late.destroy_called == 1
 

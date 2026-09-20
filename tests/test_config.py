@@ -418,7 +418,7 @@ def test_pool_watcher_stops_after_destroy(
             self._closed = threading.Event()
 
         @property
-        def is_destroyed(self) -> bool:
+        def is_shutting_down(self) -> bool:
             return self._closed.is_set()
 
         def wait_for_shutdown(self, timeout: float) -> bool:
