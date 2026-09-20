@@ -29,6 +29,7 @@ from pydantic import (
 
 from llm_annotator.annotator import (
     DEFAULT_CPU_COUNT,
+    QUEUE_BATCHES_PER_SLOT,
     Annotator,
     VLLMQueueAnnotator,
 )
@@ -43,6 +44,9 @@ StepType = Literal["annotate", "generate"]
 
 StepKind = Literal["vllm_pool", "vllm_online", "vllm_offline", "api"]
 """What a step needs in order to run, as reported by ``--describe-steps``."""
+
+DEFAULT_MAX_CONCURRENT_BATCHES = 4
+"""Simultaneous batch requests per vLLM server unless a step says otherwise."""
 
 
 def load_config_file(path: str | Path) -> dict[str, Any]:
@@ -479,11 +483,13 @@ class PoolConfig(_StrictBase):
 
     Both keys are reported by ``llm-annotate --describe-steps``, so a job
     submitter can size the servers it starts and knows how many of them the
-    step needs before it can begin. The library acts on ``min_servers`` alone:
-    a pooled run waits for that many servers to answer ``/health``, and the
-    servers that become ready later join the pool while it is running. A step
-    that talks to servers someone else started (``base_urls``, ``hosts_file``,
-    ``url_glob``) needs neither key.
+    step needs before it can begin. ``min_servers`` is what a pooled run acts
+    on while it runs: it waits for that many servers to answer ``/health``,
+    and the servers that become ready later join the pool. ``servers`` is how
+    many the step counts on at full size, which is what the floor on
+    ``queue_size`` and the reported concurrency are computed from. A step that
+    talks to servers someone else started (``base_urls``, ``hosts_file``,
+    ``url_glob``) needs neither key, since ``base_urls`` already counts them.
 
     Attributes:
         servers: Number of vLLM server processes to run for this step.
@@ -544,9 +550,17 @@ class ClientConfig(_StrictBase):
         url_glob: Glob matching files that each hold one vLLM base URL. It may
             be absolute, which is what a job scheduler writing into a scratch
             directory needs.
-        queue_size: Batches kept in flight across the pool.
+        queue_size: Batches kept in flight across the pool. ``null`` derives
+            it from the pool, at four batches per concurrent request slot. A
+            pool runs ``servers`` times ``max_concurrent_batches_per_client``
+            requests at once, and a queue below that number would leave
+            servers idle, so it is rejected. Sizes a pool, so it is accepted
+            for ``vllm_online`` only.
         max_concurrent_batches_per_client: Maximum simultaneous batch requests
-            sent to each vLLM server.
+            sent to each vLLM server. Independent of ``batch_size``: each of
+            these requests carries ``batch_size`` samples, so one server holds
+            up to their product. Sizes a pool, so it is accepted for
+            ``vllm_online`` only.
         wait_for_servers: Seconds to wait for the ``/health`` endpoints of
             ``pool.min_servers`` servers, or of every server the pool source
             names when it names fewer, before starting. ``0`` disables the
@@ -568,8 +582,10 @@ class ClientConfig(_StrictBase):
     base_urls: list[str] = Field(default_factory=list)
     hosts_file: Path | None = None
     url_glob: str | None = None
-    queue_size: int | None = None
-    max_concurrent_batches_per_client: int = 4
+    queue_size: int | None = Field(default=None, ge=1)
+    max_concurrent_batches_per_client: int = Field(
+        default=DEFAULT_MAX_CONCURRENT_BATCHES, ge=1
+    )
     wait_for_servers: float = 60.0
     engine: EngineConfig = Field(default_factory=EngineConfig)
     pool: PoolConfig = Field(default_factory=PoolConfig)
@@ -613,6 +629,8 @@ class ClientConfig(_StrictBase):
                 f"Provider '{self.provider}' needs an explicit 'model'."
             )
 
+        self._check_pool_concurrency()
+
         engine_fields = set(EngineConfig.model_fields)
         if (
             not self.provider.startswith("vllm")
@@ -645,6 +663,139 @@ class ClientConfig(_StrictBase):
                 f" {unknown}. Valid options are {sorted(valid)}."
             )
         return self
+
+    def _check_pool_concurrency(self) -> None:
+        """Reject pool concurrency keys that are misplaced or too small.
+
+        Raises:
+            ValueError: If ``queue_size`` or
+                ``max_concurrent_batches_per_client`` is set on a provider
+                without a server pool, or if ``queue_size`` is below the
+                number of requests the pool runs at once.
+        """
+        # A merged step client carries every key, defaults included, so a
+        # value counts as set only when it differs from the default.
+        pool_only = [
+            name
+            for name, is_set in (
+                ("queue_size", self.queue_size is not None),
+                (
+                    "max_concurrent_batches_per_client",
+                    self.max_concurrent_batches_per_client
+                    != DEFAULT_MAX_CONCURRENT_BATCHES,
+                ),
+            )
+            if is_set
+        ]
+        if pool_only and self.provider != "vllm_online":
+            names = " and ".join(f"'{name}'" for name in pool_only)
+            raise ValueError(
+                f"{names} size a pool of vLLM servers, so provider"
+                f" '{self.provider}' has no use for them: it sends one"
+                " request at a time. Use 'batch_size' to change how much"
+                " work that request carries."
+            )
+
+        if self.queue_size is None:
+            return
+
+        servers = self.configured_servers()
+        minimum = servers * self.max_concurrent_batches_per_client
+        if self.queue_size < minimum:
+            raise ValueError(
+                f"'queue_size' is {self.queue_size}, below the minimum of"
+                f" {minimum} for this step: {servers} server(s) times"
+                f" {self.max_concurrent_batches_per_client}"
+                " concurrent request(s) each"
+                " ('max_concurrent_batches_per_client'). A queue smaller than"
+                " that leaves servers idle. Set 'queue_size' to at least"
+                f" {minimum}, or remove it to keep"
+                f" {QUEUE_BATCHES_PER_SLOT} batches queued per request slot"
+                f" ({QUEUE_BATCHES_PER_SLOT * minimum})."
+            )
+
+    def configured_servers(self) -> int:
+        """Count the vLLM servers this config accounts for.
+
+        ``pool.servers`` is what a job submitter is asked to start; explicit
+        ``base_urls`` are servers that already exist. A ``hosts_file`` or
+        ``url_glob`` is not read here, since it may not exist yet when the
+        config is validated, so such a step counts ``pool.servers`` alone.
+
+        Returns:
+            The larger of ``pool.servers`` and the number of distinct
+            ``base_urls``.
+
+        Examples:
+            >>> ClientConfig(
+            ...     provider="vllm_online", model="m"
+            ... ).configured_servers()
+            1
+            >>> ClientConfig(
+            ...     provider="vllm_online",
+            ...     model="m",
+            ...     base_urls=[
+            ...         "http://node01:8000/v1",
+            ...         "http://node02:8000/v1",
+            ...     ],
+            ... ).configured_servers()
+            2
+        """
+        return max(self.pool.servers, len(dict.fromkeys(self.base_urls)))
+
+    def concurrency(self) -> dict[str, int | None]:
+        """Report how many requests and samples this step keeps in flight.
+
+        This is what a user needs in order to size a vLLM server's
+        ``max_num_seqs``, and it is reported by
+        ``llm-annotate --describe-steps`` before any server job is submitted.
+        The pool keys are ``None`` for a provider without a pool, which runs
+        one batch at a time.
+
+        Returns:
+            A mapping with ``batch_size``,
+            ``max_concurrent_batches_per_client``, the effective
+            ``queue_size``, ``max_requests_per_server``
+            (``max_concurrent_batches_per_client`` times ``batch_size``,
+            which is what a server's ``max_num_seqs`` has to cover) and
+            ``max_requests_in_flight`` (that number times
+            [`configured_servers`][llm_annotator.config.ClientConfig.configured_servers]).
+
+        Examples:
+            >>> ClientConfig(provider="claude", model="m").concurrency()
+            {'batch_size': 256, 'max_concurrent_batches_per_client': None, 'queue_size': None, 'max_requests_per_server': None, 'max_requests_in_flight': None}
+            >>> ClientConfig(
+            ...     provider="vllm_online",
+            ...     model="m",
+            ...     batch_size=64,
+            ...     pool={"servers": 4},
+            ... ).concurrency()
+            {'batch_size': 64, 'max_concurrent_batches_per_client': 4, 'queue_size': 64, 'max_requests_per_server': 256, 'max_requests_in_flight': 1024}
+        """
+        if self.provider != "vllm_online":
+            return {
+                "batch_size": self.batch_size,
+                "max_concurrent_batches_per_client": None,
+                "queue_size": None,
+                "max_requests_per_server": None,
+                "max_requests_in_flight": None,
+            }
+
+        servers = self.configured_servers()
+        slots = servers * self.max_concurrent_batches_per_client
+        return {
+            "batch_size": self.batch_size,
+            "max_concurrent_batches_per_client": (
+                self.max_concurrent_batches_per_client
+            ),
+            "queue_size": VLLMQueueAnnotator.resolve_queue_size(
+                self.queue_size, slots
+            ),
+            "max_requests_per_server": (
+                self.max_concurrent_batches_per_client * self.batch_size
+            ),
+            "max_requests_in_flight": slots * self.batch_size,
+        }
 
     def is_pool(self) -> bool:
         """Whether this client describes a pool of vLLM servers.
@@ -892,9 +1043,7 @@ class ClientConfig(_StrictBase):
     def _expected_pool_size(self, root: Path) -> int:
         """Return how many distinct vLLM servers this pool can grow to."""
         if self.base_urls:
-            return max(
-                self.pool.servers, len(list(dict.fromkeys(self.base_urls)))
-            )
+            return self.configured_servers()
         try:
             return max(
                 self.pool.servers,
@@ -1326,9 +1475,11 @@ class PipelineConfig(_StrictBase):
         whole block, while other keys are replaced outright.
 
         The one exception is a step that names a *different* ``provider``: it
-        inherits no ``options`` at all, because they name fields of the
-        previous provider's runtime-options dataclass and would be rejected as
-        unknown. Its own ``options`` are kept as written.
+        inherits neither ``options``, which name fields of the previous
+        provider's runtime-options dataclass, nor any block the new provider
+        cannot act on (``engine`` outside the vLLM providers, ``queue_size``
+        and ``max_concurrent_batches_per_client`` outside ``vllm_online``).
+        All of those are kept when the step writes them itself.
 
         The step's block is only validated here, after merging, because on its
         own it is a fragment that need not name a ``provider`` or ``model``.
@@ -1371,6 +1522,20 @@ class PipelineConfig(_StrictBase):
             # which is why this replaces rather than skipping the merge.
             if merged["provider"] != base["provider"]:
                 merged["options"] = dict(override.get("options") or {})
+                # Same reasoning for the blocks the new provider cannot act
+                # on at all: they were written for the inherited provider,
+                # and keeping them would fail validation for a reason the
+                # user cannot act on. A block the step writes itself stands.
+                unusable = {
+                    "engine": not merged["provider"].startswith("vllm"),
+                    "queue_size": merged["provider"] != "vllm_online",
+                    "max_concurrent_batches_per_client": (
+                        merged["provider"] != "vllm_online"
+                    ),
+                }
+                for key, drop in unusable.items():
+                    if drop and key not in override:
+                        merged.pop(key, None)
             elif "options" in override:
                 merged["options"] = {**base["options"], **override["options"]}
 
@@ -1404,8 +1569,10 @@ class PipelineConfig(_StrictBase):
         Returns:
             One mapping per step, in pipeline order, each with the step's
             ``index`` (from 1), ``name``, ``kind``, ``provider``, ``model``,
-            the ``servers`` / ``gpus_per_vllm_server`` it wants and the
-            ``min_servers`` it needs before it can start.
+            the ``servers`` / ``gpus_per_vllm_server`` it wants, the
+            ``min_servers`` it needs before it can start, and the effective
+            concurrency from
+            [`ClientConfig.concurrency`][llm_annotator.config.ClientConfig.concurrency].
         """
         described = []
         for index, step in enumerate(self.steps):
@@ -1421,6 +1588,7 @@ class PipelineConfig(_StrictBase):
                     "min_servers": client.pool.min_servers,
                     "gpus_per_vllm_server": client.engine.tensor_parallel_size,
                     "step_dir": str(self.step_dir(index)),
+                    **client.concurrency(),
                 }
             )
         return described

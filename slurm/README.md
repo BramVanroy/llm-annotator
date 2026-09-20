@@ -117,9 +117,15 @@ llm-annotate my-pipeline.yaml --describe-steps
 ```
 
 ```json
-{"index": 1, "name": "write-qa", "kind": "vllm_pool", "model": "Qwen/Qwen3-8B", "servers": 4, "min_servers": 1, "gpus_per_vllm_server": 2, ...}
+{"index": 1, "name": "write-qa", "kind": "vllm_pool", "model": "Qwen/Qwen3-8B", "servers": 4, "min_servers": 1, "gpus_per_vllm_server": 2, "batch_size": 64, "max_concurrent_batches_per_client": 4, "queue_size": 32, "max_requests_per_server": 256, "max_requests_in_flight": 1024, ...}
 {"index": 2, "name": "rate-qa",  "kind": "api", "model": "claude-haiku-4-5", ...}
 ```
+
+`max_requests_per_server` is `max_concurrent_batches_per_client` times
+`batch_size`: the number of prompts one server is asked to hold at once, and so
+the number its `engine.max_num_seqs` has to cover before requests start queueing
+inside vLLM. `submit_pipeline.sh` prints it per step, so a pool can be sized
+before any GPU is allocated.
 
 | `kind` | When | Jobs submitted |
 | --- | --- | --- |

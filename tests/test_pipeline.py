@@ -956,6 +956,11 @@ def test_cli_describe_steps_emits_json_lines(
     assert [r["kind"] for r in rows] == ["vllm_pool", "api"]
     assert rows[0]["model"] == "Qwen/Qwen3-8B"
     assert (rows[0]["servers"], rows[0]["gpus_per_vllm_server"]) == (4, 2)
+    # The concurrency travels in the same line, so a submitter can size the
+    # servers it is about to start.
+    assert rows[0]["max_requests_per_server"] == 1024
+    assert rows[0]["max_requests_in_flight"] == 4096
+    assert rows[1]["max_requests_in_flight"] is None
 
 
 def test_cli_url_glob_reaches_the_step_config(

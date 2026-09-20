@@ -78,6 +78,12 @@ PROGRESS_BACKUP_BRANCH_SUFF = "progress_backup"
 PROGRESS_DS_LOCAL_SUBDIR = "progress_backup"
 SELECTION_RECORD_FILE = "selection.json"
 
+# How many batches a vLLM pool keeps queued per concurrent request slot when
+# `queue_size` is not given. One batch per slot would keep every server busy;
+# the extra three absorb the time between a batch finishing and the next one
+# being dispatched.
+QUEUE_BATCHES_PER_SLOT = 4
+
 # "auto" writes one progress file per this fraction of the run, so the number
 # of files stays bounded no matter how large the dataset is.
 AUTO_OUTPUT_FILE_FRACTION = 0.01
@@ -2389,6 +2395,8 @@ class VLLMQueueAnnotator(Annotator):
             per concurrent request slot, and any lower value is raised to the
             number of slots, since a smaller queue would leave servers idle.
             After initialisation the attribute always holds the resolved value.
+            A config-driven run rejects a too-small value when the config
+            loads instead of raising it here.
         max_concurrent_batches_per_client: Maximum number of simultaneous
             batch requests sent to each server. This is independent of
             ``batch_size``. Defaults to four for high throughput.
@@ -2503,8 +2511,48 @@ class VLLMQueueAnnotator(Annotator):
             )
         return max_concurrent_batches_per_client
 
+    @staticmethod
+    def resolve_queue_size(queue_size: int | None, num_slots: int) -> int:
+        """Turn a requested queue size into the effective one for a pool.
+
+        This is the arithmetic behind the ``queue_size`` key, exposed so that
+        a caller can report the effective value (as
+        ``llm-annotate --describe-steps`` does) without building a pool first.
+
+        Args:
+            queue_size: Requested number of batches in flight, or ``None`` to
+                derive it from the number of slots.
+            num_slots: Concurrent request slots in the pool, that is, servers
+                times ``max_concurrent_batches_per_client``.
+
+        Returns:
+            The number of batches to keep in flight: ``num_slots`` at the very
+            least, and ``QUEUE_BATCHES_PER_SLOT`` times that when nothing is
+            requested.
+
+        Raises:
+            ValueError: If ``queue_size`` is given but not positive.
+
+        Examples:
+            >>> VLLMQueueAnnotator.resolve_queue_size(None, 8)
+            32
+            >>> VLLMQueueAnnotator.resolve_queue_size(64, 8)
+            64
+            >>> VLLMQueueAnnotator.resolve_queue_size(2, 8)
+            8
+        """
+        if queue_size is None:
+            return QUEUE_BATCHES_PER_SLOT * num_slots
+
+        if queue_size < 1:
+            raise ValueError(
+                "'queue_size' must be a positive integer or None."
+            )
+
+        return max(queue_size, num_slots)
+
     def _resolve_queue_size(self, queue_size: int | None) -> int:
-        """Turn the requested queue size into an effective one.
+        """Resolve a queue size against this pool and report any clamping.
 
         Args:
             queue_size: Requested number of batches in flight, or ``None`` to
@@ -2516,24 +2564,15 @@ class VLLMQueueAnnotator(Annotator):
         Raises:
             ValueError: If ``queue_size`` is given but not positive.
         """
-        if queue_size is None:
-            return 4 * self._max_workers
-
-        if queue_size < 1:
-            raise ValueError(
-                "'queue_size' must be a positive integer or None."
-            )
-
-        if queue_size < self._max_workers:
+        resolved = self.resolve_queue_size(queue_size, self._max_workers)
+        if queue_size is not None and resolved > queue_size:
             self._logger.warning(
                 f"'queue_size' ({queue_size}) is smaller than the number of"
                 f" concurrent batch requests ({self._max_workers}), which"
                 " would leave servers idle. We're raising it to that number as a"
                 " sensible minimal value."
             )
-            return self._max_workers
-
-        return queue_size
+        return resolved
 
     def set_queue_size(self, queue_size: int | None) -> None:
         """Change how many batches are kept in flight.
