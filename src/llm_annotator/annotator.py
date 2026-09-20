@@ -2233,18 +2233,24 @@ class VLLMQueueAnnotator(Annotator):
             RuntimeError: If called while annotation is in progress.
         """
         with self._clients_lock:
-            if self._checked_out_clients:
+            total_slots = (
+                len(self.clients) * self.max_concurrent_batches_per_client
+            )
+            if (
+                self._checked_out_clients
+                or self._client_pool.qsize() != total_slots
+            ):
                 raise RuntimeError(
                     "'max_concurrent_batches_per_client' can only be changed"
                     " between annotation runs."
                 )
-        self.max_concurrent_batches_per_client = (
-            self._resolve_max_concurrent_batches_per_client(
-                max_concurrent_batches_per_client
+            self.max_concurrent_batches_per_client = (
+                self._resolve_max_concurrent_batches_per_client(
+                    max_concurrent_batches_per_client
+                )
             )
-        )
-        self.queue_size = self._resolve_queue_size(self.queue_size)
-        self._rebuild_client_pool()
+            self.queue_size = self._resolve_queue_size(self.queue_size)
+            self._rebuild_client_pool()
 
     def _rebuild_client_pool(self) -> None:
         """Recreate the available-client queue in round-robin order."""
