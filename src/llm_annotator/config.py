@@ -192,13 +192,13 @@ def wait_for_servers(
         TimeoutError: If fewer than ``min_servers`` are reachable after
             ``timeout``.
     """
-    if not 1 <= min_servers <= len(base_urls):
+    pending = list(dict.fromkeys(base_urls))
+    if not 1 <= min_servers <= len(pending):
         raise ValueError(
-            f"'min_servers' must be between 1 and {len(base_urls)}, got"
+            f"'min_servers' must be between 1 and {len(pending)}, got"
             f" {min_servers}."
         )
 
-    pending = list(dict.fromkeys(base_urls))
     ready: list[str] = []
     deadline = time.monotonic() + timeout
     while pending:
