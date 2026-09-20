@@ -59,7 +59,7 @@ spacy = [
 # not published in the wheel metadata, so the index routing below only has to
 # hold for this repo. See the README for the manual install.
 vllm-kernels = [
-    # flashinfer python and cubin are already included in vllm cuda
+    "flashinfer-cubin==0.6.18.post1",
     "flashinfer-jit-cache==0.6.18.post1",
 ]
 

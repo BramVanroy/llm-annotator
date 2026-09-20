@@ -1248,6 +1248,14 @@ wheels = [
 ]
 
 [[package]]
+name = "flashinfer-cubin"
+version = "0.6.18.post1"
+source = { registry = "https://flashinfer.ai/whl/" }
+wheels = [
+    { url = "https://github.com/flashinfer-ai/flashinfer/releases/download/v0.6.18.post1/flashinfer_cubin-0.6.18.post1-py3-none-any.whl", hash = "sha256:bbacb5b8bbf429e43bf2740bb45551d981f41d0462842e36ee6fb3e3452763ab" },
+]
+
+[[package]]
 name = "flashinfer-jit-cache"
 version = "0.6.18.post1+cu130"
 source = { registry = "https://flashinfer.ai/whl/cu130/" }
@@ -2036,6 +2044,7 @@ docs = [
     { name = "mkdocstrings", extra = ["python"] },
 ]
 vllm-kernels = [
+    { name = "flashinfer-cubin" },
     { name = "flashinfer-jit-cache" },
 ]
 
@@ -2075,7 +2084,10 @@ docs = [
     { name = "mkdocs-material", specifier = ">=9.7.6,<10" },
     { name = "mkdocstrings", extras = ["python"], specifier = ">=1.0.4,<2" },
 ]
-vllm-kernels = [{ name = "flashinfer-jit-cache", specifier = "==0.6.18.post1", index = "https://flashinfer.ai/whl/cu130/" }]
+vllm-kernels = [
+    { name = "flashinfer-cubin", specifier = "==0.6.18.post1", index = "https://flashinfer.ai/whl/" },
+    { name = "flashinfer-jit-cache", specifier = "==0.6.18.post1", index = "https://flashinfer.ai/whl/cu130/" },
+]
 
 [[package]]
 name = "llvmlite"
