@@ -2195,11 +2195,15 @@ class VLLMQueueAnnotator(Annotator):
     ) -> None:
         """Construct and add a late-ready server under the pool lock."""
         with self._clients_lock:
-            if self._destroyed.is_set() or self._has_client_base_url_locked(
-                base_url
+            if (
+                self._shutdown_started.is_set()
+                or self._destroyed.is_set()
+                or self._has_client_base_url_locked(base_url)
             ):
                 return
-            self._add_client_locked(client_factory(base_url))
+        client = client_factory(base_url)
+        with self._clients_lock:
+            self._add_client_locked(client)
 
     def _has_client_base_url_locked(self, base_url: object) -> bool:
         return base_url is not None and any(

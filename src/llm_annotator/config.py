@@ -854,7 +854,7 @@ class ClientConfig(_StrictBase):
                         return
                 if static_urls is not None and known_urls >= static_urls:
                     return
-                if annotator.wait_for_shutdown(timeout=5):
+                if annotator.wait_for_shutdown(timeout=1):
                     return
 
         import threading
