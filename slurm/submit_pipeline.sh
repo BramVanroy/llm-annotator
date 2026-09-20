@@ -221,6 +221,18 @@ while IFS= read -r step_json; do
   echo
   echo "Step ${STEP_COUNT} '${NAME}' (${KIND})"
 
+  # A pool's real concurrency, printed before any GPU is allocated: this is
+  # what a server's --max-num-seqs has to cover.
+  if [[ "$KIND" == "vllm_pool" || "$KIND" == "vllm_online" ]]; then
+    PER_SERVER=$(field "$step_json" max_requests_per_server)
+    IN_FLIGHT=$(field "$step_json" max_requests_in_flight)
+    QUEUE_SIZE=$(field "$step_json" queue_size)
+    if [[ -n "$PER_SERVER" ]]; then
+      echo "  up to ${PER_SERVER} requests per server, ${IN_FLIGHT} over the" \
+        "pool, queue of ${QUEUE_SIZE} batches"
+    fi
+  fi
+
   # A server's GPUs all sit in one job on one node: vLLM's tensor parallelism
   # does not span nodes here, so a model too large for one node is out of scope.
   if [[ "$KIND" == "vllm_pool" || "$KIND" == "vllm_offline" ]]; then

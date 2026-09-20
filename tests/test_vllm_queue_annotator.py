@@ -320,6 +320,17 @@ def test_queue_size_defaults_and_floor() -> None:
         VLLMQueueAnnotator(clients=clients, queue_size=0)
 
 
+def test_resolve_queue_size_is_callable_without_a_pool() -> None:
+    # The config layer reports the effective queue size before any client
+    # exists, so the arithmetic has to work off a slot count alone.
+    assert VLLMQueueAnnotator.resolve_queue_size(None, 12) == 48
+    assert VLLMQueueAnnotator.resolve_queue_size(100, 12) == 100
+    assert VLLMQueueAnnotator.resolve_queue_size(2, 12) == 12
+
+    with pytest.raises(ValueError, match="positive integer"):
+        VLLMQueueAnnotator.resolve_queue_size(0, 12)
+
+
 def test_per_client_concurrency_defaults_and_validates() -> None:
     clients = [FakeVLLMOnlineClient(base_url=f"http://w{i}") for i in range(3)]
     assert (

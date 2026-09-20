@@ -988,8 +988,11 @@ def main(args: list[str] | None = None) -> None:
         "--describe-steps",
         action="store_true",
         help="Print one JSON object per step describing what it needs to run"
-        " (kind, provider, model, pool size) and exit without annotating"
-        " anything.",
+        " (kind, provider, model, pool size) and how much work it keeps in"
+        " flight (batch_size, max_concurrent_batches_per_client, the"
+        " effective queue_size, and the max_requests_per_server that a vLLM"
+        " server's --max-num-seqs has to cover), then exit without"
+        " annotating anything.",
     )
     parsed = parser.parse_args(args)
 

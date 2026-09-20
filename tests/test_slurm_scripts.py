@@ -339,6 +339,25 @@ def test_submit_pipeline_exports_min_servers(tmp_path: Path) -> None:
     not (VENV_PATH / "bin" / "llm-annotate").exists(),
     reason="the submitter reads the config through the installed CLI",
 )
+def test_submit_pipeline_prints_the_pool_concurrency(tmp_path: Path) -> None:
+    """A pool's request load is visible before any GPU is allocated."""
+    config_path = _write_pool_config(tmp_path, {"servers": 4})
+
+    process = _run_submit(tmp_path, config_path)
+
+    assert process.returncode == 0, process.stderr
+    # 4 concurrent requests per server times the default batch size of 256,
+    # over four servers, with four batches queued per request slot.
+    assert (
+        "up to 1024 requests per server, 4096 over the pool,"
+        " queue of 64 batches" in process.stdout
+    )
+
+
+@pytest.mark.skipif(
+    not (VENV_PATH / "bin" / "llm-annotate").exists(),
+    reason="the submitter reads the config through the installed CLI",
+)
 def test_submit_pipeline_pool_dependency_is_or_joined(
     tmp_path: Path,
 ) -> None:

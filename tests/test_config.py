@@ -1166,6 +1166,196 @@ def test_describe_steps_reports_every_step() -> None:
     # A step that never asked for a pool still reports the default minimum.
     assert described[1]["min_servers"] == 1
 
+    # The concurrency a submitter sizes the servers against: 4 servers x 4
+    # requests each, 256 samples per request by default.
+    assert described[0]["max_concurrent_batches_per_client"] == 4
+    assert described[0]["queue_size"] == 64
+    assert described[0]["max_requests_per_server"] == 1024
+    assert described[0]["max_requests_in_flight"] == 4096
+    # The hosted step has no pool, so it reports only its batch size.
+    assert described[1]["batch_size"] == 256
+    assert described[1]["queue_size"] is None
+    assert described[1]["max_requests_in_flight"] is None
+
+
+# --- pool concurrency --------------------------------------------------------
+
+
+def pool_client(**overrides: Any) -> dict[str, Any]:
+    """Build a vLLM pool client block with optional overrides."""
+    data: dict[str, Any] = {"provider": "vllm_online", "model": "m"}
+    data.update(overrides)
+    return data
+
+
+def test_queue_size_below_the_pool_minimum_is_rejected() -> None:
+    # 4 servers x 4 concurrent requests each = 16 requests in flight, so a
+    # queue of 8 could never fill the pool.
+    with pytest.raises(ValidationError, match="minimum of 16"):
+        ClientConfig.model_validate(
+            pool_client(queue_size=8, pool={"servers": 4})
+        )
+
+
+def test_queue_size_minimum_counts_explicit_base_urls() -> None:
+    # No `pool` block here: the servers already exist, so they are counted
+    # from `base_urls` instead.
+    urls = [f"http://node{i:02d}:8000/v1" for i in range(1, 4)]
+    with pytest.raises(ValidationError, match="minimum of 12"):
+        ClientConfig.model_validate(pool_client(queue_size=6, base_urls=urls))
+
+    at_minimum = ClientConfig.model_validate(
+        pool_client(queue_size=12, base_urls=urls)
+    )
+    assert at_minimum.queue_size == 12
+
+
+def test_queue_size_minimum_follows_the_per_client_concurrency() -> None:
+    # One request per server lowers the floor to the server count.
+    client = ClientConfig.model_validate(
+        pool_client(
+            queue_size=4,
+            pool={"servers": 4},
+            max_concurrent_batches_per_client=1,
+        )
+    )
+    assert client.queue_size == 4
+
+
+def test_queue_size_error_names_the_minimum_and_the_default() -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        ClientConfig.model_validate(
+            pool_client(queue_size=3, pool={"servers": 2})
+        )
+
+    message = str(excinfo.value)
+    assert "at least 8" in message
+    # The value a user gets by removing the key altogether.
+    assert "(32)" in message
+
+
+def test_queue_size_must_be_positive() -> None:
+    with pytest.raises(ValidationError):
+        ClientConfig.model_validate(pool_client(queue_size=0))
+    with pytest.raises(ValidationError):
+        ClientConfig.model_validate(
+            pool_client(max_concurrent_batches_per_client=0)
+        )
+
+
+@pytest.mark.parametrize("provider", ["openai", "claude", "vllm_offline"])
+@pytest.mark.parametrize(
+    "key", ["queue_size", "max_concurrent_batches_per_client"]
+)
+def test_pool_keys_are_rejected_for_providers_without_a_pool(
+    provider: str, key: str
+) -> None:
+    with pytest.raises(ValidationError, match="size a pool of vLLM servers"):
+        ClientConfig.model_validate(
+            {"provider": provider, "model": "m", key: 2}
+        )
+
+
+def test_a_step_does_not_inherit_pool_keys_from_another_provider() -> None:
+    # The top-level block sizes a pool; the hosted step cannot use those keys
+    # and must not be rejected for a value it never wrote.
+    config = PipelineConfig.model_validate(
+        minimal_config(
+            client=pool_client(queue_size=8, engine={"max_model_len": 4096}),
+            steps=[
+                {
+                    "name": "judge",
+                    "prompt": "y",
+                    "client": {"provider": "claude", "model": "c"},
+                }
+            ],
+        )
+    )
+    client = config.step_client(config.steps[0])
+
+    assert client.queue_size is None
+    assert client.max_concurrent_batches_per_client == 4
+    assert client.engine == EngineConfig()
+
+
+def test_a_step_keeps_pool_keys_it_writes_itself() -> None:
+    with pytest.raises(ValidationError, match="size a pool of vLLM servers"):
+        PipelineConfig.model_validate(
+            minimal_config(
+                client=pool_client(),
+                steps=[
+                    {
+                        "name": "judge",
+                        "prompt": "y",
+                        "client": {
+                            "provider": "claude",
+                            "model": "c",
+                            "queue_size": 8,
+                        },
+                    }
+                ],
+            )
+        )
+
+
+def test_a_vllm_step_still_inherits_the_engine_from_the_other_vllm_provider() -> (
+    None
+):
+    config = PipelineConfig.model_validate(
+        minimal_config(
+            client={
+                "provider": "vllm_offline",
+                "model": "m",
+                "engine": {"tensor_parallel_size": 2},
+            },
+            steps=[
+                {
+                    "name": "write",
+                    "prompt": "x",
+                    "client": {"provider": "vllm_online"},
+                }
+            ],
+        )
+    )
+
+    assert config.step_client(config.steps[0]).engine.tensor_parallel_size == 2
+
+
+def test_concurrency_reports_the_effective_numbers() -> None:
+    client = ClientConfig.model_validate(
+        pool_client(batch_size=64, pool={"servers": 4})
+    )
+
+    assert client.concurrency() == {
+        "batch_size": 64,
+        "max_concurrent_batches_per_client": 4,
+        "queue_size": 64,
+        "max_requests_per_server": 256,
+        "max_requests_in_flight": 1024,
+    }
+
+
+def test_concurrency_reports_the_requested_queue_size() -> None:
+    client = ClientConfig.model_validate(
+        pool_client(batch_size=8, queue_size=100, pool={"servers": 2})
+    )
+
+    assert client.concurrency()["queue_size"] == 100
+
+
+def test_concurrency_is_empty_without_a_pool() -> None:
+    client = ClientConfig.model_validate(
+        {"provider": "claude", "model": "m", "batch_size": 32}
+    )
+
+    assert client.concurrency() == {
+        "batch_size": 32,
+        "max_concurrent_batches_per_client": None,
+        "queue_size": None,
+        "max_requests_per_server": None,
+        "max_requests_in_flight": None,
+    }
+
 
 # --- dotted overrides --------------------------------------------------------
 

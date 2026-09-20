@@ -10,6 +10,9 @@ Two levels of checking are applied:
    :mod:`importlib`.  This validates that all top-level imports from
    ``llm_annotator`` resolve correctly.  ``main()`` is never called, so no
    GPU, model, or network access is needed.
+
+Every pipeline config under ``examples/`` is validated as well, so an example
+cannot keep a setting the config layer rejects.
 """
 
 from __future__ import annotations
@@ -21,9 +24,28 @@ from pathlib import Path
 
 import pytest
 
+from llm_annotator.config import load_config_file, load_pipeline_config
+
 
 EXAMPLES_DIR = Path(__file__).parent.parent / "examples"
 ALL_EXAMPLE_SCRIPTS = sorted(EXAMPLES_DIR.rglob("*.py"))
+
+
+def _is_pipeline_config(path: Path) -> bool:
+    """Whether *path* is a pipeline config rather than a schema or a prompt."""
+    try:
+        data = load_config_file(path)
+    except Exception:
+        return False
+    return isinstance(data, dict) and "steps" in data
+
+
+ALL_EXAMPLE_CONFIGS = sorted(
+    path
+    for pattern in ("*.yaml", "*.yml", "*.json")
+    for path in EXAMPLES_DIR.rglob(pattern)
+    if _is_pipeline_config(path)
+)
 
 
 @pytest.mark.parametrize(
@@ -59,3 +81,13 @@ def test_example_imports(script: Path) -> None:
         spec.loader.exec_module(module)
     finally:
         sys.modules.pop(module_name, None)
+
+
+@pytest.mark.parametrize(
+    "config",
+    ALL_EXAMPLE_CONFIGS,
+    ids=[p.relative_to(EXAMPLES_DIR).as_posix() for p in ALL_EXAMPLE_CONFIGS],
+)
+def test_example_config_validates(config: Path) -> None:
+    """Assert that *config* passes the pipeline config validation."""
+    load_pipeline_config(config)
