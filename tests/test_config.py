@@ -499,7 +499,10 @@ def test_pool_watcher_keeps_polling_dynamic_discovery(
         def client_base_urls(self) -> set[str]:
             return {str(client.base_url) for client in self.clients}
 
-        def add_client(self, discovered_client: Any) -> None:
+        def add_client_for_base_url(
+            self, base_url: str, client_factory: Any
+        ) -> None:
+            discovered_client = client_factory(base_url)
             self.clients.append(discovered_client)
             self.added.append(discovered_client)
             added.set()
