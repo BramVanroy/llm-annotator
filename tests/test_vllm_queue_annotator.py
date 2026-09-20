@@ -332,6 +332,18 @@ def test_late_client_is_used_by_waiting_worker(tmp_path: Path) -> None:
     assert annotator.queue_size == 8
 
 
+def test_late_client_after_destroy_is_cleaned_up() -> None:
+    first = FakeVLLMOnlineClient(base_url="http://w0")
+    late = FakeVLLMOnlineClient(base_url="http://w1")
+    annotator = VLLMQueueAnnotator(clients=[first], batch_size=1)
+
+    annotator.destroy()
+    annotator.add_client(late)
+
+    assert [client.base_url for client in annotator.clients] == ["http://w0"]
+    assert late.destroy_called == 1
+
+
 def test_queue_size_bounds_in_flight_batches(tmp_path: Path) -> None:
     # Verifies no more than queue_size batches are dispatched before results
     # are consumed.

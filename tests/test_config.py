@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+import logging
+import threading
+import time
+import urllib.error
 from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
+import llm_annotator.config as config_mod
 from llm_annotator.config import (
     ClientConfig,
     DatasetConfig,
@@ -262,6 +267,31 @@ def test_wait_for_servers_returns_the_minimum_ready_members(
     ) == ["http://a:8000/v1", "http://b:8000/v1"]
 
 
+def test_wait_for_servers_validates_against_unique_urls() -> None:
+    with pytest.raises(ValueError, match="between 1 and 2"):
+        wait_for_servers(
+            ["http://a:8000/v1", "http://a:8000/v1", "http://b:8000/v1"],
+            timeout=1,
+            min_servers=3,
+        )
+
+
+def test_server_is_ready_logs_the_probe_error(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def fail(*args: Any, **kwargs: Any) -> None:
+        _ = args
+        _ = kwargs
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(config_mod.urllib.request, "urlopen", fail)
+    with caplog.at_level(logging.DEBUG, logger="llm_annotator.config"):
+        assert not config_mod._server_is_ready("http://a:8000/v1", 1)
+
+    assert any("connection refused" in record.message for record in caplog.records)
+
+
 def test_pool_min_servers_cannot_exceed_servers() -> None:
     with pytest.raises(ValueError, match="cannot exceed"):
         ClientConfig(
@@ -329,6 +359,98 @@ def test_resolve_base_urls_reports_empty_glob(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="matched no files"):
         client.resolve_base_urls(tmp_path)
+
+
+def test_build_annotator_counts_unique_pool_members(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client = ClientConfig(
+        provider="vllm_online",
+        model="m",
+        base_urls=[
+            "http://a:8000/v1",
+            "http://a:8000/v1",
+            "http://b:8000/v1",
+        ],
+    )
+    seen: dict[str, Any] = {}
+
+    def fake_build_client(
+        self: ClientConfig, root: Path
+    ) -> list[str]:
+        _ = self
+        _ = root
+        return ["a", "b"]
+
+    class FakeAnnotator:
+        def __init__(self, **kwargs: Any) -> None:
+            seen.update(kwargs)
+            self.max_workers = kwargs["max_workers"]
+
+    monkeypatch.setattr(ClientConfig, "build_client", fake_build_client)
+    monkeypatch.setattr(config_mod, "VLLMQueueAnnotator", FakeAnnotator)
+    monkeypatch.setattr(
+        ClientConfig, "_watch_pool", lambda self, root, annotator: None
+    )
+
+    annotator = client.build_annotator(tmp_path)
+
+    assert isinstance(annotator, FakeAnnotator)
+    assert seen["max_workers"] == 2
+
+
+def test_pool_watcher_stops_after_destroy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client = ClientConfig(
+        provider="vllm_online",
+        model="m",
+        base_urls=["http://w0:8000/v1", "http://w1:8000/v1"],
+    )
+    entered = threading.Event()
+    released = threading.Event()
+
+    class FakeAnnotator:
+        def __init__(self) -> None:
+            self.max_workers = 2
+            self.clients = [type("ClientRef", (), {"base_url": "http://w0:8000/v1"})()]
+            self.added: list[Any] = []
+            self._closed = threading.Event()
+
+        def accepts_new_clients(self) -> bool:
+            return not self._closed.is_set()
+
+        def wait_for_shutdown(self, timeout: float) -> bool:
+            return self._closed.wait(timeout)
+
+        def add_client(self, client: Any) -> None:
+            self.added.append(client)
+
+        def destroy(self) -> None:
+            self._closed.set()
+
+    def fake_ready(url: str, timeout: float) -> bool:
+        _ = url
+        _ = timeout
+        entered.set()
+        released.wait(1)
+        return True
+
+    monkeypatch.setattr(config_mod, "_server_is_ready", fake_ready)
+    monkeypatch.setattr(
+        ClientConfig,
+        "resolve_base_urls",
+        lambda self, root: ["http://w1:8000/v1"],
+    )
+    annotator = FakeAnnotator()
+
+    client._watch_pool(tmp_path, annotator)  # type: ignore[arg-type]
+    assert entered.wait(1)
+    annotator.destroy()
+    released.set()
+    time.sleep(0.1)
+
+    assert annotator.added == []
 
 
 # --- step validation ---------------------------------------------------------

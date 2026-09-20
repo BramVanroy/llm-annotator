@@ -2012,6 +2012,10 @@ class VLLMQueueAnnotator(Annotator):
             per client, and any value below ``len(clients)`` is raised to it,
             since a smaller queue would leave servers idle. After
             initialisation the attribute always holds the resolved value.
+        max_workers: Maximum worker threads used for batch annotation. Defaults
+            to the number of ready clients, but may be set higher when more
+            servers are expected to join later so some workers can wait on the
+            client pool and immediately pick up late-ready servers.
         batch_size: Maximum number of samples sent to a worker in one request.
         num_proc: Number of processes for dataset preprocessing.
         verbose: Whether to print progress information.
@@ -2171,6 +2175,10 @@ class VLLMQueueAnnotator(Annotator):
         """Whether the annotator has begun releasing its clients."""
         return self._destroyed.is_set()
 
+    def wait_for_shutdown(self, timeout: float) -> bool:
+        """Block until the pool is shutting down or the timeout elapses."""
+        return self._destroyed.wait(timeout)
+
     def destroy(self) -> None:
         """Clean up the resources of every client in the pool. Since clients
         can only be ``VLLMOnlineClient``s, the impact is likely minimal:
@@ -2187,7 +2195,6 @@ class VLLMQueueAnnotator(Annotator):
         with self._clients_lock:
             self._destroyed.set()
             clients = list(self.clients)
-
         first_error: BaseException | None = None
         for client in clients:
             try:

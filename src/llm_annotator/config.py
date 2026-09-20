@@ -174,7 +174,8 @@ def _server_is_ready(url: str, timeout: float) -> bool:
     try:
         with urllib.request.urlopen(health, timeout=timeout) as response:
             return int(response.status) == 200
-    except (urllib.error.URLError, OSError):
+    except (urllib.error.URLError, OSError) as exc:
+        LOGGER.debug(f"vLLM server at '{url}' is not ready yet: {exc}")
         return False
 
 
@@ -768,7 +769,8 @@ class ClientConfig(_StrictBase):
                 f"Annotating over {len(one_or_more_clients)} vLLM server(s)."
             )
             expected_servers = max(
-                self.pool.servers, len(self.resolve_base_urls(root))
+                self.pool.servers,
+                len(list(dict.fromkeys(self.resolve_base_urls(root)))),
             )
             annotator = VLLMQueueAnnotator(
                 clients=one_or_more_clients,
@@ -817,6 +819,8 @@ class ClientConfig(_StrictBase):
                         return
                     if url in known_urls or not _server_is_ready(url, 5):
                         continue
+                    if annotator.is_destroyed:
+                        return
                     from llm_annotator.clients.vllm_online_client import (
                         VLLMOnlineClient,
                     )
@@ -829,7 +833,8 @@ class ClientConfig(_StrictBase):
                         return
                     if len(annotator.clients) >= max_workers:
                         return
-                time.sleep(5)
+                if annotator.wait_for_shutdown(timeout=5):
+                    return
 
         import threading
 
