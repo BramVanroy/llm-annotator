@@ -186,6 +186,42 @@ def test_add_client_for_base_url_destroys_client_if_shutdown_starts() -> None:
     assert [client.destroy_called for client in built] == [1]
 
 
+def test_add_client_for_base_url_rechecks_requested_url_after_construction() -> (
+    None
+):
+    existing = FakeVLLMOnlineClient(base_url="http://worker")
+    annotator = VLLMQueueAnnotator(clients=[existing], max_workers=2)
+    started = threading.Event()
+    release = threading.Event()
+    built: list[FakeVLLMOnlineClient] = []
+
+    def factory(base_url: str) -> FakeVLLMOnlineClient:
+        _ = base_url
+        started.set()
+        assert release.wait(5)
+        client = FakeVLLMOnlineClient(base_url="http://different-worker")
+        built.append(client)
+        return client
+
+    thread = threading.Thread(
+        target=annotator.add_client_for_base_url,
+        args=("http://late-worker", factory),
+    )
+    thread.start()
+    assert started.wait(5)
+
+    annotator.add_client(FakeVLLMOnlineClient(base_url="http://late-worker"))
+    release.set()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert [getattr(client, "base_url") for client in annotator.clients] == [
+        "http://worker",
+        "http://late-worker",
+    ]
+    assert [client.destroy_called for client in built] == [1]
+
+
 def _make_dataset(
     n_samples: int, *, task_prefix: str = "", idx_column: str = "idx"
 ) -> Dataset:

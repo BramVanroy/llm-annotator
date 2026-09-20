@@ -2203,6 +2203,13 @@ class VLLMQueueAnnotator(Annotator):
                 return
         client = client_factory(base_url)
         with self._clients_lock:
+            if (
+                self._shutdown_started.is_set()
+                or self._destroyed.is_set()
+                or self._has_client_base_url_locked(base_url)
+            ):
+                client.destroy()
+                return
             self._add_client_locked(client)
 
     def _has_client_base_url_locked(self, base_url: object) -> bool:
