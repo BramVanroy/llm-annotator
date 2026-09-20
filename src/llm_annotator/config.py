@@ -849,7 +849,8 @@ class ClientConfig(_StrictBase):
                             base_url=base_url, **kwargs
                         ),
                     )
-                    known_urls.add(url)
+                    if url in annotator.client_base_urls():
+                        known_urls.add(url)
                     if annotator.is_shutting_down:
                         return
                 if static_urls is not None and known_urls >= static_urls:

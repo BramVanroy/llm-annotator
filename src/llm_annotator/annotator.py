@@ -16,7 +16,7 @@ from functools import wraps
 from math import ceil
 from os import cpu_count
 from pathlib import Path
-from queue import SimpleQueue
+from queue import Empty, SimpleQueue
 from threading import Event, Lock
 from typing import (
     Any,
@@ -2375,8 +2375,21 @@ class VLLMQueueAnnotator(Annotator):
         Returns:
             The batch together with one result per sample, in order.
         """
-        client = self._client_pool.get()
+        while True:
+            if self._shutdown_started.is_set():
+                raise RuntimeError(
+                    "Cannot start a new batch request after shutdown begins."
+                )
+            try:
+                client = self._client_pool.get(timeout=1)
+                break
+            except Empty:
+                continue
         with self._clients_lock:
+            if self._shutdown_started.is_set():
+                raise RuntimeError(
+                    "Cannot start a new batch request after shutdown begins."
+                )
             self._checked_out_clients += 1
         try:
             results = self._annotate_batch(

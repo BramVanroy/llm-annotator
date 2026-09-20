@@ -538,6 +538,28 @@ def test_late_client_after_shutdown_start_is_cleaned_up() -> None:
     assert late.destroy_called == 1
 
 
+def test_shutdown_started_prevents_new_batch_checkout() -> None:
+    client = FakeVLLMOnlineClient(base_url="http://w0")
+    annotator = VLLMQueueAnnotator(
+        clients=[client], batch_size=1, max_concurrent_batches_per_client=1
+    )
+    annotator._shutdown_started.set()
+    batch = next(_make_dataset(1).iter(1))
+
+    with pytest.raises(RuntimeError, match="Cannot start a new batch request"):
+        annotator._annotate_batch_on_free_client(
+            batch,
+            options=None,
+            gen_kwargs=None,
+            task_prefix="",
+            validate_fn=None,
+            postprocess_fn=None,
+            num_retries_invalid=5,
+        )
+
+    assert client.n_batches == 0
+
+
 def test_checked_out_client_is_not_requeued_after_destroy() -> None:
     started = threading.Event()
     release = threading.Event()
