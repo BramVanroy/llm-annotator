@@ -152,7 +152,21 @@ line-ending = "auto"
 
 [tool.interrogate]
 style = "google"
-exclude = ["tests", "scratches", "examples", "docs"]
+exclude = [
+    "tests",
+    "scratches",
+    "examples",
+    "docs",
+    # interrogate walks the whole working tree when it is given no path, and
+    # both callers (`make quality` and the badge workflow) give it none, so
+    # every directory that holds Python but is not source is named here.
+    # Parsing a virtualenv raises RecursionError and kills the run before it
+    # reports anything; ".claude" holds one virtualenv per git worktree.
+    ".venv",
+    ".venvs",
+    ".claude",
+    "site",
+]
 ignore-private = true
 ignore-semiprivate = true
 ignore-nested-functions = true

@@ -631,6 +631,26 @@ def test_max_consecutive_failed_batches_defaults_and_rejects_negative() -> (
         StepConfig(name="s", prompt="x", max_consecutive_failed_batches=-1)
 
 
+def test_max_samples_per_output_file_defaults_and_accepts_an_int() -> None:
+    assert (
+        StepConfig(name="s", prompt="x").max_samples_per_output_file == "auto"
+    )
+    assert (
+        StepConfig(
+            name="s", prompt="x", max_samples_per_output_file=500
+        ).max_samples_per_output_file
+        == 500
+    )
+
+
+@pytest.mark.parametrize("value", [-1, "nope"])
+def test_max_samples_per_output_file_rejects_bad_values(
+    value: Any,
+) -> None:
+    with pytest.raises(ValidationError):
+        StepConfig(name="s", prompt="x", max_samples_per_output_file=value)
+
+
 def test_resolved_prompts_repeats_single_prompt() -> None:
     step = StepConfig(
         name="gen", type="generate", prompts=["Write a fact."], num_samples=3
