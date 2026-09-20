@@ -776,6 +776,127 @@ def test_cli_flags_override_the_config(
     assert not (tmp_path / "ignored").exists()
 
 
+def _write_cli_config(tmp_path: Path, num_rows: int = 4) -> Path:
+    """Write a one-step annotate config over a local source and return it."""
+    import yaml
+
+    source = source_dataset(tmp_path, num_rows=num_rows)
+    config_path = tmp_path / "pipeline.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "output_dir": str(tmp_path / "out"),
+                "verbose": False,
+                "dataset": {"path": str(source)},
+                "client": {
+                    "provider": "openai",
+                    "model": "writer",
+                    "num_proc": None,
+                },
+                "steps": [{"name": "write", "prompt": "About: {text}"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return config_path
+
+
+def test_cli_max_num_samples_caps_the_run(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    config_path = _write_cli_config(tmp_path, num_rows=4)
+    main([str(config_path), "--max-num-samples", "2", "--shuffle-seed", "7"])
+
+    dataset = Dataset.load_from_disk(str(tmp_path / "out" / "final"))
+    assert len(dataset) == 2
+
+    # The run records what it actually used, so growing it later compares
+    # against the resolved value rather than the file.
+    snapshot = json.loads(
+        (tmp_path / "out" / "pipeline.json").read_text(encoding="utf-8")
+    )
+    assert snapshot["dataset"]["max_num_samples"] == 2
+    assert snapshot["dataset"]["shuffle_seed"] == 7
+
+
+def test_cli_max_num_samples_grows_a_finished_run(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    config_path = _write_cli_config(tmp_path, num_rows=4)
+    main([str(config_path), "--max-num-samples", "2"])
+    main([str(config_path), "--max-num-samples", "4"])
+
+    dataset = Dataset.load_from_disk(str(tmp_path / "out" / "final"))
+    assert len(dataset) == 4
+    # Two rows from the pilot, four rows minus those two from the growth.
+    assert sum(len(client.seen_prompts) for client in built_clients) == 4
+
+
+def test_cli_set_reaches_any_key(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    config_path = _write_cli_config(tmp_path, num_rows=4)
+    main(
+        [
+            str(config_path),
+            "--set",
+            "dataset.max_num_samples=3",
+            "--set",
+            "steps.0.client.batch_size=1",
+            "--set",
+            "client.options.temperature=0.25",
+        ]
+    )
+
+    assert len(Dataset.load_from_disk(str(tmp_path / "out" / "final"))) == 3
+    snapshot = json.loads(
+        (tmp_path / "out" / "pipeline.json").read_text(encoding="utf-8")
+    )
+    assert snapshot["steps"][0]["client"]["batch_size"] == 1
+    assert snapshot["client"]["options"] == {"temperature": 0.25}
+
+
+def test_cli_set_rejects_a_malformed_assignment(tmp_path: Path) -> None:
+    config_path = _write_cli_config(tmp_path)
+    with pytest.raises(ValueError, match="expects 'key=value'"):
+        main([str(config_path), "--set", "dataset.max_num_samples"])
+
+
+def test_cli_set_rejects_a_key_given_twice(tmp_path: Path) -> None:
+    config_path = _write_cli_config(tmp_path)
+    with pytest.raises(ValueError, match="set twice"):
+        main(
+            [
+                str(config_path),
+                "--max-num-samples",
+                "2",
+                "--set",
+                "dataset.max_num_samples=3",
+            ]
+        )
+
+
+def test_cli_dataset_flags_need_a_dataset_block(tmp_path: Path) -> None:
+    import yaml
+
+    config_path = tmp_path / "generate.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "output_dir": str(tmp_path / "out"),
+                "client": {"provider": "openai", "model": "gen"},
+                "steps": [
+                    {"name": "make", "type": "generate", "prompts": ["x"]}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="no 'dataset' block"):
+        main([str(config_path), "--max-num-samples", "2"])
+
+
 def _write_mixed_config(tmp_path: Path) -> Path:
     """Write a pooled-vLLM + hosted-provider config and return its path."""
     import yaml

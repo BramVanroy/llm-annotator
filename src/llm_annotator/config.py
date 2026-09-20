@@ -80,6 +80,85 @@ def load_config_file(path: str | Path) -> dict[str, Any]:
     return data
 
 
+def _list_position(values: list[Any], segment: str, key: str) -> int:
+    """Turn one segment of an override key into an index into a config list.
+
+    Args:
+        values: The list the segment addresses.
+        segment: The segment as written in the override key.
+        key: The whole override key, for the error message.
+
+    Returns:
+        The index the segment names.
+
+    Raises:
+        ValueError: If the segment is not an integer, or names a position the
+            list does not have.
+    """
+    try:
+        position = int(segment)
+    except ValueError:
+        raise ValueError(
+            f"Override '{key}': '{segment}' is not a list index. A list in a"
+            " config is addressed by position, as in 'steps.0.name'."
+        ) from None
+    if not -len(values) <= position < len(values):
+        raise ValueError(
+            f"Override '{key}': position {position} is out of range for a"
+            f" list of {len(values)}."
+        )
+    return position
+
+
+def _apply_override(data: dict[str, Any], key: str, value: Any) -> None:
+    """Set one possibly dotted key inside a decoded config mapping.
+
+    A dot descends into a nested block, and an integer segment indexes a list,
+    so ``dataset.max_num_samples`` and ``steps.0.client.batch_size`` both name
+    a single value. A missing intermediate block is created.
+
+    Args:
+        data: The decoded config mapping, modified in place.
+        key: The key to set, with dots between path segments.
+        value: The value to store.
+
+    Raises:
+        ValueError: If a segment runs into a value that is neither a mapping
+            nor a list, or into a list position that does not exist.
+
+    Examples:
+        >>> data = {"dataset": {"name": "imdb"}, "steps": [{"name": "rate"}]}
+        >>> _apply_override(data, "dataset.max_num_samples", 2000)
+        >>> _apply_override(data, "steps.0.client.batch_size", 8)
+        >>> data["dataset"]["max_num_samples"], data["steps"][0]["client"]
+        (2000, {'batch_size': 8})
+    """
+    *parents, leaf = key.split(".")
+    node: Any = data
+    for segment in parents:
+        if isinstance(node, list):
+            node = node[_list_position(node, segment, key)]
+        elif isinstance(node, dict):
+            if node.get(segment) is None:
+                node[segment] = {}
+            node = node[segment]
+        else:
+            raise ValueError(
+                f"Override '{key}': '{segment}' cannot be set inside a"
+                f" {type(node).__name__}."
+            )
+
+    if isinstance(node, list):
+        node[_list_position(node, leaf, key)] = value
+    elif isinstance(node, dict):
+        node[leaf] = value
+    else:
+        raise ValueError(
+            f"Override '{key}': '{leaf}' cannot be set inside a"
+            f" {type(node).__name__}."
+        )
+
+
 def _options_class(provider: ProviderName) -> type[ProviderRuntimeOptions]:
     """Get the runtime-options dataclass belonging to a provider.
 
@@ -1337,7 +1416,11 @@ def load_pipeline_config(
 
     Args:
         path: Path to the config file.
-        overrides: Optional top-level keys that take precedence over the file.
+        overrides: Optional config keys that take precedence over the file. A
+            key may be dotted to reach a nested value, and an integer segment
+            indexes a list, so ``{"dataset.max_num_samples": 2000}`` and
+            ``{"steps.0.client.batch_size": 8}`` both set a single value. A
+            missing intermediate block is created.
         step_client_overrides: Optional per-step client fragments, keyed by
             step name, merged into that step's own ``client`` block before
             validation. This is how a job runner tells one step -- and only
@@ -1348,14 +1431,15 @@ def load_pipeline_config(
         The validated pipeline configuration.
 
     Raises:
-        ValueError: If ``step_client_overrides`` names a step the config does
-            not define.
+        ValueError: If an override key does not fit the shape of the config,
+            or if ``step_client_overrides`` names a step the config does not
+            define.
     """
     pfin = Path(path).expanduser().resolve()
     data = load_config_file(pfin)
     data.setdefault("config_dir", pfin.parent)
-    if overrides:
-        data.update(overrides)
+    for key, value in (overrides or {}).items():
+        _apply_override(data, key, value)
 
     if step_client_overrides:
         steps = data.get("steps") or []

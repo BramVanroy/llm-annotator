@@ -30,6 +30,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Sequence
 
+import yaml
 from datasets import Dataset
 
 from llm_annotator.annotator import (
@@ -41,6 +42,7 @@ from llm_annotator.config import (
     ClientConfig,
     PipelineConfig,
     StepConfig,
+    load_config_file,
     load_pipeline_config,
 )
 from llm_annotator.logging_utils import configure_logging, get_logger
@@ -747,6 +749,130 @@ def _serve_args(config: PipelineConfig, step_name: str) -> list[str]:
     ]
 
 
+_DATASET_FLAG_KEYS = ("dataset.max_num_samples", "dataset.shuffle_seed")
+
+
+def _parse_set_override(assignment: str) -> tuple[str, Any]:
+    """Split one ``--set key=value`` argument into a config key and a value.
+
+    The value is read as YAML, the same way the config file itself is, so
+    ``2000`` is an integer, ``true`` a boolean, ``[a, b]`` a list and anything
+    else the string it looks like.
+
+    Args:
+        assignment: The argument as typed, e.g.
+            ``dataset.max_num_samples=2000``.
+
+    Returns:
+        The config key and the decoded value.
+
+    Raises:
+        ValueError: If the argument has no ``=``, or an empty key or path
+            segment.
+
+    Examples:
+        >>> _parse_set_override("dataset.max_num_samples=2000")
+        ('dataset.max_num_samples', 2000)
+        >>> _parse_set_override("client.model=gpt-4o-mini")
+        ('client.model', 'gpt-4o-mini')
+    """
+    key, separator, raw = assignment.partition("=")
+    key = key.strip()
+    if not separator or not all(key.split(".")):
+        raise ValueError(
+            f"--set expects 'key=value', got '{assignment}'. Use a dotted key"
+            " to reach a nested value, as in"
+            " --set dataset.max_num_samples=2000."
+        )
+
+    try:
+        value = yaml.safe_load(raw)
+    except yaml.YAMLError:
+        value = raw
+    return key, value
+
+
+def _cli_overrides(
+    config_path: Path,
+    output_dir: str | None = None,
+    hub_id: str | None = None,
+    log_level: str | None = None,
+    overwrite: bool | None = None,
+    max_num_samples: int | None = None,
+    shuffle_seed: int | None = None,
+    settings: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Collect the config overrides typed on the command line.
+
+    The named flags are shorthands for keys that ``--set`` can also reach, so
+    they end up in the same mapping and a key given twice is an error rather
+    than a silent winner.
+
+    Args:
+        config_path: Path to the config file, read only to check that the two
+            dataset flags have a block to apply to.
+        output_dir: Value of ``--output-dir``, resolved against the current
+            directory because it is typed at the shell.
+        hub_id: Value of ``--hub-id``.
+        log_level: Value of ``--log-level``.
+        overwrite: ``True`` when ``--overwrite`` was passed.
+        max_num_samples: Value of ``--max-num-samples``.
+        shuffle_seed: Value of ``--shuffle-seed``.
+        settings: Raw ``--set key=value`` arguments.
+
+    Returns:
+        Overrides keyed the way
+        [`load_pipeline_config`][llm_annotator.config.load_pipeline_config]
+        expects them.
+
+    Raises:
+        ValueError: If a ``--set`` argument is malformed, if a key is given
+            twice, or if a dataset flag is used on a config that has no
+            ``dataset`` block.
+    """
+    overrides: dict[str, Any] = {}
+    named: tuple[tuple[str, Any], ...] = (
+        (
+            "output_dir",
+            Path(output_dir).expanduser().resolve()
+            if output_dir is not None
+            else None,
+        ),
+        ("hub_id", hub_id),
+        ("log_level", log_level),
+        ("overwrite", overwrite),
+        ("dataset.max_num_samples", max_num_samples),
+        ("dataset.shuffle_seed", shuffle_seed),
+    )
+    for key, value in named:
+        if value is not None:
+            overrides[key] = value
+
+    # Without this, the flags would create a 'dataset' block on a pipeline that
+    # generates its own data, and the run would fail on a validation error that
+    # says nothing about the flag that caused it.
+    if set(_DATASET_FLAG_KEYS) & set(overrides):
+        if "dataset" not in load_config_file(config_path):
+            raise ValueError(
+                f"Config '{config_path}' has no 'dataset' block, so"
+                " --max-num-samples and --shuffle-seed have nothing to apply"
+                " to. A pipeline whose first step generates its own data sizes"
+                " it with 'num_samples' on that step:"
+                " --set steps.0.num_samples=N."
+            )
+
+    for assignment in settings or []:
+        key, value = _parse_set_override(assignment)
+        if key in overrides:
+            raise ValueError(
+                f"'{key}' is set twice on the command line. Give it once,"
+                " either through its own flag or through --set."
+            )
+        overrides[key] = value
+
+    return overrides
+
+
 def main(args: list[str] | None = None) -> None:
     """Run an annotation pipeline described by a JSON or YAML config file.
 
@@ -792,6 +918,31 @@ def main(args: list[str] | None = None) -> None:
         " the new rows.",
     )
     parser.add_argument(
+        "--max-num-samples",
+        type=int,
+        default=None,
+        help="Override 'dataset.max_num_samples'. Raising it on a finished"
+        " run and re-running annotates only the rows that are new.",
+    )
+    parser.add_argument(
+        "--shuffle-seed",
+        type=int,
+        default=None,
+        help="Override 'dataset.shuffle_seed', the seed the source is"
+        " shuffled with before it is capped.",
+    )
+    parser.add_argument(
+        "--set",
+        dest="settings",
+        metavar="KEY=VALUE",
+        action="append",
+        default=None,
+        help="Override any config key; repeat for more than one. A dotted key"
+        " reaches a nested value and an integer segment indexes a list, as in"
+        " --set client.options.temperature=0.2 or"
+        " --set steps.0.client.batch_size=8. The value is read as YAML.",
+    )
+    parser.add_argument(
         "--steps",
         default=None,
         help="Comma-separated names of the steps to run, which must be"
@@ -829,21 +980,16 @@ def main(args: list[str] | None = None) -> None:
         else None
     )
 
-    output_dir_override = (
-        Path(parsed.output_dir).expanduser().resolve()
-        if parsed.output_dir is not None
-        else None
+    overrides = _cli_overrides(
+        config_path=parsed.config,
+        output_dir=parsed.output_dir,
+        hub_id=parsed.hub_id,
+        log_level=parsed.log_level,
+        overwrite=parsed.overwrite,
+        max_num_samples=parsed.max_num_samples,
+        shuffle_seed=parsed.shuffle_seed,
+        settings=parsed.settings,
     )
-    overrides = {
-        key: value
-        for key, value in (
-            ("output_dir", output_dir_override),
-            ("hub_id", parsed.hub_id),
-            ("log_level", parsed.log_level),
-            ("overwrite", parsed.overwrite),
-        )
-        if value is not None
-    }
 
     config = load_pipeline_config(
         parsed.config,
@@ -853,6 +999,9 @@ def main(args: list[str] | None = None) -> None:
         ),
     )
     configure_logging(level=config.log_level)
+    if overrides:
+        applied = ", ".join(f"{k}={v}" for k, v in overrides.items())
+        LOGGER.info(f"Config overrides from the command line: {applied}.")
 
     if parsed.describe_steps:
         for described in config.describe_steps():

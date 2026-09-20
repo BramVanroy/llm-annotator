@@ -96,7 +96,7 @@ if [[ -n "${POOL_DIR:-}" ]]; then
   ANNOTATE_ARGS+=(--hosts-file "$HOSTS_FILE")
 fi
 
-# Everything else lives in the config; these three are the run-level overrides.
+# Everything else lives in the config; these are the run-level overrides.
 if [[ -n "${OUTPUT_DIR:-}" ]]; then
   ANNOTATE_ARGS+=(--output-dir "$OUTPUT_DIR")
 fi
@@ -105,6 +105,14 @@ if [[ -n "${HUB_ID:-}" ]]; then
 fi
 if [[ "${OVERWRITE:-0}" == "1" ]]; then
   ANNOTATE_ARGS+=(--overwrite)
+fi
+# Every step job of one submission sees the same cap, so a pipeline submitted
+# with a larger MAX_NUM_SAMPLES grows as a whole rather than step by step.
+if [[ -n "${MAX_NUM_SAMPLES:-}" ]]; then
+  ANNOTATE_ARGS+=(--max-num-samples "$MAX_NUM_SAMPLES")
+fi
+if [[ -n "${SHUFFLE_SEED:-}" ]]; then
+  ANNOTATE_ARGS+=(--shuffle-seed "$SHUFFLE_SEED")
 fi
 
 set +e

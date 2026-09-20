@@ -1102,6 +1102,83 @@ def test_describe_steps_reports_every_step() -> None:
     )
 
 
+# --- dotted overrides --------------------------------------------------------
+
+
+def test_dotted_override_reaches_a_nested_block(tmp_path: Path) -> None:
+    path = write_config(tmp_path, minimal_config(), ".yaml")
+    config = load_pipeline_config(
+        path,
+        overrides={
+            "dataset.max_num_samples": 2000,
+            "dataset.shuffle_seed": 42,
+        },
+    )
+    assert config.dataset is not None
+    assert config.dataset.max_num_samples == 2000
+    assert config.dataset.shuffle_seed == 42
+    assert config.dataset.name == "stanfordnlp/imdb"
+
+
+def test_dotted_override_creates_a_missing_block(tmp_path: Path) -> None:
+    # 'options' is absent from the file, so the path has to be built on the
+    # way down rather than assumed to exist.
+    path = write_config(tmp_path, minimal_config(), ".yaml")
+    config = load_pipeline_config(
+        path, overrides={"client.options.temperature": 0.2}
+    )
+    assert config.client is not None
+    assert config.client.options == {"temperature": 0.2}
+
+
+def test_dotted_override_indexes_a_list(tmp_path: Path) -> None:
+    path = write_config(
+        tmp_path,
+        minimal_config(
+            steps=[
+                {"name": "one", "prompt": "a {text}"},
+                {"name": "two", "prompt": "b {text}"},
+            ]
+        ),
+        ".yaml",
+    )
+    config = load_pipeline_config(
+        path, overrides={"steps.1.client.batch_size": 8}
+    )
+    assert config.step_client(config.steps[1]).batch_size == 8
+    assert config.step_client(config.steps[0]).batch_size != 8
+
+
+def test_dotted_override_rejects_an_out_of_range_position(
+    tmp_path: Path,
+) -> None:
+    path = write_config(tmp_path, minimal_config(), ".yaml")
+    with pytest.raises(ValueError, match="position 3 is out of range"):
+        load_pipeline_config(path, overrides={"steps.3.name": "nope"})
+
+
+def test_dotted_override_rejects_a_non_integer_list_segment(
+    tmp_path: Path,
+) -> None:
+    path = write_config(tmp_path, minimal_config(), ".yaml")
+    with pytest.raises(ValueError, match="is not a list index"):
+        load_pipeline_config(path, overrides={"steps.classify.name": "nope"})
+
+
+def test_dotted_override_rejects_descending_into_a_scalar(
+    tmp_path: Path,
+) -> None:
+    path = write_config(tmp_path, minimal_config(), ".yaml")
+    with pytest.raises(ValueError, match="cannot be set inside a str"):
+        load_pipeline_config(path, overrides={"output_dir.deeper": 1})
+
+
+def test_dotted_override_is_validated_like_the_file(tmp_path: Path) -> None:
+    path = write_config(tmp_path, minimal_config(), ".yaml")
+    with pytest.raises(ValueError, match="max_num_smaples"):
+        load_pipeline_config(path, overrides={"dataset.max_num_smaples": 10})
+
+
 # --- step-scoped client overrides --------------------------------------------
 
 
