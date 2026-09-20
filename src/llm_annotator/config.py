@@ -14,6 +14,7 @@ import json
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Literal, get_args
 
@@ -167,34 +168,68 @@ def _client_class(provider: ProviderName) -> type[Client[Any]]:
     raise ValueError(f"Unknown provider '{provider}'.")
 
 
-def wait_for_servers(base_urls: list[str], timeout: float) -> None:
-    """Block until every vLLM server answers its ``/health`` endpoint.
+def _server_is_ready(url: str, timeout: float) -> bool:
+    """Return whether a vLLM server answers its health endpoint."""
+    health = f"{url.removesuffix('/v1').rstrip('/')}/health"
+    try:
+        with urllib.request.urlopen(health, timeout=timeout) as response:
+            return int(response.status) == 200
+    except (urllib.error.URLError, OSError):
+        return False
+
+
+def wait_for_servers(
+    base_urls: list[str], timeout: float, min_servers: int = 1
+) -> list[str]:
+    """Block until the requested number of vLLM servers answer ``/health``.
 
     Args:
         base_urls: vLLM base URLs (each ending in ``/v1``).
-        timeout: Maximum number of seconds to wait per server.
+        timeout: Maximum number of seconds to wait for the pool as a whole.
+        min_servers: Number of ready servers required to continue.
 
     Raises:
-        TimeoutError: If a server is still unreachable after ``timeout``.
+        TimeoutError: If fewer than ``min_servers`` are reachable after
+            ``timeout``.
     """
-    for url in base_urls:
-        health = f"{url.removesuffix('/v1').rstrip('/')}/health"
-        # time in fractional seconds
-        deadline = time.monotonic() + timeout
-        while True:
-            try:
-                with urllib.request.urlopen(health, timeout=5) as response:
-                    if response.status == 200:
-                        break
-            except (urllib.error.URLError, OSError):
-                pass
+    if not 1 <= min_servers <= len(base_urls):
+        raise ValueError(
+            f"'min_servers' must be between 1 and {len(base_urls)}, got"
+            f" {min_servers}."
+        )
 
-            if time.monotonic() > deadline:
-                raise TimeoutError(
-                    f"vLLM server at '{url}' did not become ready within"
-                    f" {timeout:g}s."
-                )
-            time.sleep(5)
+    pending = list(dict.fromkeys(base_urls))
+    ready: list[str] = []
+    deadline = time.monotonic() + timeout
+    while pending:
+        remaining = deadline - time.monotonic()
+        if remaining < 0:
+            break
+        with ThreadPoolExecutor(max_workers=len(pending)) as pool:
+            results = zip(
+                pending,
+                pool.map(
+                    lambda url: _server_is_ready(
+                        url, min(5, max(remaining, 0))
+                    ),
+                    pending,
+                ),
+                strict=True,
+            )
+            newly_ready = []
+            for url, is_ready in results:
+                if is_ready:
+                    ready.append(url)
+                    newly_ready.append(url)
+        pending = [url for url in pending if url not in newly_ready]
+        if len(ready) >= min_servers:
+            return ready
+        time.sleep(min(5, max(0, deadline - time.monotonic())))
+
+    raise TimeoutError(
+        f"Only {len(ready)} of {min_servers} required vLLM server(s) became"
+        f" ready within {timeout:g}s."
+    )
 
 
 class _StrictBase(BaseModel):
@@ -367,9 +402,20 @@ class PoolConfig(_StrictBase):
 
     Attributes:
         servers: Number of vLLM server processes to run for this step.
+        min_servers: Number of ready servers required before annotation begins.
     """
 
     servers: int = Field(default=1, ge=1)
+    min_servers: int = Field(default=1, ge=1)
+
+    @model_validator(mode="after")
+    def _minimum_does_not_exceed_pool(self) -> "PoolConfig":
+        """Reject a readiness threshold larger than the requested pool."""
+        if self.min_servers > self.servers:
+            raise ValueError(
+                "'pool.min_servers' cannot exceed 'pool.servers'."
+            )
+        return self
 
     @model_validator(mode="before")
     @classmethod
@@ -412,8 +458,8 @@ class ClientConfig(_StrictBase):
             be absolute, which is what a job scheduler writing into a scratch
             directory needs.
         queue_size: Batches kept in flight across the pool.
-        wait_for_servers: Seconds to wait for every server's ``/health``
-            before starting. ``0`` disables the check.
+        wait_for_servers: Seconds to wait for ``pool.min_servers`` servers'
+            ``/health`` endpoints before starting. ``0`` disables the check.
         engine: How this step's vLLM engine is built. Applies to both vLLM
             providers; rejected for the hosted ones.
         pool: How many servers this step wants. Only meaningful for
@@ -693,9 +739,11 @@ class ClientConfig(_StrictBase):
         if self.wait_for_servers:
             LOGGER.info(
                 f"Waiting up to {self.wait_for_servers:g}s for"
-                f" {len(base_urls)} vLLM server(s) to become ready..."
+                f" {self.pool.min_servers} vLLM server(s) to become ready..."
             )
-            wait_for_servers(base_urls, self.wait_for_servers)
+            base_urls = wait_for_servers(
+                base_urls, self.wait_for_servers, self.pool.min_servers
+            )
 
         return [VLLMOnlineClient(base_url=url, **kwargs) for url in base_urls]
 
@@ -719,19 +767,68 @@ class ClientConfig(_StrictBase):
             LOGGER.info(
                 f"Annotating over {len(one_or_more_clients)} vLLM server(s)."
             )
-            return VLLMQueueAnnotator(
+            expected_servers = max(
+                self.pool.servers, len(self.resolve_base_urls(root))
+            )
+            annotator = VLLMQueueAnnotator(
                 clients=one_or_more_clients,
                 batch_size=self.batch_size,
                 queue_size=self.queue_size,
+                max_workers=expected_servers,
                 num_proc=self.num_proc,
                 verbose=verbose,
             )
+            self._watch_pool(root, annotator)
+            return annotator
         return Annotator(
             client=one_or_more_clients,
             batch_size=self.batch_size,
             num_proc=self.num_proc,
             verbose=verbose,
         )
+
+    def _watch_pool(self, root: Path, annotator: VLLMQueueAnnotator) -> None:
+        """Add configured vLLM servers to an active pool as they become ready."""
+        max_workers = annotator.max_workers
+        assert max_workers is not None
+        if len(annotator.clients) >= max_workers:
+            return
+
+        kwargs = dict(self.init)
+        if self.model is not None:
+            kwargs["model"] = self.model
+        known_urls = {
+            str(getattr(client, "base_url")) for client in annotator.clients
+        }
+
+        def discover() -> list[str]:
+            try:
+                return self.resolve_base_urls(root)
+            except ValueError:
+                return []
+
+        def watch() -> None:
+            while len(annotator.clients) < max_workers:
+                for url in discover():
+                    if url in known_urls or not _server_is_ready(url, 5):
+                        continue
+                    from llm_annotator.clients.vllm_online_client import (
+                        VLLMOnlineClient,
+                    )
+
+                    annotator.add_client(
+                        VLLMOnlineClient(base_url=url, **kwargs)
+                    )
+                    known_urls.add(url)
+                    if len(annotator.clients) >= max_workers:
+                        return
+                time.sleep(5)
+
+        import threading
+
+        threading.Thread(
+            target=watch, name="vllm-pool-watcher", daemon=True
+        ).start()
 
 
 class StepConfig(_StrictBase):

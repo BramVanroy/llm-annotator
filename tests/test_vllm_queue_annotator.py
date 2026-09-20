@@ -286,6 +286,39 @@ def test_clients_run_in_parallel(tmp_path: Path) -> None:
     assert all(client.n_batches > 0 for client in clients)
 
 
+def test_late_client_is_used_by_waiting_worker(tmp_path: Path) -> None:
+    barrier = threading.Barrier(2)
+    first = FakeVLLMOnlineClient(base_url="http://w0", barrier=barrier)
+    second = FakeVLLMOnlineClient(base_url="http://w1", barrier=barrier)
+    annotator = VLLMQueueAnnotator(
+        clients=[first], batch_size=1, max_workers=2
+    )
+    result: dict[str, Any] = {}
+
+    thread = threading.Thread(
+        target=lambda: result.setdefault(
+            "dataset",
+            annotator.run_annotation(
+                output_dir=tmp_path / "out",
+                prepared_dataset=_make_dataset(2),
+                keep_idx_column=True,
+            ),
+        )
+    )
+    thread.start()
+    for _ in range(100):
+        if first.n_batches:
+            break
+        threading.Event().wait(0.01)
+    annotator.add_client(second)
+    thread.join(timeout=10)
+
+    assert not thread.is_alive()
+    assert len(result["dataset"]) == 2
+    assert first.n_batches == second.n_batches == 1
+    assert annotator.queue_size == 8
+
+
 def test_queue_size_bounds_in_flight_batches(tmp_path: Path) -> None:
     # Verifies no more than queue_size batches are dispatched before results
     # are consumed.

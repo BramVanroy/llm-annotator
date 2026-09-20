@@ -2039,10 +2039,12 @@ class VLLMQueueAnnotator(Annotator):
 
     clients: Sequence[Client[Any]]
     queue_size: int | None = None
+    max_workers: int | None = None
     # Required in the base class but set to init=False here
     # since we derive it from the first client in the pool
     client: Client = field(init=False, repr=False)
     _client_pool: SimpleQueue[Client[Any]] = field(init=False, repr=False)
+    _requested_queue_size: int | None = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         """Validate the pool, derive the defaults, and fill the client queue.
@@ -2076,6 +2078,8 @@ class VLLMQueueAnnotator(Annotator):
 
         # not used here but to satisfy the base class and type-checer
         self.client = self.clients[0]
+        self.max_workers = max(len(self.clients), self.max_workers or 0)
+        self._requested_queue_size = self.queue_size
         self.queue_size: int = self._resolve_queue_size(self.queue_size)
 
         # Load balancing: a batch is only dispatched once a client is free, so
@@ -2131,7 +2135,27 @@ class VLLMQueueAnnotator(Annotator):
         Raises:
             ValueError: If ``queue_size`` is given but not positive.
         """
+        self._requested_queue_size = queue_size
         self.queue_size = self._resolve_queue_size(queue_size)
+
+    def add_client(self, client: Client[Any]) -> None:
+        """Add a vLLM server that became ready after annotation started.
+
+        Args:
+            client: Ready vLLM server client to make available to workers.
+
+        Raises:
+            TypeError: If ``client`` is not a vLLM server client.
+        """
+        if getattr(client, "provider_type", None) != Provider.VLLM_ONLINE:
+            raise TypeError(
+                "VLLMQueueAnnotator only supports vLLM server clients"
+                " (provider 'vllm_online'), got"
+                f" '{type(client).__name__}'."
+            )
+        cast(list[Client[Any]], self.clients).append(client)
+        self._client_pool.put(client)
+        self.set_queue_size(self._requested_queue_size)
 
     def destroy(self) -> None:
         """Clean up the resources of every client in the pool. Since clients
@@ -2261,7 +2285,7 @@ class VLLMQueueAnnotator(Annotator):
         }
 
         pool = ThreadPoolExecutor(
-            max_workers=len(self.clients),
+            max_workers=cast(int, self.max_workers),
             thread_name_prefix="vllm-queue-worker",
         )
         pending: set[Future[Any]] = set()

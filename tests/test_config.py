@@ -12,9 +12,11 @@ from llm_annotator.config import (
     DatasetConfig,
     EngineConfig,
     PipelineConfig,
+    PoolConfig,
     StepConfig,
     load_config_file,
     load_pipeline_config,
+    wait_for_servers,
 )
 
 
@@ -242,6 +244,31 @@ def test_is_pool_flag() -> None:
     assert ClientConfig(
         provider="vllm_online", model="m", base_urls=["http://a:8000/v1"]
     ).is_pool()
+
+
+def test_wait_for_servers_returns_the_minimum_ready_members(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ready_urls = {"http://a:8000/v1", "http://b:8000/v1"}
+    monkeypatch.setattr(
+        "llm_annotator.config._server_is_ready",
+        lambda url, timeout: url in ready_urls,
+    )
+
+    assert wait_for_servers(
+        ["http://a:8000/v1", "http://b:8000/v1", "http://c:8000/v1"],
+        timeout=1,
+        min_servers=2,
+    ) == ["http://a:8000/v1", "http://b:8000/v1"]
+
+
+def test_pool_min_servers_cannot_exceed_servers() -> None:
+    with pytest.raises(ValueError, match="cannot exceed"):
+        ClientConfig(
+            provider="vllm_online",
+            model="m",
+            pool=PoolConfig(servers=2, min_servers=3),
+        )
 
 
 def test_resolve_base_urls_from_hosts_file(tmp_path: Path) -> None:
