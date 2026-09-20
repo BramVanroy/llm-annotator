@@ -5,8 +5,8 @@
 # On a cluster, a job submitter drives it with one job chain per step: it asks
 # this file what each step needs (`llm-annotate <config> --describe-steps`),
 # starts a GPU server array for step 1 and a CPU-only job for step 2, and
-# passes each step's own servers in with --hosts-file. Nothing about the
-# allocation is repeated here or there.
+# passes each step's own servers in with --hosts-file or --url-glob. Nothing
+# about the allocation is repeated here or there.
 #
 # The same file runs end to end on one machine, with no scheduler involved:
 #
@@ -67,6 +67,9 @@ steps:
         tensor_parallel_size: 2
       pool:
         servers: 4
+        # Annotating starts once two of the four answer, and the other two
+        # join the run whenever the scheduler gets to them.
+        min_servers: 2
 
   # A hosted judge. This step needs no GPU at all, so on a cluster it becomes a
   # CPU-only job and the GPUs from step 1 are released before it starts.

@@ -15,8 +15,12 @@
 # The step decides what this job needs, which the submitter has already worked
 # out from the config with `llm-annotate --describe-steps`:
 #
-#   POOL_DIR set    a companion server array is starting up; wait for it to
-#                   publish its URLs, then annotate over the whole pool
+#   POOL_DIR set    a companion server array is starting up; wait for
+#                   MIN_SERVERS of it to publish their URLs, then annotate over
+#                   the pool, which keeps growing as the rest arrive. This job
+#                   was held in the queue until one of those servers began, so
+#                   what is left to wait for is a model load, not a GPU
+#                   allocation
 #   POOL_DIR unset  nothing to wait for. Either the step calls a hosted API
 #                   (no accelerator at all) or it loads the model in-process,
 #                   in which case the submitter asked for GPUs on this job.
@@ -35,7 +39,16 @@ cd "$REPO_ROOT"
 : "${ANNOTATE_CONFIG:?Set ANNOTATE_CONFIG to a JSON/YAML pipeline config}"
 : "${STEP_NAME:?Set STEP_NAME to the step of that config to run}"
 : "${NUM_SERVERS:=1}"
-: "${POOL_WAIT:=3600}"
+# How many of them have to be up before annotating starts. submit_pipeline.sh
+# passes the step's own `pool.min_servers`; a manual submission that only says
+# how large the pool is waits for all of it.
+: "${MIN_SERVERS:=${NUM_SERVERS}}"
+# Matches READY_TIMEOUT, so a client cannot give up on a server before the
+# server gives up on itself. Submitted through submit_pipeline.sh this job only
+# starts once a server of its own pool has, so the wait is a model load rather
+# than an allocation; raise it for a manual run against a pool that is still
+# queued.
+: "${POOL_WAIT:=1800}"
 
 echo "Starting on $(date)"
 echo "Host: $(hostname)"
@@ -64,18 +77,37 @@ ANNOTATE_ARGS=(--steps "$STEP_NAME")
 
 # With a pool, wait for the servers to publish their URLs before starting.
 if [[ -n "${POOL_DIR:-}" ]]; then
-  echo "Pool: ${POOL_DIR} (waiting for ${NUM_SERVERS} server(s))"
+  echo "Pool: ${POOL_DIR} (starting at ${MIN_SERVERS} of ${NUM_SERVERS} server(s))"
 
   count_urls() {
     local files=("$POOL_DIR"/*.url)
     [[ -e "${files[0]}" ]] && echo "${#files[@]}" || echo 0
   }
 
+  # Slurm counts a cancelled job as having satisfied an `after:` dependency, so
+  # a server array that was killed off (its own dependency failed, or someone
+  # scancelled it) releases this client rather than holding it back. Sitting
+  # out the whole POOL_WAIT for servers that are not coming only delays the
+  # error, so stop as soon as the array has no element left in the queue. A
+  # squeue that fails to answer says nothing about the array, so that counts
+  # as alive.
+  pool_alive() {
+    [[ -n "${SERVER_JOB_ID:-}" ]] || return 0
+    local elements
+    elements=$(squeue -j "$SERVER_JOB_ID" -h -o '%T' 2> /dev/null) || return 0
+    [[ -n "$elements" ]]
+  }
+
   deadline=$(( SECONDS + POOL_WAIT ))
   ready=$(count_urls)
-  while (( ready < NUM_SERVERS )); do
+  while (( ready < MIN_SERVERS )); do
     if (( SECONDS > deadline )); then
-      echo "Waited ${POOL_WAIT}s for ${NUM_SERVERS} server(s), ${ready} showed up."
+      echo "Waited ${POOL_WAIT}s for ${MIN_SERVERS} server(s), ${ready} showed up."
+      break
+    fi
+    if ! pool_alive; then
+      echo "Server job ${SERVER_JOB_ID} has no element left in the queue," \
+        "so ${ready} server(s) is all this step is going to get."
       break
     fi
     sleep 10
@@ -88,12 +120,13 @@ if [[ -n "${POOL_DIR:-}" ]]; then
     exit 1
   fi
 
-  HOSTS_FILE="${POOL_DIR}/hosts.txt"
-  cat "$POOL_DIR"/*.url > "$HOSTS_FILE"
-  echo "Annotating over ${ready} server(s):"
-  cat "$HOSTS_FILE"
+  echo "Annotating over ${ready} of ${NUM_SERVERS} server(s):"
+  cat "$POOL_DIR"/*.url
 
-  ANNOTATE_ARGS+=(--hosts-file "$HOSTS_FILE")
+  # The glob rather than a snapshot of it: the client re-reads the pool
+  # directory while it runs, so the servers still queued join this step as
+  # soon as they publish their URL.
+  ANNOTATE_ARGS+=(--url-glob "${POOL_DIR}/*.url")
 fi
 
 # Everything else lives in the config; these are the run-level overrides.
@@ -106,13 +139,14 @@ fi
 if [[ "${OVERWRITE:-0}" == "1" ]]; then
   ANNOTATE_ARGS+=(--overwrite)
 fi
-# Every step job of one submission sees the same cap, so a pipeline submitted
-# with a larger MAX_NUM_SAMPLES grows as a whole rather than step by step.
-if [[ -n "${MAX_NUM_SAMPLES:-}" ]]; then
-  ANNOTATE_ARGS+=(--max-num-samples "$MAX_NUM_SAMPLES")
-fi
-if [[ -n "${SHUFFLE_SEED:-}" ]]; then
-  ANNOTATE_ARGS+=(--shuffle-seed "$SHUFFLE_SEED")
+# Config overrides for this submission, one KEY=VALUE per line, as
+# submit_pipeline.sh --set left them. Every step job of one submission sees the
+# same ones, so a pipeline resubmitted with a larger dataset.max_num_samples
+# grows as a whole rather than step by step.
+if [[ -n "${ANNOTATE_SET:-}" ]]; then
+  while IFS= read -r setting; do
+    [[ -n "$setting" ]] && ANNOTATE_ARGS+=(--set "$setting")
+  done <<< "$ANNOTATE_SET"
 fi
 
 set +e

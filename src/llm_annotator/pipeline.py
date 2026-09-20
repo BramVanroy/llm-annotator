@@ -632,38 +632,49 @@ def run_pipeline(
     return dataset
 
 
-def _hosts_file_override(
+def _pool_source_override(
     config_path: Path,
     hosts_file: Path | None,
+    url_glob: str | None,
     selected: Sequence[str] | None,
 ) -> dict[str, dict[str, Any]] | None:
-    """Work out which step a ``--hosts-file`` argument belongs to.
+    """Work out which step a ``--hosts-file`` or ``--url-glob`` belongs to.
 
-    The file is attached to the selected steps that run on vLLM, never to the
-    pipeline as a whole: a step on a hosted provider must not inherit a pool it
-    cannot use, and a set of servers only ever serves one model.
+    The pool source is attached to the selected steps that run on vLLM, never
+    to the pipeline as a whole: a step on a hosted provider must not inherit a
+    pool it cannot use, and a set of servers only ever serves one model.
 
     Args:
         config_path: Path to the config file, loaded once to see the providers.
-        hosts_file: The path given on the command line, or ``None``.
+        hosts_file: The path given to ``--hosts-file``, or ``None``.
+        url_glob: The pattern given to ``--url-glob``, or ``None``.
         selected: Step names being run, or ``None`` for all of them.
 
     Returns:
-        A per-step client override mapping, or ``None`` when no hosts file was
+        A per-step client override mapping, or ``None`` when neither flag was
         given.
 
     Raises:
-        ValueError: If no selected step runs on vLLM, or if the selected vLLM
-            steps disagree about which model they want, since one pool of
-            servers can only serve one of them.
+        ValueError: If both flags are given, if no selected step runs on vLLM,
+            or if the selected vLLM steps disagree about which model they want,
+            since one pool of servers can only serve one of them.
     """
-    if hosts_file is None:
+    if hosts_file is not None and url_glob is not None:
+        raise ValueError(
+            "--hosts-file and --url-glob both name the pool's servers; give"
+            " one of them."
+        )
+    if hosts_file is not None:
+        # A command-line path means what the shell means by it. Config paths
+        # resolve against the config file instead, so pin it down before it is
+        # handed over as though it had been written in the config.
+        source = {"hosts_file": str(hosts_file.expanduser().resolve())}
+        flag = "--hosts-file"
+    elif url_glob is not None:
+        source = {"url_glob": str(Path(url_glob).expanduser().absolute())}
+        flag = "--url-glob"
+    else:
         return None
-
-    # A command-line path means what the shell means by it. Config paths
-    # resolve against the config file instead, so pin it down before it is
-    # handed over as though it had been written in the config.
-    resolved = str(hosts_file.expanduser().resolve())
 
     probe = load_pipeline_config(config_path)
     targets = {}
@@ -675,7 +686,7 @@ def _hosts_file_override(
 
     if not targets:
         raise ValueError(
-            "--hosts-file points at vLLM servers, but none of the steps being"
+            f"{flag} points at vLLM servers, but none of the steps being"
             f" run ({selected or 'all'}) uses provider 'vllm_online'."
         )
 
@@ -687,7 +698,7 @@ def _hosts_file_override(
             " separate --steps invocations, each against its own servers."
         )
 
-    return {name: {"hosts_file": resolved} for name in targets}
+    return {name: dict(source) for name in targets}
 
 
 def _serve_args(config: PipelineConfig, step_name: str) -> list[str]:
@@ -958,6 +969,14 @@ def main(args: list[str] | None = None) -> None:
         " whose addresses are only known at run time.",
     )
     parser.add_argument(
+        "--url-glob",
+        default=None,
+        help="Glob matching files that each hold one vLLM server base URL,"
+        " applied to the same steps as --hosts-file. Unlike a file of URLs it"
+        " is re-read while the run continues, so servers that become ready"
+        " later join the pool.",
+    )
+    parser.add_argument(
         "--serve-args",
         metavar="STEP",
         default=None,
@@ -994,8 +1013,8 @@ def main(args: list[str] | None = None) -> None:
     config = load_pipeline_config(
         parsed.config,
         overrides=overrides,
-        step_client_overrides=_hosts_file_override(
-            parsed.config, parsed.hosts_file, selected
+        step_client_overrides=_pool_source_override(
+            parsed.config, parsed.hosts_file, parsed.url_glob, selected
         ),
     )
     configure_logging(level=config.log_level)

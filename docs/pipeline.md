@@ -297,17 +297,22 @@ client:
   base_urls:                       # explicit
     - http://node01:8000/v1
     - http://node02:8000/v1
-  # hosts_file: logs/pool_123/hosts.txt   # one URL per line
-  # url_glob: logs/pool_*/*.url           # one URL per file
+  # hosts_file: logs/pool_123/hosts.txt   # one URL per line, read once
+  # url_glob: logs/pool_*/*.url           # one URL per file, re-read during the run
   queue_size: 8
   max_concurrent_batches_per_client: 4  # requests per server, independent of batch_size
   wait_for_servers: 300            # poll /health first; 0 disables
 ```
 
+`base_urls` and `hosts_file` are read once, at the start of the run.
+`url_glob` is re-read while the run continues, so a server whose file
+appears later is admitted into the pool and takes over part of the work.
+
 When the servers do not exist yet and something has to start them, say how many
-you want in `pool` and what each one is in `engine`. Neither block is acted on
-by the library itself; both are reported to a job submitter, and a local run
-ignores them entirely:
+you want in `pool` and what each one is in `engine`. Both blocks are reported
+to a job submitter rather than acted on by the library, apart from
+`pool.min_servers`, which is also how many servers a pooled run waits for
+before it starts:
 
 ```yaml
 client:
@@ -319,7 +324,13 @@ client:
     gpu_memory_utilization: 0.90
   pool:
     servers: 4                # four such servers
+    min_servers: 2            # start once two are ready
 ```
+
+`min_servers` is how many servers have to answer before annotation starts. It
+defaults to one, so a step begins on the first server that is ready and the
+rest join the run as they come up. A submitter reads it from
+`--describe-steps` and releases its own wait loop at the same threshold.
 
 Because the profile is per step, one pipeline can serve a different model with
 different serving flags at each step.
@@ -347,7 +358,7 @@ it prints one JSON object per step and annotates nothing.
 
 ```console
 $ llm-annotate cfg.yaml --describe-steps
-{"index": 1, "name": "write-qa", "kind": "vllm_pool", "model": "Qwen/Qwen3-8B", "servers": 4, "gpus_per_vllm_server": 2, ...}
+{"index": 1, "name": "write-qa", "kind": "vllm_pool", "model": "Qwen/Qwen3-8B", "servers": 4, "min_servers": 1, "gpus_per_vllm_server": 2, ...}
 {"index": 2, "name": "rate-qa", "kind": "api", "model": "claude-haiku-4-5", ...}
 ```
 
@@ -380,10 +391,14 @@ can land on the same machine.
 
 `--hosts-file` completes the picture for a scheduler: it attaches a file of
 server URLs to the selected step that runs on vLLM, and to that step only, so a
-hosted step in the same pipeline is unaffected.
+hosted step in the same pipeline is unaffected. `--url-glob` is its sibling for
+a pool that is still filling up: it attaches a glob of one-URL-per-file server
+addresses instead, and re-reads it while the run continues, so servers that
+become ready later are admitted into the pool. Giving both flags is an error.
 
 ```bash
 llm-annotate cfg.yaml --steps write-qa --hosts-file logs/pool_123/hosts.txt
+llm-annotate cfg.yaml --steps write-qa --url-glob 'logs/pool_123/*.url'
 ```
 
 A cluster job submitter is built entirely out of these flags: it reads
@@ -481,15 +496,15 @@ llm-annotate [-h] [--output-dir OUTPUT_DIR] [--hub-id HUB_ID]
              [--log-level LOG_LEVEL] [--overwrite]
              [--max-num-samples MAX_NUM_SAMPLES] [--shuffle-seed SHUFFLE_SEED]
              [--set KEY=VALUE] [--steps STEPS] [--hosts-file HOSTS_FILE]
-             [--serve-args STEP] [--describe-steps]
+             [--url-glob URL_GLOB] [--serve-args STEP] [--describe-steps]
              config
 ```
 
 `--output-dir`, `--hub-id`, `--log-level` and `--overwrite` override the matching
 config keys, which is handy for pointing one config at a scratch directory or
 resuming with a different log level without editing the file. `--steps`,
-`--hosts-file`, `--serve-args` and `--describe-steps` are described under
-[Running one step at a time](#running-one-step-at-a-time).
+`--hosts-file`, `--url-glob`, `--serve-args` and `--describe-steps` are
+described under [Running one step at a time](#running-one-step-at-a-time).
 
 ### Overriding config keys
 

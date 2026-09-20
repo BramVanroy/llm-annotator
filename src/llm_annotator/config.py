@@ -477,14 +477,19 @@ class PoolConfig(_StrictBase):
     is a property of the engine rather than of the pool, and a ``vllm_offline``
     step needs it without wanting a pool at all.
 
-    The library itself never acts on this block; it is reported by
-    ``llm-annotate --describe-steps`` so a job submitter can size the servers it
-    starts. A step that talks to servers someone else started (``base_urls``,
-    ``hosts_file``, ``url_glob``) does not need it.
+    Both keys are reported by ``llm-annotate --describe-steps``, so a job
+    submitter can size the servers it starts and knows how many of them the
+    step needs before it can begin. The library acts on ``min_servers`` alone:
+    a pooled run waits for that many servers to answer ``/health``, and the
+    servers that become ready later join the pool while it is running. A step
+    that talks to servers someone else started (``base_urls``, ``hosts_file``,
+    ``url_glob``) needs neither key.
 
     Attributes:
         servers: Number of vLLM server processes to run for this step.
         min_servers: Number of ready servers required before annotation begins.
+            Defaults to one, so a step starts on the first server that answers
+            and grows as the rest arrive.
     """
 
     servers: int = Field(default=1, ge=1)
@@ -542,8 +547,10 @@ class ClientConfig(_StrictBase):
         queue_size: Batches kept in flight across the pool.
         max_concurrent_batches_per_client: Maximum simultaneous batch requests
             sent to each vLLM server.
-        wait_for_servers: Seconds to wait for ``pool.min_servers`` servers'
-            ``/health`` endpoints before starting. ``0`` disables the check.
+        wait_for_servers: Seconds to wait for the ``/health`` endpoints of
+            ``pool.min_servers`` servers, or of every server the pool source
+            names when it names fewer, before starting. ``0`` disables the
+            check.
         engine: How this step's vLLM engine is built. Applies to both vLLM
             providers; rejected for the hosted ones.
         pool: How many servers this step wants. Only meaningful for
@@ -822,12 +829,19 @@ class ClientConfig(_StrictBase):
 
         base_urls = self.resolve_base_urls(root)
         if self.wait_for_servers:
+            # The pool source is read once here, so it can name fewer servers
+            # than `min_servers` while the rest are still starting. Waiting for
+            # more servers than it names could never succeed; the ones that
+            # arrive later are admitted by the watcher instead.
+            min_ready = min(
+                self.pool.min_servers, len(dict.fromkeys(base_urls))
+            )
             LOGGER.info(
                 f"Waiting up to {self.wait_for_servers:g}s for"
-                f" {self.pool.min_servers} vLLM server(s) to become ready..."
+                f" {min_ready} vLLM server(s) to become ready..."
             )
             base_urls = wait_for_servers(
-                base_urls, self.wait_for_servers, self.pool.min_servers
+                base_urls, self.wait_for_servers, min_ready
             )
 
         return [VLLMOnlineClient(base_url=url, **kwargs) for url in base_urls]
@@ -1382,8 +1396,9 @@ class PipelineConfig(_StrictBase):
 
         Returns:
             One mapping per step, in pipeline order, each with the step's
-            ``index`` (from 1), ``name``, ``kind``, ``provider``, ``model`` and
-            the ``servers`` / ``gpus_per_vllm_server`` it wants.
+            ``index`` (from 1), ``name``, ``kind``, ``provider``, ``model``,
+            the ``servers`` / ``gpus_per_vllm_server`` it wants and the
+            ``min_servers`` it needs before it can start.
         """
         described = []
         for index, step in enumerate(self.steps):
@@ -1396,6 +1411,7 @@ class PipelineConfig(_StrictBase):
                     "provider": client.provider,
                     "model": client.model,
                     "servers": client.pool.servers,
+                    "min_servers": client.pool.min_servers,
                     "gpus_per_vllm_server": client.engine.tensor_parallel_size,
                     "step_dir": str(self.step_dir(index)),
                 }

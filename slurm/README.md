@@ -58,6 +58,21 @@ pick one per run:
 ./slurm/submit_pipeline.sh --cluster-env slurm/clusters/leonardo.env my-pipeline.yaml
 ```
 
+## Overriding the config for one submission
+
+`--set KEY=VALUE` is the same flag `llm-annotate` takes, forwarded to every step
+job of the submission. A dotted key reaches a nested value, and repeating the
+flag sets more than one:
+
+```sh
+./slurm/submit_pipeline.sh --set dataset.max_num_samples=50000 my-pipeline.yaml
+```
+
+Every step of one submission therefore sees the same overrides, which is what a
+growing run needs: resubmitting with a higher `dataset.max_num_samples` extends
+the pipeline as a whole rather than one step at a time, which is what
+`docs/growing-a-run.md` describes.
+
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `SLURM_ACCOUNT` | – | Project to charge. Empty means no `--account`. |
@@ -102,7 +117,7 @@ llm-annotate my-pipeline.yaml --describe-steps
 ```
 
 ```json
-{"index": 1, "name": "write-qa", "kind": "vllm_pool", "model": "Qwen/Qwen3-8B", "servers": 4, "gpus_per_vllm_server": 2, ...}
+{"index": 1, "name": "write-qa", "kind": "vllm_pool", "model": "Qwen/Qwen3-8B", "servers": 4, "min_servers": 1, "gpus_per_vllm_server": 2, ...}
 {"index": 2, "name": "rate-qa",  "kind": "api", "model": "claude-haiku-4-5", ...}
 ```
 
@@ -129,11 +144,13 @@ client:
     tensor_parallel_size: 2   # GPUs per server, at most MAX_GPUS_PER_NODE
   pool:
     servers: 4                # four such servers for this step
+    min_servers: 2            # start annotating once two are ready
 ```
 
 Several small server jobs schedule far sooner than one large allocation, because
 each one fits on a partially used node. They also start at different times,
-which is fine: the client waits for the pool to fill before it begins.
+which is fine: the client starts once `pool.min_servers` are ready, and the
+remaining servers join the run as they leave the queue.
 
 ## Serving profiles
 
@@ -176,25 +193,39 @@ The server array writes into `<LOG_DIR>/pool_<array-job-id>/`, one `<task>.url`
 file per server containing that server's `http://<host>:<port>/v1`. A file
 appears only **after** the server answers `/health`, and is removed when the job
 ends, so every URL in the directory belongs to a server that is up right now.
-The client polls that directory, concatenates it into `hosts.txt` and passes it
-to the CLI as `--hosts-file`, which attaches it to that step alone — a step on
-another provider is left untouched.
+The client polls that directory until `min_servers` of the files are there,
+then passes the directory itself to the CLI as `--url-glob`, which attaches it
+to that step alone — a step on another provider is left untouched. A file of
+URLs would be read once; the glob is re-read while the run continues, so a
+server whose file appears after the run has started still joins the pool.
 
 Ports are `VLLM_PORT + array task id`, then probed upward for the first free one.
 Two array tasks can land on the same node (a 4-GPU node fits two
 `tensor_parallel_size: 2` servers), so a fixed port would collide.
 
-The client carries no Slurm dependency on its own step's server array. For a
-job array, Slurm's `after:<jobid>` dependency is satisfied only once *every*
-array element has started, not the first one — so gating the client's start
-on it would leave an already-ready server sitting idle behind pool-mates that
-are still queued (a per-user GPU quota is enough to do this: one server can
-occupy the whole quota, so the rest of the pool queues behind it), burning
-that server's own `SERVER_TIME` before the client ever gets to use it.
-Instead, the client job is submitted on the same dependency as the server
-array (so it still waits for the *previous* step to finish) and, once
-running, waits for its own step's servers to register itself, via
-`POOL_WAIT`.
+The client is submitted with one `after:` dependency per element of its server
+array, or-joined (`--dependency=after:1234_1?after:1234_2?...`), which releases
+it as soon as the **first** server has begun. `after:<array-id>` as a whole is
+satisfied only once *every* element has started, which would leave a ready
+server sitting idle behind pool-mates that are still queued (a per-user GPU
+quota is enough to do this: one server can occupy the whole quota, so the rest
+of the pool queues behind it), burning that server's own `SERVER_TIME` before
+the client ever gets to use it. Waiting in the queue rather than on a compute
+node also means `CLIENT_TIME` starts counting when there is something to
+annotate against: a CPU partition schedules in minutes and a GPU partition can
+take days, and a client that starts first spends that gap idle and then dies on
+its wall clock.
+
+That dependency replaces the step's own `afterok:<previous client>` rather than
+adding to it, since Slurm reads one separator per expression (`,` for and, `?`
+for or) and the two cannot be mixed. Nothing is lost: a server cannot start
+before the previous step has succeeded, so the client inherits that through the
+array it waits on. A cancelled job also satisfies `after:`, so an array that
+Slurm kills off releases the client instead of stranding it, and
+`--kill-on-invalid-dep=yes` covers what Slurm flags as unsatisfiable outright.
+The client recognises that case rather than sitting out its `POOL_WAIT`: while
+it waits for URLs it asks `squeue` whether its server array still has an
+element in the queue, and stops waiting when it has none left.
 
 When a step finishes, its client `scancel`s that step's server array instead of
 leaving GPU jobs idling until their time limit. Set `CANCEL_SERVERS_ON_EXIT=0`
@@ -210,12 +241,13 @@ are submitted with `--export=ALL`.
 | --- | --- | --- |
 | `ANNOTATE_CONFIG` | *the positional argument* | JSON/YAML pipeline config to run |
 | `EXTRA_DEPENDENCY` | – | Slurm dependency expression (e.g. `afterok:123456`) the chain waits for. Applied to the **first** submitted step only; later steps inherit it through their predecessor, which is what lets several submissions be chained into one workflow. |
-| `POOL_WAIT` | `3600` | Seconds a client waits for at least one of its servers to register |
+| `POOL_WAIT` | `1800` | Seconds a client waits for `min_servers` of its servers to register once it is running. Matches `READY_TIMEOUT`, so a client cannot give up on a server before the server gives up on itself. The or-joined dependency means the client only starts once a server of its pool has, so this covers a model load rather than an allocation; raise it when running `vllm_annotate.sh` by hand against a pool that is still queued. |
 | `VLLM_PORT` | `8000` | Base port a server starts probing from. The array task id is added to it, then the first free port is taken. |
 | `READY_TIMEOUT` | `1800` | Seconds a server waits for its own `/health` before giving up |
 | `CANCEL_SERVERS_ON_EXIT` | `1` | Whether a finished client `scancel`s its step's server array. `0` leaves the GPUs running. |
+| `SBATCH_CMD` | `sbatch` | The command that queues a job, for a site whose `sbatch` is wrapped. A submit this refuses ends the run: the steps after it would otherwise depend on a job id that was never issued. |
 | `OUTPUT_DIR`, `HUB_ID`, `OVERWRITE` | from the config | Override the config's `output_dir` / `hub_id`, or discard existing step output |
-| `MAX_NUM_SAMPLES`, `SHUFFLE_SEED` | from the config | Override `dataset.max_num_samples` / `dataset.shuffle_seed` for every step of this submission. Raising the cap and resubmitting grows the run: finished rows are not annotated again. |
+| `ANNOTATE_SET` | – | What `--set` fills: config overrides for this submission, one `KEY=VALUE` per line, passed to `llm-annotate --set` on every step job. Set it directly only when scripting the submitter; `--set` is the way in. |
 
 ## Resuming
 

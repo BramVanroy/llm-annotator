@@ -203,9 +203,9 @@ same call after a crash, a timeout or a preemption picks up where the previous
 attempt stopped.
 
 A cluster job submitter needs nothing beyond the [config file](pipeline.md) and
-three CLI flags to drive this: `--describe-steps` to plan the allocation,
+four CLI flags to drive this: `--describe-steps` to plan the allocation,
 `--serve-args` to start each step's servers with its own model, and
-`--hosts-file` to hand them back in. `examples/vllm-server-pool/` has both the
+`--hosts-file` or `--url-glob` to hand them back in. `examples/vllm-server-pool/` has both the
 Python-API and config-driven forms side by side, and [`slurm/`](slurm.md) is a
 ready-made submitter built on those flags:
 
