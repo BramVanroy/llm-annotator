@@ -92,6 +92,9 @@ cluster_env_load
 
 : "${ANNOTATE_CONFIG:?Give a pipeline config as an argument, or set ANNOTATE_CONFIG}"
 : "${EXTRA_DEPENDENCY:=}"
+# The command that queues a job. A site whose sbatch is wrapped points this at
+# the wrapper; the tests point it at a stub, so they never reach a scheduler.
+: "${SBATCH_CMD:=sbatch}"
 
 if [[ ! -f "$ANNOTATE_CONFIG" ]]; then
   echo "Config '${ANNOTATE_CONFIG}' does not exist" >&2
@@ -127,7 +130,7 @@ fi
 submit() {
   if (( DRY_RUN )); then
     local arg
-    printf 'sbatch' >&2
+    printf '%s' "$SBATCH_CMD" >&2
     for arg in "$@"; do
       # Quote only what a shell would misread, so the line stays copy-pastable.
       if [[ "$arg" == *[[:space:]\'\"]* ]]; then
@@ -141,8 +144,17 @@ submit() {
     return
   fi
   local out
-  out=$(sbatch --parsable "$@")
+  out=$("$SBATCH_CMD" --parsable "$@") || return 1
   echo "${out%%;*}"
+}
+
+# Every submit is checked with this, because `set -e` does not fire for a
+# command substitution that runs a function: a refused sbatch would otherwise
+# leave an empty job id behind and the steps after it would depend on a job
+# that was never queued.
+die() {
+  echo "$@" >&2
+  exit 1
 }
 
 # Pull one value out of a flat JSON object. Naive, but --describe-steps emits
@@ -265,7 +277,7 @@ while IFS= read -r step_json; do
         "${SERVER_SBATCH_ARGS[@]}" \
         "${DEP[@]}" \
         --export="$STEP_EXPORT" \
-        slurm/vllm_server.sh)
+        slurm/vllm_server.sh) || die "  could not queue the servers of step '${NAME}'."
 
       # Naming the pool after the array job id keeps concurrent steps and runs
       # apart; the server jobs derive the same name from SLURM_ARRAY_JOB_ID, so
@@ -308,7 +320,7 @@ while IFS= read -r step_json; do
         --dependency="$CLIENT_DEP" \
         --kill-on-invalid-dep=yes \
         --export="${STEP_EXPORT},POOL_DIR=${POOL_DIR},NUM_SERVERS=${SERVERS},MIN_SERVERS=${MIN_SERVERS},SERVER_JOB_ID=${SERVER_JOB}" \
-        slurm/vllm_annotate.sh)
+        slurm/vllm_annotate.sh) || die "  could not queue the client of step '${NAME}'."
       ;;
 
     vllm_offline)
@@ -319,7 +331,7 @@ while IFS= read -r step_json; do
         "${SERVER_SBATCH_ARGS[@]}" \
         "${DEP[@]}" \
         --export="${STEP_EXPORT}" \
-        slurm/vllm_annotate.sh)
+        slurm/vllm_annotate.sh) || die "  could not queue step '${NAME}'."
       echo "  in-process on ${GPUS_PER_VLLM_SERVER} GPU(s): ${MODEL}"
       ;;
 
@@ -331,7 +343,7 @@ while IFS= read -r step_json; do
         "${CLIENT_SBATCH_ARGS[@]}" \
         "${DEP[@]}" \
         --export="${STEP_EXPORT}" \
-        slurm/vllm_annotate.sh)
+        slurm/vllm_annotate.sh) || die "  could not queue step '${NAME}'."
       echo "  CPU only: ${MODEL:-served-default}"
       ;;
 

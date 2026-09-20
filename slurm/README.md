@@ -230,6 +230,7 @@ are submitted with `--export=ALL`.
 | `VLLM_PORT` | `8000` | Base port a server starts probing from. The array task id is added to it, then the first free port is taken. |
 | `READY_TIMEOUT` | `1800` | Seconds a server waits for its own `/health` before giving up |
 | `CANCEL_SERVERS_ON_EXIT` | `1` | Whether a finished client `scancel`s its step's server array. `0` leaves the GPUs running. |
+| `SBATCH_CMD` | `sbatch` | The command that queues a job, for a site whose `sbatch` is wrapped. A submit this refuses ends the run: the steps after it would otherwise depend on a job id that was never issued. |
 | `OUTPUT_DIR`, `HUB_ID`, `OVERWRITE` | from the config | Override the config's `output_dir` / `hub_id`, or discard existing step output |
 | `MAX_NUM_SAMPLES`, `SHUFFLE_SEED` | from the config | Override `dataset.max_num_samples` / `dataset.shuffle_seed` for every step of this submission. Raising the cap and resubmitting grows the run: finished rows are not annotated again. |
 

@@ -2,7 +2,10 @@
 
 The scripts are driven with a fake `llm-annotate` on `PATH` that records the
 arguments it was called with, so the wait loop and the flags it builds can be
-checked without a scheduler, a GPU or a model.
+checked without a scheduler, a GPU or a model. Nothing here needs Slurm, and
+nothing here may reach it: `sbatch`, `scancel` and `squeue` are shadowed by
+stubs, so a submitter that stopped honouring `--dry-run` fails the test rather
+than queueing jobs on whatever machine the suite happens to run on.
 """
 
 from __future__ import annotations
@@ -27,7 +30,7 @@ pytestmark = pytest.mark.skipif(
 
 
 def _fake_bin(tmp_path: Path) -> Path:
-    """Create a bin directory with a recording `llm-annotate` and a fast sleep.
+    """Create a bin directory with the fakes every script run needs.
 
     Args:
         tmp_path: Directory to create the fake binaries in.
@@ -60,6 +63,17 @@ def _fake_bin(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     squeue.chmod(0o755)
+
+    # The suite runs on login nodes too, where a real sbatch is on PATH and a
+    # submitter that stopped honouring --dry-run would queue jobs for real.
+    # These stubs make that a failed test instead.
+    for name in ("sbatch", "scancel"):
+        stub = bin_dir / name
+        stub.write_text(
+            f'#!/bin/bash\necho "{name} was called from a test" >&2\nexit 1\n',
+            encoding="utf-8",
+        )
+        stub.chmod(0o755)
 
     return bin_dir
 
@@ -231,25 +245,35 @@ def _write_pool_config(tmp_path: Path, pool: dict[str, int]) -> Path:
     return config_path
 
 
-@pytest.mark.skipif(
-    not (VENV_PATH / "bin" / "llm-annotate").exists(),
-    reason="the submitter reads the config through the installed CLI",
-)
-def test_submit_pipeline_exports_min_servers(tmp_path: Path) -> None:
-    """The submitter hands the step's own readiness threshold to its client."""
-    config_path = _write_pool_config(
-        tmp_path, {"servers": 4, "min_servers": 2}
-    )
+def _run_submit(
+    tmp_path: Path, config_path: Path, dry_run: bool = True
+) -> subprocess.CompletedProcess[str]:
+    """Run `slurm/submit_pipeline.sh` over one config without a scheduler.
 
-    process = subprocess.run(
-        [
-            "/bin/bash",
-            str(SLURM_DIR / "submit_pipeline.sh"),
-            "--dry-run",
-            str(config_path),
-        ],
+    `SBATCH_CMD` points at the stub in the test bin, so even the runs that are
+    not dry queue nothing. The submitter reads the config through the installed
+    CLI, which it looks for under ``VENV_PATH`` before ``PATH``, so the fake
+    `llm-annotate` beside that stub is not what answers `--describe-steps`.
+
+    Args:
+        tmp_path: Directory for the fake binaries and the log directory.
+        config_path: Pipeline config to submit.
+        dry_run: Whether to pass ``--dry-run``.
+
+    Returns:
+        The finished process.
+    """
+    bin_dir = _fake_bin(tmp_path)
+    command = ["/bin/bash", str(SLURM_DIR / "submit_pipeline.sh")]
+    if dry_run:
+        command.append("--dry-run")
+    command.append(str(config_path))
+
+    return subprocess.run(
+        command,
         env={
-            "PATH": os.environ["PATH"],
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "SBATCH_CMD": str(bin_dir / "sbatch"),
             "REPO_ROOT": str(REPO_ROOT),
             "CLUSTER_ENV": str(tmp_path / "absent.env"),
             "LOG_DIR": str(tmp_path / "logs"),
@@ -260,6 +284,19 @@ def test_submit_pipeline_exports_min_servers(tmp_path: Path) -> None:
         text=True,
         timeout=300,
     )
+
+
+@pytest.mark.skipif(
+    not (VENV_PATH / "bin" / "llm-annotate").exists(),
+    reason="the submitter reads the config through the installed CLI",
+)
+def test_submit_pipeline_exports_min_servers(tmp_path: Path) -> None:
+    """The submitter hands the step's own readiness threshold to its client."""
+    config_path = _write_pool_config(
+        tmp_path, {"servers": 4, "min_servers": 2}
+    )
+
+    process = _run_submit(tmp_path, config_path)
 
     assert process.returncode == 0, process.stderr
     assert "client starts at 2 ready server(s)" in process.stdout
@@ -278,25 +315,7 @@ def test_submit_pipeline_pool_dependency_is_or_joined(
         tmp_path, {"servers": 4, "min_servers": 2}
     )
 
-    process = subprocess.run(
-        [
-            "/bin/bash",
-            str(SLURM_DIR / "submit_pipeline.sh"),
-            "--dry-run",
-            str(config_path),
-        ],
-        env={
-            "PATH": os.environ["PATH"],
-            "REPO_ROOT": str(REPO_ROOT),
-            "CLUSTER_ENV": str(tmp_path / "absent.env"),
-            "LOG_DIR": str(tmp_path / "logs"),
-            "VENV_PATH": str(VENV_PATH),
-            "HOME": os.environ.get("HOME", str(tmp_path)),
-        },
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
+    process = _run_submit(tmp_path, config_path)
 
     assert process.returncode == 0, process.stderr
     assert (
@@ -304,3 +323,22 @@ def test_submit_pipeline_pool_dependency_is_or_joined(
         "after:<job-id>_3?after:<job-id>_4" in process.stderr
     )
     assert "--kill-on-invalid-dep=yes" in process.stderr
+
+
+@pytest.mark.skipif(
+    not (VENV_PATH / "bin" / "llm-annotate").exists(),
+    reason="the submitter reads the config through the installed CLI",
+)
+def test_submit_pipeline_stops_when_a_submit_is_refused(
+    tmp_path: Path,
+) -> None:
+    """A refused sbatch ends the run instead of chaining onto a missing id."""
+    config_path = _write_pool_config(
+        tmp_path, {"servers": 2, "min_servers": 1}
+    )
+
+    process = _run_submit(tmp_path, config_path, dry_run=False)
+
+    assert process.returncode == 1
+    assert "could not queue the servers of step 'write'" in process.stderr
+    assert "Submitted" not in process.stdout
