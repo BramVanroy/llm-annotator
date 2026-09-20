@@ -993,9 +993,7 @@ def test_queue_settings_follow_the_step(
     def spy(self: Annotator, *args: Any, **kwargs: Any) -> Any:
         assert isinstance(self, VLLMQueueAnnotator)
         assert self.queue_size is not None  # resolved in __post_init__
-        seen.append(
-            (self.queue_size, self.max_concurrent_batches_per_client)
-        )
+        seen.append((self.queue_size, self.max_concurrent_batches_per_client))
         return original(self, *args, **kwargs)
 
     def fake_build_client(
