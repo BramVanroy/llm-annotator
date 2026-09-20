@@ -130,6 +130,17 @@ def test_add_client_after_destroy_releases_client() -> None:
     assert late.destroy_called == 1
 
 
+def test_add_client_rejects_duplicate_base_url() -> None:
+    existing = FakeVLLMOnlineClient(base_url="http://worker")
+    duplicate = FakeVLLMOnlineClient(base_url="http://worker")
+    annotator = VLLMQueueAnnotator(clients=[existing], max_workers=2)
+
+    annotator.add_client(duplicate)
+
+    assert annotator.clients == [existing]
+    assert duplicate.destroy_called == 1
+
+
 def _make_dataset(
     n_samples: int, *, task_prefix: str = "", idx_column: str = "idx"
 ) -> Dataset:

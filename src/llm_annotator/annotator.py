@@ -2193,6 +2193,13 @@ class VLLMQueueAnnotator(Annotator):
             if self._destroyed.is_set():
                 client.destroy()
                 return
+            base_url = getattr(client, "base_url", None)
+            if base_url is not None and any(
+                getattr(existing, "base_url", None) == base_url
+                for existing in self.clients
+            ):
+                client.destroy()
+                return
             cast(list[Client[Any]], self.clients).append(client)
             for _ in range(self.max_concurrent_batches_per_client):
                 self._client_pool.put(client)
