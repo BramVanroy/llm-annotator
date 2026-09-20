@@ -556,6 +556,60 @@ def test_push_dir_to_hub_calls_hf_helpers(
     assert called == ["repo", "branch", "upload"]
 
 
+def test_run_annotation_pushes_progress_to_the_prefixed_branch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Verifies the progress backup lands on the same prefixed branch that
+    # _post_annotate deletes, so several tasks can share one hub_id.
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": [0, 1],
+            "tp_messages": [
+                [{"role": "user", "content": "Q: a"}],
+                [{"role": "user", "content": "Q: b"}],
+            ],
+        }
+    )
+
+    branches: list[str] = []
+    revisions: list[str] = []
+    deleted: list[str] = []
+
+    monkeypatch.setattr(
+        "llm_annotator.annotator.create_repo", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        "llm_annotator.annotator.create_branch",
+        lambda *a, **kw: branches.append(kw["branch"]),
+    )
+    monkeypatch.setattr(
+        "llm_annotator.annotator.upload_large_folder",
+        lambda *a, **kw: revisions.append(kw["revision"]),
+    )
+    monkeypatch.setattr(
+        "llm_annotator.annotator.delete_branch",
+        lambda *a, **kw: deleted.append(kw["branch"]),
+    )
+    monkeypatch.setattr(
+        "llm_annotator.annotator.upload_folder", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(Dataset, "push_to_hub", lambda *a, **kw: None)
+
+    Annotator(client=DummyClient()).run_annotation(
+        output_dir=tmp_path / "prefixed",
+        prompt_template="Q: {text}",
+        prepared_dataset=prepared_ds,
+        task_prefix="tp_",
+        hub_id="me/test",
+        upload_every_n_samples=1,
+    )
+
+    assert branches == ["tp_progress_backup"] * len(branches)
+    assert revisions == ["tp_progress_backup"] * len(revisions)
+    assert revisions
+    assert "tp_progress_backup" in deleted
+
+
 def test_destroy_on_error_calls_client_destroy(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

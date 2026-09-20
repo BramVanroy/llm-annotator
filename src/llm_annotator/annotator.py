@@ -1672,7 +1672,9 @@ class Annotator:
                         remove_empty_jsonl_files(process_pdout)
                         if time_to_upload and hub_id:
                             self.push_progress_to_hub(
-                                process_pdout, hub_id=hub_id
+                                process_pdout,
+                                hub_id=hub_id,
+                                task_prefix=task_prefix,
                             )
                         pfout = self.get_pfout_name(
                             process_pdout=process_pdout,
@@ -1711,7 +1713,9 @@ class Annotator:
 
         remove_empty_jsonl_files(process_pdout)
         if hub_id and upload_every_n_samples > 0:
-            self.push_progress_to_hub(process_pdout, hub_id=hub_id)
+            self.push_progress_to_hub(
+                process_pdout, hub_id=hub_id, task_prefix=task_prefix
+            )
 
         return self._post_annotate(
             process_pdout=process_pdout,
@@ -2129,8 +2133,9 @@ class Annotator:
                 )
             except Exception as exc:
                 self._logger.warning(
-                    f"Failed to delete prepared-data branch '{PREPARED_DS_BRANCH_SUFF}'"
-                    f" on '{hub_id}': {exc}"
+                    "Failed to delete prepared-data branch"
+                    f" '{task_prefix}{PREPARED_DS_BRANCH_SUFF}' on"
+                    f" '{hub_id}': {exc}"
                 )
 
             # Clean up the progress upload branch used for JSONL progress backup
@@ -2144,8 +2149,9 @@ class Annotator:
                 )
             except Exception as exc:
                 self._logger.warning(
-                    f"Failed to delete progress branch '{PROGRESS_BACKUP_BRANCH_SUFF}'"
-                    f" on '{hub_id}': {exc}"
+                    "Failed to delete progress branch"
+                    f" '{task_prefix}{PROGRESS_BACKUP_BRANCH_SUFF}' on"
+                    f" '{hub_id}': {exc}"
                 )
 
         self._add_metadata(
