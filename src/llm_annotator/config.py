@@ -256,7 +256,9 @@ class DatasetConfig(_StrictBase):
         data_dir: Data directory for local/loader datasets.
         data_files: Specific file(s) for local/loader datasets, as a single
             path, a list of paths, or a mapping of split name to path(s).
-        max_num_samples: Truncate the dataset to this many samples.
+        max_num_samples: Truncate the dataset to this many samples. A re-run
+            with a higher value annotates only the new samples, as long as
+            ``shuffle_seed`` and the source stay the same.
         shuffle_seed: Shuffle the dataset with this seed before truncating.
     """
 
@@ -1122,7 +1124,9 @@ class PipelineConfig(_StrictBase):
         hub_id: Optional Hub dataset id for the *final* dataset. Per-step
             backups are configured with a step-level ``hub_id`` instead.
         idx_column: Column name used as the stable per-sample identifier that
-            drives resumption. It must not exist in the source dataset.
+            drives resumption. It must not exist in the source dataset. The
+            first step adds it, every step output keeps it, and the final
+            dataset does not have it.
         overwrite: Delete existing step directories before running, discarding
             any resumable progress.
         verbose: Whether the annotator logs progress information.
@@ -1161,7 +1165,7 @@ class PipelineConfig(_StrictBase):
 
     @model_validator(mode="after")
     def _check_pipeline(self) -> "PipelineConfig":
-        """Validate step names, dataset presence and generate-step placement."""
+        """Validate step names, columns, dataset and generate-step placement."""
         names = [step.name for step in self.steps]
         duplicates = sorted({n for n in names if names.count(n) > 1})
         if duplicates:
@@ -1176,6 +1180,15 @@ class PipelineConfig(_StrictBase):
                 "Step task prefixes must be unique, found duplicates:"
                 f" {dup_prefixes}."
             )
+
+        for step in self.steps:
+            touched = {*step.rename, *step.rename.values(), *step.drop_columns}
+            if self.idx_column in touched:
+                raise ValueError(
+                    f"Step '{step.name}' renames or drops '{self.idx_column}',"
+                    " the 'idx_column'. It identifies a row in every step and"
+                    " is removed from the final dataset automatically."
+                )
 
         for step in self.steps[1:]:
             if step.type == "generate":

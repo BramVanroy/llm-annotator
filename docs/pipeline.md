@@ -82,6 +82,10 @@ Each step writes several kinds of column:
   defaults to `<name>_`): `{prefix}response`, `{prefix}finish_reason`,
   `{prefix}num_tokens`, `{prefix}error`, `{prefix}error_type`,
   `{prefix}reasoning` and, when a schema is set, `{prefix}valid_fields`.
+* The **`idx_column`** (`idx` by default). It identifies a row from the first
+  step onward, so every step's `output/` keeps it. It is removed from
+  `final/` and from the dataset pushed to the Hub. See
+  [Growing a run](growing-a-run.md) for what this makes possible.
 
 `{prefix}reasoning` holds a reasoning model's trace, separated from the answer
 in `{prefix}response`. For either vLLM provider it is filled when the step names
@@ -400,7 +404,13 @@ Long pipelines are restartable at two levels:
   repeat steps one and two.
 
 Re-run the identical command to resume. Pass `--overwrite` (or set
-`overwrite: true`) to throw the existing step directories away and start over.
+`overwrite: true`) to delete the existing step directories, including every
+finished generation in them, and run those steps from scratch.
+
+Raising `dataset.max_num_samples` and re-running the identical command also
+resumes every step, without `--overwrite`: only the new rows are sent to the
+model, in every step. See [Growing a run](growing-a-run.md) for the full
+workflow, what is allowed to change, and what is rejected.
 
 The layout under `output_dir` is:
 

@@ -58,6 +58,7 @@ from llm_annotator.clients.exceptions import (
 from llm_annotator.clients.vllm_offline_client import VLLMOfflineClient
 from llm_annotator.logging_utils import get_logger
 from llm_annotator.utils import (
+    dataset_signature,
     ensure_returns_bool,
     ensure_returns_dict,
     extract_prompt_prefix,
@@ -75,6 +76,121 @@ PREPARED_DS_BRANCH_SUFF = "prepared_dataset"
 PREPARED_DS_LOCAL_SUBDIR = "prepared_dataset"
 PROGRESS_BACKUP_BRANCH_SUFF = "progress_backup"
 PROGRESS_DS_LOCAL_SUBDIR = "progress_backup"
+SELECTION_RECORD_FILE = "selection.json"
+
+
+@dataclass(frozen=True, slots=True)
+class SelectionRecord:
+    """The sample selection that a prepared dataset was built from.
+
+    [`prepare_data`][llm_annotator.annotator.Annotator.prepare_data] writes it
+    to ``<output_dir>/<task_prefix>selection.json``. The file stays in place
+    after a run finishes, so a later run can tell whether the finished rows
+    belong to the selection that it asks for.
+
+    Attributes:
+        max_num_samples: The requested sample cap, ``None`` for no cap.
+        shuffle_seed: The shuffle seed, ``None`` for no shuffle.
+        source_signature: Result of
+            [`dataset_signature`][llm_annotator.utils.dataset_signature] for
+            the source dataset.
+        source_rows: Number of rows in the source dataset.
+        selected_rows: Number of rows that the cap left in the selection.
+        reuse_idx_column: Whether the ids came from an existing column.
+
+    Examples:
+        >>> record = SelectionRecord(
+        ...     max_num_samples=10,
+        ...     shuffle_seed=42,
+        ...     source_signature="abc",
+        ...     source_rows=40,
+        ...     selected_rows=10,
+        ... )
+        >>> record.is_stale(max_num_samples=20, shuffle_seed=42)
+        True
+        >>> record.is_stale(max_num_samples=10, shuffle_seed=42)
+        False
+    """
+
+    max_num_samples: int | None
+    shuffle_seed: int | None
+    source_signature: str
+    source_rows: int
+    selected_rows: int
+    reuse_idx_column: bool = False
+
+    def is_stale(
+        self,
+        *,
+        max_num_samples: int | None,
+        shuffle_seed: int | None,
+        source_signature: str | None = None,
+    ) -> bool:
+        """Check whether a request asks for another selection than this one.
+
+        Args:
+            max_num_samples: The requested sample cap.
+            shuffle_seed: The requested shuffle seed.
+            source_signature: Signature of the source dataset. ``None`` leaves
+                the source out of the comparison, for a source that is not
+                loaded yet.
+
+        Returns:
+            ``True`` when the cap, the seed or the source differs.
+        """
+        return (
+            self.max_num_samples != max_num_samples
+            or self.shuffle_seed != shuffle_seed
+            or (
+                source_signature is not None
+                and self.source_signature != source_signature
+            )
+        )
+
+    @classmethod
+    def path(cls, output_dir: str | Path, task_prefix: str = "") -> Path:
+        """Build the path of the record file.
+
+        Args:
+            output_dir: The annotator's output directory.
+            task_prefix: The task prefix of the run.
+
+        Returns:
+            Path of ``<output_dir>/<task_prefix>selection.json``.
+        """
+        return Path(output_dir) / f"{task_prefix}{SELECTION_RECORD_FILE}"
+
+    @classmethod
+    def read(
+        cls, output_dir: str | Path, task_prefix: str = ""
+    ) -> "SelectionRecord | None":
+        """Read the record of an output directory.
+
+        Args:
+            output_dir: The annotator's output directory.
+            task_prefix: The task prefix of the run.
+
+        Returns:
+            The record, or ``None`` when the directory has none (a run of a
+            version that did not write one, or a run that never prepared data).
+        """
+        record_path = cls.path(output_dir, task_prefix)
+        if not record_path.is_file():
+            return None
+        stored = json.loads(record_path.read_text(encoding="utf-8"))
+        known = {fld.name for fld in dataclasses.fields(cls)}
+        return cls(**{k: v for k, v in stored.items() if k in known})
+
+    def write(self, output_dir: str | Path, task_prefix: str = "") -> None:
+        """Write the record to an output directory.
+
+        Args:
+            output_dir: The annotator's output directory.
+            task_prefix: The task prefix of the run.
+        """
+        self.path(output_dir, task_prefix).write_text(
+            json.dumps(dataclasses.asdict(self), indent=2), encoding="utf-8"
+        )
 
 
 def destroy_on_error(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -293,6 +409,73 @@ class Annotator:
 
         return ids_done
 
+    def _load_source(
+        self,
+        *,
+        dataset_name: str | None = None,
+        dataset: Dataset | None = None,
+        dataset_config: str | None = None,
+        data_dir: str | None = None,
+        data_files: str | list[str] | dict[str, str | list[str]] | None = None,
+        dataset_split: str | None = None,
+    ) -> Dataset:
+        """Load the source dataset, or return the one that was passed in.
+
+        Args:
+            dataset_name: Name or path of the dataset to load.
+            dataset: Pre-loaded dataset to use instead of loading from name/path.
+            dataset_config: Dataset configuration name (optional).
+            data_dir: Data directory for local datasets (optional).
+            data_files: Specific file(s) for local datasets (optional).
+            dataset_split: Specific split to load (optional).
+
+        Returns:
+            The source dataset, without an index column or a selection.
+
+        Raises:
+            ValueError: If both or neither of ``dataset`` and ``dataset_name``
+                are given, or if the split is ambiguous or unknown.
+        """
+        if dataset is not None and dataset_name is not None:
+            raise ValueError(
+                "Provide only one of 'dataset' or 'dataset_name', not both."
+            )
+
+        if dataset is not None:
+            return dataset
+
+        if dataset_name is None:
+            raise ValueError(
+                "Either 'dataset' or 'dataset_name' must be provided."
+            )
+
+        split_names = get_dataset_split_names(
+            dataset_name,
+            config_name=dataset_config,
+            data_dir=data_dir,
+            data_files=data_files,
+        )
+        if not dataset_split:
+            if len(split_names) == 1:
+                dataset_split = split_names[0]
+            else:
+                raise ValueError(
+                    f"Dataset '{dataset_name}' has multiple splits {split_names}. "
+                    "Please specify a split using the 'dataset_split' argument."
+                )
+        elif dataset_split not in split_names:
+            raise ValueError(
+                f"Dataset '{dataset_name}' does not have a split named '{dataset_split}'"
+            )
+
+        return load_dataset(
+            dataset_name,
+            name=dataset_config,
+            data_dir=data_dir,
+            data_files=data_files,
+            split=dataset_split,
+        )
+
     def _load_dataset(
         self,
         *,
@@ -312,6 +495,7 @@ class Annotator:
         | Literal["shortest_first", "longest_first"] = False,
         system_message: str | None = None,
         preprocess_fn: Callable | None = None,
+        reuse_idx_column: bool = False,
     ) -> Dataset:
         """Load and preprocess the dataset for annotation.
 
@@ -337,6 +521,7 @@ class Annotator:
                 down the line.
             system_message: Optional system message to add as "system" role in chat prompts.
             preprocess_fn: Optional function to preprocess the dataset after loading and before applying the prompt template.
+            reuse_idx_column: Whether an existing ``idx_column`` is kept as the sample id.
 
         Returns:
             The loaded and preprocessed dataset ready for annotation.
@@ -358,59 +543,34 @@ class Annotator:
             )
             self.num_proc = None
 
-        if dataset is not None and dataset_name is not None:
-            raise ValueError(
-                "Provide only one of 'dataset' or 'dataset_name', not both."
-            )
-
-        if dataset is None and dataset_name is None:
-            raise ValueError(
-                "Either 'dataset' or 'dataset_name' must be provided."
-            )
-
         if max_num_samples is not None and max_num_samples <= 0:
             raise ValueError(
                 "'max_num_samples' must be a positive integer or None"
             )
 
-        # Split verification and defaulting
-        if dataset_name:
-            split_names = get_dataset_split_names(
-                dataset_name,
-                config_name=dataset_config,
-                data_dir=data_dir,
-                data_files=data_files,
-            )
-            if not dataset_split:
-                if len(split_names) == 1:
-                    dataset_split = split_names[0]
-                else:
-                    raise ValueError(
-                        f"Dataset '{dataset_name}' has multiple splits {split_names}. "
-                        "Please specify a split using the 'dataset_split' argument."
-                    )
-            elif dataset_split not in split_names:
-                raise ValueError(
-                    f"Dataset '{dataset_name}' does not have a split named '{dataset_split}'"
-                )
+        dataset = self._load_source(
+            dataset_name=dataset_name,
+            dataset=dataset,
+            dataset_config=dataset_config,
+            data_dir=data_dir,
+            data_files=data_files,
+            dataset_split=dataset_split,
+        )
 
-        if dataset is None:
-            dataset = load_dataset(
-                dataset_name,
-                name=dataset_config,
-                data_dir=data_dir,
-                data_files=data_files,
-                split=dataset_split,
-            )
-
-        # Add index column for tracking samples and resuming interrupted runs
-        if idx_column in dataset.column_names:
+        if idx_column not in dataset.column_names:
+            # Index column for tracking samples and resuming interrupted runs
+            dataset = dataset.add_column(idx_column, list(range(len(dataset))))
+        elif not reuse_idx_column:
             raise ValueError(
                 f"Dataset already contains a column named '{idx_column}'."
-                " Please specify a different 'idx_column' name that does not exist in the dataset."
+                " Please specify a different 'idx_column' name that does not exist in the dataset,"
+                " or set 'reuse_idx_column=True' when the column holds the sample ids of an earlier run."
             )
-
-        dataset = dataset.add_column(idx_column, list(range(len(dataset))))
+        elif len(set(dataset[idx_column])) != len(dataset):
+            raise ValueError(
+                f"Column '{idx_column}' cannot be reused as the sample id"
+                " because it holds duplicate values."
+            )
 
         if shuffle_seed is not None:
             dataset = dataset.shuffle(seed=shuffle_seed)
@@ -861,6 +1021,8 @@ class Annotator:
         hub_id: str | None = None,
         keep_columns: str | Iterable[str] | bool | None = None,
         force_data_preparation: bool = False,
+        reuse_idx_column: bool = False,
+        allow_selection_change: bool = False,
     ) -> tuple[Dataset, Path | None, str | None]:
         """Prepare input data for annotation without running generation.
 
@@ -898,10 +1060,26 @@ class Annotator:
                 an empty collection keeps only the essential columns.
             force_data_preparation: Whether to rebuild prepared data even when
                 local or Hub artifacts already exist.
+            reuse_idx_column: Whether an ``idx_column`` that already exists in
+                the dataset is kept as the sample id. Use it for a dataset that
+                an earlier run produced with ``keep_idx_column=True``, so that
+                a row keeps one id through several runs. A change of the
+                source is then allowed, because the ids do not depend on the
+                position of a row.
+            allow_selection_change: Whether a selection that does not contain
+                the finished rows is accepted. Only useful when those rows are
+                deleted afterwards (``overwrite=True`` in ``run_annotation``).
 
         Returns:
             Tuple of prepared dataset, local prepared-data path when available,
             and Hugging Face dataset ID when available.
+
+        Raises:
+            ValueError: If progress files exist and the requested selection
+                does not contain the rows that they hold: another
+                ``shuffle_seed``, a lower ``max_num_samples``, or a source
+                that changed in another way than appended rows without a
+                shuffle.
         """
         pdout = Path(output_dir)
         pdout.mkdir(exist_ok=True, parents=True)
@@ -914,47 +1092,87 @@ class Annotator:
                 f"{{{fld}}}", f"{{{value}}}"
             )
 
-        # Attempt loading from local cache at
-        # pdout / f"{task_prefix}{PREPARED_DS_LOCAL_SUBDIR}"
-        if (
-            prepared_data_path.exists()
-            and prepared_data_path.is_dir()
-            and any(prepared_data_path.glob("*"))
+        source_signature = (
+            dataset_signature(dataset) if dataset is not None else None
+        )
+        previous = SelectionRecord.read(pdout, task_prefix)
+        # A cache that was built for another cap, seed or source pins the old
+        # selection, so it is rebuilt like a forced preparation.
+        if previous is not None and previous.is_stale(
+            max_num_samples=max_num_samples,
+            shuffle_seed=shuffle_seed,
+            source_signature=source_signature,
         ):
-            if force_data_preparation:
-                shutil.rmtree(prepared_data_path, ignore_errors=True)
+            self._logger.info(
+                "The requested selection differs from the recorded one"
+                f" (max_num_samples={previous.max_num_samples},"
+                f" shuffle_seed={previous.shuffle_seed},"
+                f" {previous.source_rows:,} source rows), so the prepared"
+                " data is rebuilt."
+            )
+            force_data_preparation = True
+
+        has_local_cache = prepared_data_path.is_dir() and any(
+            prepared_data_path.glob("*")
+        )
+        if has_local_cache and not force_data_preparation:
+            cached_ds = Dataset.load_from_disk(prepared_data_path)
+            return cached_ds, prepared_data_path, hub_id
+
+        if hub_id and not force_data_preparation:
+            try:
+                cached_ds = load_dataset(
+                    hub_id,
+                    revision=f"{task_prefix}{PREPARED_DS_BRANCH_SUFF}",
+                    split="train",
+                )
+            except Exception:
+                pass
             else:
-                cached_ds = Dataset.load_from_disk(prepared_data_path)
+                self._logger.info(
+                    f"Restoring prepared data from Hub to local cache at '{prepared_data_path}'..."
+                )
+                cached_ds.save_to_disk(prepared_data_path)
                 return cached_ds, prepared_data_path, hub_id
 
-        # Attempt loading from the hub
-        if hub_id:
-            if force_data_preparation:
-                try:
-                    delete_branch(
-                        hub_id,
-                        branch=f"{task_prefix}{PREPARED_DS_BRANCH_SUFF}",
-                        repo_type="dataset",
-                    )
-                except Exception:
-                    pass
-            else:
-                try:
-                    cached_ds = load_dataset(
-                        hub_id,
-                        revision=f"{task_prefix}{PREPARED_DS_BRANCH_SUFF}",
-                        split="train",
-                    )
-                except Exception:
-                    pass
-                else:
-                    self._logger.info(
-                        f"Restoring prepared data from Hub to local cache at '{prepared_data_path}'..."
-                    )
-                    cached_ds.save_to_disk(prepared_data_path)
-                    return cached_ds, prepared_data_path, hub_id
-
         # ... and if all of that fails, prepare the dataset from the source
+        source = self._load_source(
+            dataset_name=dataset_name,
+            dataset=dataset,
+            dataset_config=dataset_config,
+            data_dir=data_dir,
+            data_files=data_files,
+            dataset_split=dataset_split,
+        )
+        record = SelectionRecord(
+            max_num_samples=max_num_samples,
+            shuffle_seed=shuffle_seed,
+            source_signature=source_signature or dataset_signature(source),
+            source_rows=len(source),
+            selected_rows=min(max_num_samples or len(source), len(source)),
+            reuse_idx_column=reuse_idx_column,
+        )
+        progress_dir = pdout / f"{task_prefix}{PROGRESS_DS_LOCAL_SUBDIR}"
+        if (
+            previous is not None
+            and not allow_selection_change
+            and any(progress_dir.glob("*.jsonl"))
+        ):
+            self._check_selection_change(previous, record, source)
+
+        # Only now, so that a rejected selection leaves the old artifacts intact
+        if has_local_cache:
+            shutil.rmtree(prepared_data_path, ignore_errors=True)
+        if hub_id and force_data_preparation:
+            try:
+                delete_branch(
+                    hub_id,
+                    branch=f"{task_prefix}{PREPARED_DS_BRANCH_SUFF}",
+                    repo_type="dataset",
+                )
+            except Exception:
+                pass
+
         _str_formatter = string.Formatter()
         prompt_fields = tuple(
             [
@@ -967,12 +1185,7 @@ class Annotator:
         prepared_dataset: Dataset = self._load_dataset(
             prompt_template=prompt_template,
             idx_column=idx_column,
-            dataset_name=dataset_name,
-            dataset=dataset,
-            dataset_config=dataset_config,
-            data_dir=data_dir,
-            data_files=data_files,
-            dataset_split=dataset_split,
+            dataset=source,
             max_num_samples=max_num_samples,
             shuffle_seed=shuffle_seed,
             prompt_fields=prompt_fields,
@@ -980,6 +1193,7 @@ class Annotator:
             sort_by_length=sort_by_length,
             system_message=system_message,
             preprocess_fn=preprocess_fn,
+            reuse_idx_column=reuse_idx_column,
         )
 
         essential_cols = {idx_column, f"{task_prefix}messages"}
@@ -1006,6 +1220,7 @@ class Annotator:
             f"Saving prepared data to local cache at '{prepared_data_path}' for faster resumption on failure..."
         )
         prepared_dataset.save_to_disk(prepared_data_path)
+        record.write(pdout, task_prefix)
         if hub_id:
             self._logger.info(
                 f"Uploading prepared data to Hugging Face Hub at '{hub_id}' for backup and easy restore..."
@@ -1018,6 +1233,72 @@ class Annotator:
             )
 
         return prepared_dataset, prepared_data_path, hub_id
+
+    def _check_selection_change(
+        self,
+        previous: SelectionRecord,
+        record: SelectionRecord,
+        source: Dataset,
+    ) -> None:
+        """Reject a selection that does not contain the finished rows.
+
+        With the same seed and source, the first N rows of the shuffled source
+        are a prefix of the first M rows for every M > N, so a higher cap only
+        adds rows. Without a shuffle, rows that are appended to the source
+        leave the ids of the old rows unchanged as well. Every other change
+        gives the finished ids another meaning.
+
+        Args:
+            previous: The selection that the progress files were written for.
+            record: The selection that is requested now.
+            source: The source dataset of the requested selection.
+
+        Raises:
+            ValueError: If the seed changed, if the source changed in another
+                way than appended rows without a shuffle, or if fewer rows are
+                selected than before.
+        """
+        problem = None
+        if record.shuffle_seed != previous.shuffle_seed:
+            problem = (
+                f"'shuffle_seed' changed from {previous.shuffle_seed} to"
+                f" {record.shuffle_seed}"
+            )
+        elif record.reuse_idx_column:
+            return
+        elif record.source_signature != previous.source_signature:
+            rows_were_appended = (
+                record.shuffle_seed is None
+                and record.source_rows >= previous.source_rows
+                and dataset_signature(
+                    source.select(range(previous.source_rows))
+                )
+                == previous.source_signature
+            )
+            if not rows_were_appended:
+                problem = "the source dataset changed"
+
+        if problem is None and record.selected_rows < previous.selected_rows:
+            problem = (
+                f"the selection shrank from {previous.selected_rows:,} to"
+                f" {record.selected_rows:,} rows"
+            )
+
+        if problem is not None:
+            raise ValueError(
+                f"The finished rows cannot be reused: {problem}. A run can"
+                " grow through a higher 'max_num_samples' with the same"
+                " 'shuffle_seed' and an unchanged source dataset, or through"
+                " rows that are appended to a source that is not shuffled."
+                " Restore the old settings, use a new output directory, or"
+                " overwrite the run."
+            )
+
+        if record.selected_rows > previous.selected_rows:
+            self._logger.info(
+                f"The selection grows from {previous.selected_rows:,} to"
+                f" {record.selected_rows:,} rows. Finished rows are reused."
+            )
 
     @destroy_on_error
     def run_annotation(
@@ -1205,7 +1486,8 @@ class Annotator:
                         or item.resolve() != prepared_path.resolve()
                     ):
                         shutil.rmtree(item, ignore_errors=True)
-                else:
+                elif item != SelectionRecord.path(root_pdout, task_prefix):
+                    # The record describes the prepared data, which is kept
                     item.unlink()
 
         root_pdout.mkdir(exist_ok=True, parents=True)
@@ -1404,6 +1686,7 @@ class Annotator:
         num_retries_invalid: int = 5,
         keep_idx_column: bool = False,
         max_consecutive_failed_batches: int = 10,
+        reuse_idx_column: bool = False,
     ) -> Dataset:
         """Annotate an existing dataset in one call.
 
@@ -1452,12 +1735,17 @@ class Annotator:
             max_consecutive_failed_batches: Abort the run once this many
                 batches in a row come back with every sample errored.
                 Set to 0 to disable.
+            reuse_idx_column: Whether an ``idx_column`` that already exists in
+                the dataset is kept as the sample id, see
+                [`prepare_data`][llm_annotator.annotator.Annotator.prepare_data].
 
         Returns:
             The concatenated annotation dataset.
 
         Raises:
             TypeError: If no prompt template is provided.
+            ValueError: If finished rows exist that the requested selection
+                does not contain, and ``overwrite`` is off.
             TooManyConsecutiveFailedBatchesError: If
                 ``max_consecutive_failed_batches`` consecutive batches fail
                 entirely.
@@ -1497,6 +1785,8 @@ class Annotator:
             hub_id=hub_id,
             keep_columns=keep_columns,
             force_data_preparation=force_data_preparation,
+            reuse_idx_column=reuse_idx_column,
+            allow_selection_change=overwrite,
         )
 
         return self.run_annotation(
@@ -2507,4 +2797,9 @@ class VLLMQueueAnnotator(Annotator):
             pool.shutdown(wait=False, cancel_futures=True)
 
 
-__all__ = ["Annotator", "VLLMQueueAnnotator", "destroy_on_error"]
+__all__ = [
+    "Annotator",
+    "SelectionRecord",
+    "VLLMQueueAnnotator",
+    "destroy_on_error",
+]

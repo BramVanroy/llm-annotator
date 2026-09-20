@@ -1,4 +1,5 @@
 from .annotator import Annotator as Annotator
+from .annotator import SelectionRecord as SelectionRecord
 from .annotator import VLLMQueueAnnotator as VLLMQueueAnnotator
 from .clients.base import OnError as OnError
 from .clients.base import Provider as Provider
@@ -63,6 +64,7 @@ __all__ = [
     "ProviderError",
     "ProviderRuntimeOptions",
     "Response",
+    "SelectionRecord",
     "StepConfig",
     "VLLMBaseRuntimeOptions",
     "VLLMOnlineClient",

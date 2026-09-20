@@ -4,69 +4,7 @@ Feature ideas, ordered by how much they help a large run. Each item states the c
 behaviour (checked against v0.16.0), what goes wrong, a proposal, and the benefit. Line
 references point at `src/llm_annotator/`.
 
-## 1. Let a run grow: raise `max_num_samples` and reuse every finished row
-
-A common workflow is a pilot on a few thousand samples, then the full run, then a larger run
-months later. Today that works for a pipeline with one step and corrupts a pipeline with more
-than one step. The corruption raises no error and the final row count looks right.
-
-### What already works
-
-`annotate_dataset` adds the `idx` column as the source row number before it shuffles with
-`shuffle_seed` and selects `max_num_samples` (`annotator.py`, around line 406). With the same
-seed and an unchanged source, the first N rows of the permutation are a prefix of the first M
-rows for every M > N. `_get_skip_idxs` reads the finished `idx` values from the progress
-backups. So a one-step pipeline that is rerun with a larger cap sends only the new rows to the
-model.
-
-### What goes wrong
-
-- A finished step is skipped while `<NN>-<step>/output/state.json` exists (`_is_complete` in
-  `pipeline.py`), and that check never looks at `max_num_samples`. A user who raises the cap
-  and reruns gets the old result back, with no message that the cap was ignored. The only way
-  forward is to delete `output/` and `final/` by hand.
-- `prepare_data` returns a leftover `annotate/<prefix>prepared_dataset` without a look at
-  `max_num_samples` (`annotator.py`, around line 909). A finished step deletes that cache, a
-  crashed step leaves it behind, and it then pins the old selection.
-- `--overwrite` looks like the natural way to "redo with more samples", and it deletes the
-  progress backups, which is the one thing that an extension needs.
-- The output of a step is sorted by `idx` and the column is then dropped (`_post_annotate`,
-  around lines 1707 and 1730). The next step numbers its rows again by position. After an
-  extension the new rows sit between the old ones, so every old row has a new position, while
-  the progress backups of step 2 still hold the old positions. Step 2 then skips rows that
-  were never processed and processes again rows that were.
-
-  Measured with a 40 row dataset, a two-step pipeline and a stub server: cap 10, then cap 20
-  with `output/` and `final/` deleted. Step 1 sent exactly the 10 new rows. Step 2 sent 10
-  rows of which 5 had been judged before, and 5 rows were never judged. The final dataset had
-  20 rows: 5 duplicates and 5 missing. Texts and verdicts stay together (`keep_columns=True`
-  writes the whole input row), so no verdict lands on the wrong text. The damage is missing
-  and doubled rows.
-
-### Proposal
-
-- Carry one stable sample id through every step. Keep the `idx` of the first step as the
-  identity of a row in all later steps (do not drop it between steps, and do not number rows
-  again by position). A step that expands one row into several can derive child ids from the
-  parent id.
-- Record `max_num_samples`, `shuffle_seed` and a fingerprint of the source dataset next to
-  `state.json` and next to the prepared dataset. When the config asks for more samples than
-  the record holds, treat the step as unfinished and resume it. When the seed or the source
-  fingerprint changed, stop with an error that says the finished rows cannot be reused.
-- Add a documented way to extend (for example `llm-annotate config.yaml --extend`), which
-  keeps the progress backups, rebuilds the prepared dataset and reruns every step on the new
-  rows only. Make `--overwrite` state in its help text that it deletes finished work.
-- Add a page "Growing a run" to the docs that says what must stay unchanged (the source
-  dataset and `shuffle_seed`).
-
-### Benefit
-
-A pilot is never wasted: its rows are the first rows of the full run. A dataset can grow when
-budget allows, at the cost of the new rows only. Without this, a user of a multi-step pipeline
-has two choices: pay again for every finished generation, or split the data into shards by
-hand and run each shard in its own output directory.
-
-## 2. Set the sample cap from the command line
+## 1. Set the sample cap from the command line
 
 ### Current behaviour
 
@@ -84,12 +22,14 @@ stays reproducible.
 
 ### Benefit
 
-Pilot, full run and extension become one config file and one number on the command line. A
-job script can take the number from an environment variable. Today each size needs an edited
-copy of the YAML, and the copy also has to fix relative prompt and schema paths through
-`config_dir`.
+A pilot, the full run and a later extension already share one config file, since a run can now
+grow by raising `max_num_samples` and re-running. This proposal removes the last edit: the
+number reaches the config from the command line instead of the YAML, so a job script can take
+it from an environment variable. Today changing the cap means editing the YAML directly, and a
+one-off size that should not touch the tracked config still needs a copy of the file, which
+also has to fix its relative prompt and schema paths through `config_dir`.
 
-## 3. Start the client on a partial server pool under SLURM
+## 2. Start the client on a partial server pool under SLURM
 
 ### Current behaviour
 
@@ -110,7 +50,7 @@ On a busy GPU partition the last server of an array of eight can sit in the queu
 Today the seven servers that did start hold their GPUs idle for that time, and a client that
 waits longer than its pool timeout fails the whole step.
 
-## 4. Progress files on a large run
+## 3. Progress files on a large run
 
 ### Current behaviour
 
@@ -129,7 +69,7 @@ value trades the size of the loss at a crash against the cost of a resume.
 Faster restarts on preemptible partitions and fewer small files on filesystems that have a
 file count quota.
 
-## 5. Reject a `queue_size` that is too small when the config loads
+## 4. Reject a `queue_size` that is too small when the config loads
 
 ### Current behaviour
 

@@ -15,6 +15,9 @@ Two things make a *pipeline* more than a loop:
 * A finished step writes its result to ``<step-dir>/output``. On a re-run that
   snapshot is loaded and the step is skipped, so a pipeline that dies in step
   three does not repeat steps one and two.
+* The ``idx_column`` of the first step is the id of a row in every later step.
+  A re-run with a higher ``dataset.max_num_samples`` resumes every step and
+  sends only the new rows to the model.
 
 [`main`][llm_annotator.pipeline.main] is the ``llm-annotate`` console entry
 point.
@@ -29,7 +32,11 @@ from typing import Any, Sequence
 
 from datasets import Dataset
 
-from llm_annotator.annotator import Annotator, VLLMQueueAnnotator
+from llm_annotator.annotator import (
+    Annotator,
+    SelectionRecord,
+    VLLMQueueAnnotator,
+)
 from llm_annotator.config import (
     ClientConfig,
     PipelineConfig,
@@ -37,6 +44,7 @@ from llm_annotator.config import (
     load_pipeline_config,
 )
 from llm_annotator.logging_utils import configure_logging, get_logger
+from llm_annotator.utils import dataset_signature
 
 
 LOGGER = get_logger("pipeline")
@@ -44,7 +52,8 @@ LOGGER = get_logger("pipeline")
 STEP_OUTPUT_SUBDIR = "output"
 """Name of the subdirectory holding a finished step's dataset.
 
-Its presence is what marks a step as done.
+Its presence marks a step as done for the selection in the step's
+[`SelectionRecord`][llm_annotator.annotator.SelectionRecord].
 """
 
 STEP_ANNOTATE_SUBDIR = "annotate"
@@ -65,6 +74,31 @@ def _is_complete(snapshot_dir: Path) -> bool:
         ``True`` when the directory exists and holds a saved dataset.
     """
     return snapshot_dir.is_dir() and (snapshot_dir / "state.json").is_file()
+
+
+def _selection_request(
+    config: PipelineConfig, dataset: Dataset | None, is_first: bool
+) -> dict[str, Any]:
+    """Build the selection that a step asks for, in the terms of its record.
+
+    Args:
+        config: The pipeline configuration.
+        dataset: The step's in-memory input, or ``None`` for a source that the
+            annotator loads itself.
+        is_first: Whether this is the pipeline's first step.
+
+    Returns:
+        Keyword arguments for
+        [`SelectionRecord.is_stale`][llm_annotator.annotator.SelectionRecord.is_stale].
+    """
+    source = config.dataset if is_first else None
+    return {
+        "max_num_samples": source.max_num_samples if source else None,
+        "shuffle_seed": source.shuffle_seed if source else None,
+        "source_signature": (
+            dataset_signature(dataset) if dataset is not None else None
+        ),
+    }
 
 
 def _load_input_dataset(config: PipelineConfig) -> Dataset | None:
@@ -90,7 +124,32 @@ def _load_input_dataset(config: PipelineConfig) -> Dataset | None:
     return Dataset.load_from_disk(str(path))
 
 
-def _generate_dataset(step: StepConfig, root: Path) -> tuple[Dataset, str]:
+def _generate_template(step: StepConfig, root: Path) -> str:
+    """Resolve the prompt template of a ``generate`` step.
+
+    Args:
+        step: The generate step.
+        root: Directory that relative config paths resolve against.
+
+    Returns:
+        The template that renders each entry of ``prompts``.
+
+    Raises:
+        ValueError: If an explicit template does not contain ``{prompt}``.
+    """
+    template = step.resolved_prompt(root)
+    if template is None:
+        return "{prompt}"
+    if "{prompt}" not in template:
+        raise ValueError(
+            f"Step '{step.name}': the template of a 'generate' step must"
+            " contain the '{prompt}' placeholder, which is filled in with each"
+            " entry of 'prompts'."
+        )
+    return template
+
+
+def _generate_dataset(step: StepConfig, root: Path) -> Dataset:
     """Build the synthetic prompt dataset for a ``generate`` step.
 
     This mirrors what
@@ -104,25 +163,11 @@ def _generate_dataset(step: StepConfig, root: Path) -> tuple[Dataset, str]:
         root: Directory that relative config paths resolve against.
 
     Returns:
-        The one-column prompt dataset and the prompt template to render it
-        with.
-
-    Raises:
-        ValueError: If an explicit template does not contain ``{prompt}``.
+        The one-column prompt dataset.
     """
     prompts = step.resolved_prompts(root)
-    template = step.resolved_prompt(root)
-    if template is None:
-        template = "{prompt}"
-    elif "{prompt}" not in template:
-        raise ValueError(
-            f"Step '{step.name}': the template of a 'generate' step must"
-            " contain the '{prompt}' placeholder, which is filled in with each"
-            " entry of 'prompts'."
-        )
-
-    LOGGER.info(f"Step '{step.name}': generating {len(prompts):,} sample(s).")
-    return Dataset.from_dict({"prompt": prompts}), template
+    LOGGER.info(f"Step '{step.name}': {len(prompts):,} prompt(s) to generate.")
+    return Dataset.from_dict({"prompt": prompts})
 
 
 def _postprocess_step(
@@ -236,8 +281,9 @@ def _run_step(
         config: The pipeline configuration.
         step: The step to run.
         client_config: The step's effective client configuration.
-        dataset: The incoming dataset, or ``None`` when the first step should
-            load it from a Hub id or builder name itself.
+        dataset: The incoming dataset (the prompt dataset for a ``generate``
+            step), or ``None`` when the first step should load it from a Hub id
+            or builder name itself.
         is_first: Whether this is the pipeline's first step.
         step_dir: Directory holding this step's artifacts.
 
@@ -268,12 +314,16 @@ def _run_step(
         "hub_id": step.hub_id,
         "overwrite": config.overwrite,
         "force_data_preparation": step.force_data_preparation,
+        # The ids of the first step identify a row in every later step. Ids
+        # that are numbered again by position change when the input grows,
+        # and the progress files of a later step would then name other rows.
+        "keep_idx_column": True,
+        "reuse_idx_column": not is_first,
     }
 
     if step.type == "generate":
-        prompt_dataset, template = _generate_dataset(step, root)
-        kwargs["dataset"] = prompt_dataset
-        kwargs["prompt_template"] = template
+        kwargs["dataset"] = dataset
+        kwargs["prompt_template"] = _generate_template(step, root)
     else:
         kwargs["prompt_template"] = step.resolved_prompt(root)
         if dataset is not None:
@@ -292,6 +342,62 @@ def _run_step(
         kwargs["shuffle_seed"] = config.dataset.shuffle_seed
 
     return annotator.annotate_dataset(**kwargs)
+
+
+def _check_unrecorded_run(
+    config: PipelineConfig, will_overwrite: bool
+) -> None:
+    """Refuse to grow a run whose finished steps carry no sample ids.
+
+    A first step that finished under a version without selection records
+    numbered its rows by position and dropped the ids afterwards. The later
+    steps of such a run cannot be resumed on a larger input, because their
+    progress files would name other rows than before. The previous cap and
+    seed come from ``pipeline.json``, so this check has to run before that
+    file is replaced.
+
+    Args:
+        config: The pipeline configuration.
+        will_overwrite: Whether this run deletes the first step's directory.
+
+    Raises:
+        ValueError: If the first step finished without a record and the
+            config now asks for another cap or seed.
+    """
+    first_dir = config.step_dir(0)
+    record = SelectionRecord.read(
+        first_dir / STEP_ANNOTATE_SUBDIR,
+        config.steps[0].resolved_task_prefix(),
+    )
+    if (
+        will_overwrite
+        or record is not None
+        or not _is_complete(first_dir / STEP_OUTPUT_SUBDIR)
+    ):
+        return
+
+    try:
+        previous = json.loads(
+            (config.output_dir / "pipeline.json").read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
+        return
+
+    before = previous.get("dataset") or {}
+    now = config.dataset.model_dump() if config.dataset else {}
+    changed = [
+        key
+        for key in ("max_num_samples", "shuffle_seed")
+        if before.get(key) != now.get(key)
+    ]
+    if changed:
+        raise ValueError(
+            f"Step '{config.steps[0].name}' finished under a version of"
+            " llm-annotator that did not record its sample selection, and"
+            f" {changed} changed since. Such a run cannot grow, because its"
+            " later steps did not keep a stable sample id. Restore the old"
+            " value(s), use a new 'output_dir', or pass --overwrite."
+        )
 
 
 def _resolve_selection(
@@ -372,6 +478,7 @@ def run_pipeline(
     chosen = _resolve_selection(config, selected)
 
     config.output_dir.mkdir(parents=True, exist_ok=True)
+    _check_unrecorded_run(config, config.overwrite and 0 in chosen)
     snapshot = config.output_dir / "pipeline.json"
     snapshot.write_text(
         json.dumps(config.model_dump(mode="json"), indent=2, default=str),
@@ -398,20 +505,48 @@ def run_pipeline(
                 LOGGER.info(f"{label}: removing '{step_dir}' (overwrite).")
                 shutil.rmtree(step_dir, ignore_errors=True)
 
+            if step.type == "generate":
+                dataset = _generate_dataset(step, config.config_dir)
+
+            is_outdated = False
             if _is_complete(step_output):
-                LOGGER.info(
-                    f"{label}: already finished, loading its result from"
-                    f" '{step_output}'."
+                request = _selection_request(config, dataset, index == 0)
+                record = SelectionRecord.read(
+                    step_dir / STEP_ANNOTATE_SUBDIR,
+                    step.resolved_task_prefix(),
                 )
-                dataset = Dataset.load_from_disk(str(step_output))
-                continue
+                is_outdated = record is not None and record.is_stale(**request)
+                if not is_outdated:
+                    LOGGER.info(
+                        f"{label}: already finished, loading its result from"
+                        f" '{step_output}'."
+                    )
+                    dataset = Dataset.load_from_disk(str(step_output))
+                    continue
 
             if index not in chosen:
+                reason = (
+                    "finished for another selection of samples than the one"
+                    " that is requested now"
+                    if is_outdated
+                    else "not run yet"
+                )
                 raise ValueError(
-                    f"Step '{step.name}' has not run yet, so there is no input"
+                    f"Step '{step.name}' has {reason}, so there is no input"
                     f" for '{config.steps[chosen.start].name}'. Run it first,"
                     " or select it too."
                 )
+
+            if is_outdated:
+                LOGGER.info(
+                    f"{label}: its input or sample selection changed since it"
+                    " finished. Resuming it; rows in its progress files are"
+                    " not sent to the model again."
+                )
+                # Before the step runs: the annotator replaces the selection
+                # record, and a crash after that would leave an old result
+                # that passes for a finished one.
+                shutil.rmtree(step_output, ignore_errors=True)
 
             client_config = config.step_client(step)
             client_key = client_config.cache_key()
@@ -478,6 +613,9 @@ def run_pipeline(
             " step(s) to finish the pipeline."
         )
         return dataset
+
+    if config.idx_column in dataset.column_names:
+        dataset = dataset.remove_columns([config.idx_column])
 
     final_dir = config.output_dir / "final"
     dataset.save_to_disk(str(final_dir))
@@ -648,7 +786,10 @@ def main(args: list[str] | None = None) -> None:
         "--overwrite",
         action="store_true",
         default=None,
-        help="Discard existing step directories instead of resuming them.",
+        help="Delete the directories of the selected steps, including every"
+        " finished generation in them, and run those steps from scratch. Not"
+        " needed for a higher 'max_num_samples': a plain re-run annotates only"
+        " the new rows.",
     )
     parser.add_argument(
         "--steps",

@@ -8,6 +8,7 @@ from os import PathLike
 from pathlib import Path
 from typing import Any, Generator
 
+from datasets import Dataset
 from huggingface_hub import whoami
 from tqdm import tqdm
 
@@ -35,6 +36,52 @@ def get_hash(text: str) -> str:
         False
     """
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def dataset_signature(dataset: Dataset, num_probe_rows: int = 64) -> str:
+    """Compute a content signature of a dataset without reading all of it.
+
+    The signature is a SHA256 hash of the row count, the column names and up to
+    ``num_probe_rows`` evenly spaced rows. It depends on the content only, so
+    it is the same in every process and for every version of ``datasets``. A
+    change in the number of rows always changes it. An edit of a row that is
+    not probed does not.
+
+    Args:
+        dataset: The dataset to describe.
+        num_probe_rows: Maximum number of rows that are hashed.
+
+    Returns:
+        A 64-character hexadecimal SHA256 digest.
+
+    Examples:
+        >>> from datasets import Dataset
+        >>> first = Dataset.from_dict({"text": ["a", "b"]})
+        >>> same = Dataset.from_dict({"text": ["a", "b"]})
+        >>> longer = Dataset.from_dict({"text": ["a", "b", "c"]})
+        >>> dataset_signature(first) == dataset_signature(same)
+        True
+        >>> dataset_signature(first) == dataset_signature(longer)
+        False
+    """
+    num_rows = len(dataset)
+    num_probes = min(num_probe_rows, num_rows)
+    probe_idxs = sorted(
+        {(i * num_rows) // num_probes for i in range(num_probes)}
+    )
+    # The Arrow view holds storage values (e.g. image bytes), whose repr is
+    # stable. Decoded Python objects can carry a memory address in theirs.
+    probes = (
+        dataset.select(probe_idxs).with_format("arrow")[:].to_pylist()
+        if probe_idxs
+        else []
+    )
+    payload = {
+        "num_rows": num_rows,
+        "columns": sorted(dataset.column_names),
+        "probes": probes,
+    }
+    return get_hash(json.dumps(payload, sort_keys=True, default=repr))
 
 
 def convert_int_to_annotated_str(num: int) -> str:
@@ -355,6 +402,7 @@ __all__ = [
     "convert_int_to_annotated_str",
     "is_in_range",
     "count_lines",
+    "dataset_signature",
     "ensure_returns_bool",
     "ensure_returns_dict",
     "extract_prompt_prefix",

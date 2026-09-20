@@ -738,6 +738,70 @@ def test_step_dir_is_numbered(tmp_path: Path) -> None:
     assert config.step_dir(1) == tmp_path / "outputs/test/02-second"
 
 
+def test_rename_key_matching_idx_column_is_rejected() -> None:
+    with pytest.raises(ValueError, match="renames or drops 'idx'"):
+        PipelineConfig.model_validate(
+            minimal_config(
+                steps=[
+                    {
+                        "name": "a",
+                        "prompt": "x",
+                        "rename": {"idx": "row_id"},
+                    }
+                ]
+            )
+        )
+
+
+def test_rename_value_matching_idx_column_is_rejected() -> None:
+    with pytest.raises(ValueError, match="renames or drops 'idx'"):
+        PipelineConfig.model_validate(
+            minimal_config(
+                steps=[
+                    {
+                        "name": "a",
+                        "prompt": "x",
+                        "rename": {"label": "idx"},
+                    }
+                ]
+            )
+        )
+
+
+def test_drop_columns_matching_idx_column_is_rejected() -> None:
+    with pytest.raises(ValueError, match="renames or drops 'idx'"):
+        PipelineConfig.model_validate(
+            minimal_config(
+                steps=[
+                    {
+                        "name": "a",
+                        "prompt": "x",
+                        "drop_columns": ["idx"],
+                    }
+                ]
+            )
+        )
+
+
+def test_idx_column_guard_follows_a_custom_name() -> None:
+    # A custom 'idx_column' is what gets guarded, not the literal "idx".
+    PipelineConfig.model_validate(
+        minimal_config(
+            idx_column="row_id",
+            steps=[{"name": "a", "prompt": "x", "drop_columns": ["idx"]}],
+        )
+    )
+    with pytest.raises(ValueError, match="renames or drops 'row_id'"):
+        PipelineConfig.model_validate(
+            minimal_config(
+                idx_column="row_id",
+                steps=[
+                    {"name": "a", "prompt": "x", "drop_columns": ["row_id"]}
+                ],
+            )
+        )
+
+
 # --- client merging ----------------------------------------------------------
 
 

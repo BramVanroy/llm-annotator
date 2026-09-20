@@ -11,6 +11,7 @@ from datasets import Dataset, load_dataset
 
 from llm_annotator.annotator import (
     Annotator,
+    SelectionRecord,
     _create_messages,
     destroy_on_error,
 )
@@ -27,6 +28,7 @@ from llm_annotator.clients.exceptions import (
 from llm_annotator.clients.openai_client import OpenAIClient
 from llm_annotator.clients.vllm_offline_client import VLLMOfflineClient
 from llm_annotator.clients.vllm_online_client import VLLMOnlineClient
+from llm_annotator.utils import dataset_signature
 
 
 class DummyClient(Client[ProviderRuntimeOptions]):
@@ -80,6 +82,26 @@ class DummyClient(Client[ProviderRuntimeOptions]):
 
     def destroy(self) -> None:
         self.destroy_called += 1
+
+
+class TrackingClient(DummyClient):
+    """A DummyClient that records every prompt it was asked to answer."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.seen_prompts: list[str] = []
+
+    def batch_generate(
+        self,
+        *,
+        messages: list[list[dict[str, str]]],
+        options: ProviderRuntimeOptions | None = None,
+        gen_kwargs: dict[str, Any] | None = None,
+    ) -> list[Response]:
+        self.seen_prompts.extend(msg[-1]["content"] for msg in messages)
+        return super().batch_generate(
+            messages=messages, options=options, gen_kwargs=gen_kwargs
+        )
 
 
 @pytest.fixture
@@ -921,6 +943,7 @@ def test_prepare_data_uses_prepared_hub_and_force_rebuild(
     rebuilt_ds, rebuilt_path, rebuilt_hub_id = annotator.prepare_data(
         output_dir=tmp_path / "force-rebuild",
         prompt_template="Q: {text}",
+        dataset=Dataset.from_dict({"text": ["a", "b"]}),
         hub_id="owner/prepared",
         force_data_preparation=True,
     )
@@ -1467,3 +1490,393 @@ def test_run_annotation_chunks_output_files_without_hub(
         len(pfin.read_text(encoding="utf-8").splitlines()) for pfin in files
     ] == [4, 4, 2]
     assert result["idx"] == list(range(10))
+
+
+# --- selection records ---------------------------------------------------------
+
+
+def test_selection_record_read_returns_none_for_an_empty_dir(
+    tmp_path: Path,
+) -> None:
+    assert SelectionRecord.read(tmp_path) is None
+
+
+def test_selection_record_write_read_round_trip(tmp_path: Path) -> None:
+    record = SelectionRecord(
+        max_num_samples=10,
+        shuffle_seed=42,
+        source_signature="abc123",
+        source_rows=40,
+        selected_rows=10,
+        reuse_idx_column=True,
+    )
+    record.write(tmp_path, task_prefix="p_")
+
+    assert (
+        SelectionRecord.path(tmp_path, "p_") == tmp_path / "p_selection.json"
+    )
+    assert SelectionRecord.read(tmp_path, "p_") == record
+    # A different (here: empty) task_prefix names a different file.
+    assert SelectionRecord.read(tmp_path) is None
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected_stale"),
+    [
+        ({"max_num_samples": 10, "shuffle_seed": 42}, False),
+        ({"max_num_samples": 20, "shuffle_seed": 42}, True),
+        ({"max_num_samples": 10, "shuffle_seed": 7}, True),
+        (
+            {
+                "max_num_samples": 10,
+                "shuffle_seed": 42,
+                "source_signature": "abc",
+            },
+            False,
+        ),
+        (
+            {
+                "max_num_samples": 10,
+                "shuffle_seed": 42,
+                "source_signature": "other",
+            },
+            True,
+        ),
+    ],
+)
+def test_selection_record_is_stale(
+    kwargs: dict[str, Any], expected_stale: bool
+) -> None:
+    # source_signature defaults to None, which leaves the source out of the
+    # comparison (a source that is not loaded yet).
+    record = SelectionRecord(
+        max_num_samples=10,
+        shuffle_seed=42,
+        source_signature="abc",
+        source_rows=40,
+        selected_rows=10,
+    )
+    assert record.is_stale(**kwargs) is expected_stale
+
+
+def test_prepare_data_writes_the_selection_record(tmp_path: Path) -> None:
+    annotator = Annotator(client=DummyClient())
+    ds = Dataset.from_dict({"text": [f"row {i}" for i in range(5)]})
+
+    annotator.prepare_data(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        dataset=ds,
+        max_num_samples=3,
+        shuffle_seed=1,
+    )
+
+    record = SelectionRecord.read(tmp_path / "out")
+    assert record is not None
+    assert record.max_num_samples == 3
+    assert record.shuffle_seed == 1
+    assert record.source_rows == 5
+    assert record.selected_rows == 3
+    assert record.reuse_idx_column is False
+    assert record.source_signature == dataset_signature(ds)
+
+
+def test_prepare_data_rebuilds_a_stale_local_cache(tmp_path: Path) -> None:
+    # A leftover cache built for another cap must be rebuilt, not reused.
+    annotator = Annotator(client=DummyClient())
+    ds = Dataset.from_dict({"text": [f"row {i}" for i in range(10)]})
+
+    first, _, _ = annotator.prepare_data(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        dataset=ds,
+        max_num_samples=2,
+    )
+    assert len(first) == 2
+
+    second, _, _ = annotator.prepare_data(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        dataset=ds,
+        max_num_samples=4,
+    )
+    assert len(second) == 4
+
+
+def test_prepare_data_reuses_a_cache_that_has_no_record(
+    tmp_path: Path,
+) -> None:
+    # A cache from a version that never wrote a record is reused as is, even
+    # though the new request asks for a higher cap.
+    annotator = Annotator(client=DummyClient())
+    ds = Dataset.from_dict({"text": [f"row {i}" for i in range(10)]})
+
+    first, _, _ = annotator.prepare_data(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        dataset=ds,
+        max_num_samples=2,
+    )
+    assert len(first) == 2
+    SelectionRecord.path(tmp_path / "out").unlink()
+
+    second, _, _ = annotator.prepare_data(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        dataset=ds,
+        max_num_samples=4,
+    )
+    assert len(second) == 2
+
+
+# --- growing an annotate_dataset run --------------------------------------------
+
+
+def test_annotate_dataset_growth_sends_only_new_samples(
+    tmp_path: Path,
+) -> None:
+    client = TrackingClient()
+    annotator = Annotator(client=client, batch_size=2)
+    ds = Dataset.from_dict({"text": [f"row {i}" for i in range(12)]})
+
+    first = annotator.annotate_dataset(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        dataset=ds,
+        max_num_samples=3,
+        shuffle_seed=1,
+    )
+    assert len(first) == 3
+    assert len(client.seen_prompts) == 3
+    client.seen_prompts.clear()
+
+    second = annotator.annotate_dataset(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        dataset=ds,
+        max_num_samples=6,
+        shuffle_seed=1,
+    )
+    assert len(second) == 6
+    assert len(client.seen_prompts) == 3
+
+
+def test_annotate_dataset_growth_rejects_a_changed_seed(
+    tmp_path: Path,
+) -> None:
+    annotator = Annotator(client=DummyClient())
+    ds = Dataset.from_dict({"text": [f"row {i}" for i in range(12)]})
+
+    annotator.annotate_dataset(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        dataset=ds,
+        max_num_samples=3,
+        shuffle_seed=1,
+    )
+
+    with pytest.raises(ValueError, match="shuffle_seed"):
+        annotator.annotate_dataset(
+            output_dir=tmp_path / "out",
+            prompt_template="Q: {text}",
+            dataset=ds,
+            max_num_samples=6,
+            shuffle_seed=2,
+        )
+
+
+def test_annotate_dataset_growth_rejects_a_shrunk_cap(
+    tmp_path: Path,
+) -> None:
+    annotator = Annotator(client=DummyClient())
+    ds = Dataset.from_dict({"text": [f"row {i}" for i in range(12)]})
+
+    annotator.annotate_dataset(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        dataset=ds,
+        max_num_samples=6,
+        shuffle_seed=1,
+    )
+
+    with pytest.raises(ValueError, match="shrank"):
+        annotator.annotate_dataset(
+            output_dir=tmp_path / "out",
+            prompt_template="Q: {text}",
+            dataset=ds,
+            max_num_samples=3,
+            shuffle_seed=1,
+        )
+
+
+def test_annotate_dataset_growth_rejects_a_changed_source(
+    tmp_path: Path,
+) -> None:
+    annotator = Annotator(client=DummyClient())
+    ds = Dataset.from_dict({"text": [f"row {i}" for i in range(12)]})
+
+    annotator.annotate_dataset(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        dataset=ds,
+        max_num_samples=3,
+        shuffle_seed=1,
+    )
+
+    other = Dataset.from_dict({"text": [f"other {i}" for i in range(12)]})
+    with pytest.raises(ValueError, match="source dataset changed"):
+        annotator.annotate_dataset(
+            output_dir=tmp_path / "out",
+            prompt_template="Q: {text}",
+            dataset=other,
+            max_num_samples=6,
+            shuffle_seed=1,
+        )
+
+
+def test_annotate_dataset_growth_accepts_appended_rows_without_a_shuffle(
+    tmp_path: Path,
+) -> None:
+    client = TrackingClient()
+    annotator = Annotator(client=client, batch_size=2)
+    ds = Dataset.from_dict({"text": [f"row {i}" for i in range(5)]})
+
+    annotator.annotate_dataset(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        dataset=ds,
+    )
+    client.seen_prompts.clear()
+
+    grown = Dataset.from_dict(
+        {"text": [f"row {i}" for i in range(5)] + ["row 5", "row 6"]}
+    )
+    second = annotator.annotate_dataset(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        dataset=grown,
+    )
+    assert len(second) == 7
+    assert client.seen_prompts == ["Q: row 5", "Q: row 6"]
+
+
+def test_annotate_dataset_growth_rejects_appended_rows_with_a_shuffle(
+    tmp_path: Path,
+) -> None:
+    annotator = Annotator(client=DummyClient())
+    ds = Dataset.from_dict({"text": [f"row {i}" for i in range(5)]})
+
+    annotator.annotate_dataset(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        dataset=ds,
+        shuffle_seed=1,
+    )
+
+    grown = Dataset.from_dict(
+        {"text": [f"row {i}" for i in range(5)] + ["row 5"]}
+    )
+    with pytest.raises(ValueError, match="source dataset changed"):
+        annotator.annotate_dataset(
+            output_dir=tmp_path / "out",
+            prompt_template="Q: {text}",
+            dataset=grown,
+            shuffle_seed=1,
+        )
+
+
+def test_annotate_dataset_overwrite_with_a_changed_seed_restarts(
+    tmp_path: Path,
+) -> None:
+    client = TrackingClient()
+    annotator = Annotator(client=client, batch_size=2)
+    ds = Dataset.from_dict({"text": [f"row {i}" for i in range(12)]})
+
+    annotator.annotate_dataset(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        dataset=ds,
+        max_num_samples=6,
+        shuffle_seed=1,
+    )
+    client.seen_prompts.clear()
+
+    second = annotator.annotate_dataset(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        dataset=ds,
+        max_num_samples=6,
+        shuffle_seed=2,
+        overwrite=True,
+    )
+    assert len(second) == 6
+    assert len(client.seen_prompts) == 6
+
+
+# --- reusing an existing idx column ---------------------------------------------
+
+
+def test_reuse_idx_column_keeps_existing_ids(tmp_path: Path) -> None:
+    annotator = Annotator(client=DummyClient())
+    ds = Dataset.from_dict({"idx": [5, 9, 12], "text": ["a", "b", "c"]})
+
+    out = annotator.annotate_dataset(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        dataset=ds,
+        reuse_idx_column=True,
+        keep_idx_column=True,
+    )
+
+    assert sorted(out["idx"]) == [5, 9, 12]
+
+
+def test_reuse_idx_column_rejects_duplicates(tmp_path: Path) -> None:
+    annotator = Annotator(client=DummyClient())
+    ds = Dataset.from_dict({"idx": [1, 1, 2], "text": ["a", "b", "c"]})
+
+    with pytest.raises(ValueError, match="duplicate values"):
+        annotator.prepare_data(
+            output_dir=tmp_path / "out",
+            prompt_template="Q: {text}",
+            dataset=ds,
+            reuse_idx_column=True,
+        )
+
+
+def test_existing_idx_column_still_raises_without_the_reuse_flag(
+    tmp_path: Path,
+) -> None:
+    annotator = Annotator(client=DummyClient())
+    ds = Dataset.from_dict({"idx": [0, 1], "text": ["a", "b"]})
+
+    with pytest.raises(ValueError, match="already contains a column"):
+        annotator.prepare_data(
+            output_dir=tmp_path / "out",
+            prompt_template="Q: {text}",
+            dataset=ds,
+        )
+
+
+def test_run_annotation_overwrite_keeps_the_selection_record(
+    tmp_path: Path,
+) -> None:
+    annotator = Annotator(client=DummyClient())
+    ds = Dataset.from_dict({"text": ["a", "b"]})
+
+    prepared, _, _ = annotator.prepare_data(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        dataset=ds,
+    )
+    record_path = SelectionRecord.path(tmp_path / "out")
+    assert record_path.is_file()
+
+    annotator.run_annotation(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        prepared_dataset=prepared,
+        overwrite=True,
+    )
+
+    assert record_path.is_file()
