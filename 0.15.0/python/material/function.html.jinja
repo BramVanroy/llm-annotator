@@ -1,0 +1,12 @@
+{% extends "_base/function.html.jinja" %}
+
+{# Replace mkdocstrings' inline source dump with a link to GitHub. #}
+{% block source scoped %}
+  {% if config.show_source and function.source %}
+    {% with filepath = function.relative_package_filepath if function.relative_filepath.is_absolute() else function.relative_filepath,
+            start = function.lineno or 1,
+            end = function.endlineno or function.lineno or 1 %}
+      {% include "_source_link.html.jinja" %}
+    {% endwith %}
+  {% endif %}
+{% endblock source %}
