@@ -2106,9 +2106,7 @@ class VLLMQueueAnnotator(Annotator):
         self._shutdown_started = Event()
         self._destroyed = Event()
         self._clients_lock = Lock()
-        for client in self.clients:
-            for _ in range(self.max_concurrent_batches_per_client):
-                self._client_pool.put(client)
+        self._rebuild_client_pool()
 
     @property
     def _max_workers(self) -> int:
@@ -2230,9 +2228,13 @@ class VLLMQueueAnnotator(Annotator):
             )
         )
         self.queue_size = self._resolve_queue_size(self.queue_size)
+        self._rebuild_client_pool()
+
+    def _rebuild_client_pool(self) -> None:
+        """Recreate the available-client queue in round-robin order."""
         self._client_pool = SimpleQueue()
-        for client in self.clients:
-            for _ in range(self.max_concurrent_batches_per_client):
+        for _ in range(self.max_concurrent_batches_per_client):
+            for client in self.clients:
                 self._client_pool.put(client)
 
     def destroy(self) -> None:

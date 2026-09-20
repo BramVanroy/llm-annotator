@@ -771,10 +771,7 @@ class ClientConfig(_StrictBase):
             LOGGER.info(
                 f"Annotating over {len(one_or_more_clients)} vLLM server(s)."
             )
-            expected_servers = max(
-                self.pool.servers,
-                len(list(dict.fromkeys(self.resolve_base_urls(root)))),
-            )
+            expected_servers = self._expected_pool_size(root)
             annotator = VLLMQueueAnnotator(
                 clients=one_or_more_clients,
                 batch_size=self.batch_size,
@@ -797,12 +794,21 @@ class ClientConfig(_StrictBase):
             verbose=verbose,
         )
 
+    def _expected_pool_size(self, root: Path) -> int:
+        """Return how many distinct vLLM servers this pool can grow to."""
+        if self.base_urls:
+            return max(self.pool.servers, len(list(dict.fromkeys(self.base_urls))))
+        try:
+            return max(
+                self.pool.servers,
+                len(list(dict.fromkeys(self.resolve_base_urls(root)))),
+            )
+        except ValueError:
+            return self.pool.servers
+
     def _watch_pool(self, root: Path, annotator: VLLMQueueAnnotator) -> None:
         """Add configured vLLM servers to an active pool as they become ready."""
-        expected_servers = max(
-            self.pool.servers,
-            len(list(dict.fromkeys(self.resolve_base_urls(root)))),
-        )
+        expected_servers = self._expected_pool_size(root)
         if len(annotator.clients) >= expected_servers:
             return
 
