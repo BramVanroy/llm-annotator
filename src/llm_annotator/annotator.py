@@ -2050,6 +2050,7 @@ class VLLMQueueAnnotator(Annotator):
     client: Client = field(init=False, repr=False)
     _client_pool: SimpleQueue[Client[Any]] = field(init=False, repr=False)
     _requested_queue_size: int | None = field(init=False, repr=False)
+    _shutdown_started: Event = field(init=False, repr=False)
     _destroyed: Event = field(init=False, repr=False)
     _clients_lock: Lock = field(init=False, repr=False)
 
@@ -2092,6 +2093,7 @@ class VLLMQueueAnnotator(Annotator):
         # Load balancing: a batch is only dispatched once a client is free, so
         # a slow server never gets a backlog while another one idles.
         self._client_pool = SimpleQueue()
+        self._shutdown_started = Event()
         self._destroyed = Event()
         self._clients_lock = Lock()
         for client in self.clients:
@@ -2173,11 +2175,11 @@ class VLLMQueueAnnotator(Annotator):
     @property
     def is_destroyed(self) -> bool:
         """Whether the annotator has begun releasing its clients."""
-        return self._destroyed.is_set()
+        return self._shutdown_started.is_set()
 
     def wait_for_shutdown(self, timeout: float) -> bool:
         """Block until the pool is shutting down or the timeout elapses."""
-        return self._destroyed.wait(timeout)
+        return self._shutdown_started.wait(timeout)
 
     def destroy(self) -> None:
         """Clean up the resources of every client in the pool. Since clients
@@ -2192,8 +2194,9 @@ class VLLMQueueAnnotator(Annotator):
         Raises:
             BaseException: The first error raised by a client, if any.
         """
-        self._destroyed.set()
+        self._shutdown_started.set()
         with self._clients_lock:
+            self._destroyed.set()
             clients = list(self.clients)
         first_error: BaseException | None = None
         for client in clients:
