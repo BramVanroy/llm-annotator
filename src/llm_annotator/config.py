@@ -832,10 +832,25 @@ class ClientConfig(_StrictBase):
 
         def watch() -> None:
             while not annotator.is_shutting_down:
-                for url in discover():
+
+                def probe(url: str) -> tuple[str, bool]:
+                    return url, _server_is_ready(url, 5)
+
+                candidates = [
+                    url for url in discover() if url not in known_urls
+                ]
+                if candidates:
+                    with ThreadPoolExecutor(
+                        max_workers=len(candidates)
+                    ) as pool:
+                        readiness = list(pool.map(probe, candidates))
+                else:
+                    readiness = []
+
+                for url, is_ready in readiness:
                     if annotator.is_shutting_down:
                         return
-                    if url in known_urls or not _server_is_ready(url, 5):
+                    if not is_ready:
                         continue
                     if annotator.is_shutting_down:
                         return
