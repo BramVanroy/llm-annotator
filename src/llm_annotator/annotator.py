@@ -2192,8 +2192,8 @@ class VLLMQueueAnnotator(Annotator):
         Raises:
             BaseException: The first error raised by a client, if any.
         """
+        self._destroyed.set()
         with self._clients_lock:
-            self._destroyed.set()
             clients = list(self.clients)
         first_error: BaseException | None = None
         for client in clients:
