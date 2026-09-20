@@ -424,13 +424,16 @@ def run_pipeline(
                 active_client_key = client_key
             else:
                 # Same underlying client, but batching is per step and cheap
-                # to change without rebuilding anything. `queue_size` is in
-                # the same category and is deliberately absent from
-                # `cache_key`, so it has to be refreshed here too or the step
-                # would silently run with the previous step's value.
+                # to change without rebuilding anything. The queue settings
+                # are in the same category and deliberately absent from
+                # `cache_key`, so they have to be refreshed here too or the
+                # step would silently run with the previous step's values.
                 annotator.batch_size = client_config.batch_size
                 annotator.num_proc = client_config.num_proc
                 if isinstance(annotator, VLLMQueueAnnotator):
+                    annotator.set_max_concurrent_batches_per_client(
+                        client_config.max_concurrent_batches_per_client
+                    )
                     annotator.set_queue_size(client_config.queue_size)
 
             LOGGER.info(

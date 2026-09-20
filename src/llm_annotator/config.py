@@ -412,6 +412,8 @@ class ClientConfig(_StrictBase):
             be absolute, which is what a job scheduler writing into a scratch
             directory needs.
         queue_size: Batches kept in flight across the pool.
+        max_concurrent_batches_per_client: Maximum simultaneous batch requests
+            sent to each vLLM server.
         wait_for_servers: Seconds to wait for every server's ``/health``
             before starting. ``0`` disables the check.
         engine: How this step's vLLM engine is built. Applies to both vLLM
@@ -432,6 +434,7 @@ class ClientConfig(_StrictBase):
     hosts_file: Path | None = None
     url_glob: str | None = None
     queue_size: int | None = None
+    max_concurrent_batches_per_client: int = 4
     wait_for_servers: float = 60.0
     engine: EngineConfig = Field(default_factory=EngineConfig)
     pool: PoolConfig = Field(default_factory=PoolConfig)
@@ -723,6 +726,9 @@ class ClientConfig(_StrictBase):
                 clients=one_or_more_clients,
                 batch_size=self.batch_size,
                 queue_size=self.queue_size,
+                max_concurrent_batches_per_client=(
+                    self.max_concurrent_batches_per_client
+                ),
                 num_proc=self.num_proc,
                 verbose=verbose,
             )
