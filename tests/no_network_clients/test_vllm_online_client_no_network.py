@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import urllib.error
 from typing import Any, cast
 
 import pytest
@@ -8,6 +10,7 @@ from llm_annotator.clients.exceptions import ConfigurationError
 from llm_annotator.clients.vllm_online_client import (
     VLLMOnlineClient,
     VLLMOnlineRuntimeOptions,
+    server_is_healthy,
 )
 
 
@@ -22,6 +25,61 @@ def test_vllm_online_client_uses_listed_model_when_none_given(
     client = VLLMOnlineClient(model=None)
 
     assert client.model == "served-vllm-model"
+
+
+def test_vllm_online_client_sets_base_url(
+    fake_openai_module: dict[str, Any],
+) -> None:
+    _ = fake_openai_module
+    client = VLLMOnlineClient(
+        model="served-vllm-model", base_url="http://worker:8000/v1"
+    )
+
+    assert client.base_url == "http://worker:8000/v1"
+
+
+def test_server_is_healthy_logs_the_probe_error(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def fail(*args: Any, **kwargs: Any) -> None:
+        _ = args
+        _ = kwargs
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr("urllib.request.urlopen", fail)
+    with caplog.at_level(
+        logging.DEBUG, logger="llm_annotator.clients.vllm_online"
+    ):
+        assert not server_is_healthy("http://a:8000/v1", 1)
+
+    assert any(
+        "connection refused" in record.message for record in caplog.records
+    )
+
+
+def test_vllm_online_client_is_healthy_delegates_to_the_probe(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_openai_module: dict[str, Any],
+) -> None:
+    _ = fake_openai_module
+    seen: dict[str, Any] = {}
+
+    def fake_probe(base_url: str, timeout: float) -> bool:
+        seen["base_url"] = base_url
+        seen["timeout"] = timeout
+        return True
+
+    monkeypatch.setattr(
+        "llm_annotator.clients.vllm_online_client.server_is_healthy",
+        fake_probe,
+    )
+    client = VLLMOnlineClient(
+        model="served-vllm-model", base_url="http://worker:8000/v1"
+    )
+
+    assert client.is_healthy(timeout=2) is True
+    assert seen == {"base_url": "http://worker:8000/v1", "timeout": 2}
 
 
 def test_vllm_online_runtime_options_to_payload() -> None:

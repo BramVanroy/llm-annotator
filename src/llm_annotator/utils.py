@@ -216,6 +216,54 @@ def remove_empty_jsonl_files(pdout: Path) -> list[Path]:
     return sorted(files_removed)
 
 
+def drop_jsonl_rows(
+    pdout: Path, should_drop: Callable[[dict[str, Any]], bool]
+) -> list[dict[str, Any]]:
+    """Remove the rows that match a predicate from every .jsonl file in a directory.
+
+    A file that loses rows is written to a temporary file that then replaces
+    it, so a crash leaves either the old or the new file. A line that is not
+    valid JSON is kept as it is.
+
+    Args:
+        pdout: Directory that holds the ``*.jsonl`` files.
+        should_drop: Called with each parsed row. ``True`` removes the row.
+
+    Returns:
+        The removed rows.
+
+    Examples:
+        >>> import tempfile
+        >>> pdout = Path(tempfile.mkdtemp())
+        >>> _ = (pdout / "rows.jsonl").write_text('{"idx": 0}\\n{"idx": 1}\\n')
+        >>> drop_jsonl_rows(pdout, lambda row: row["idx"] == 1)
+        [{'idx': 1}]
+        >>> (pdout / "rows.jsonl").read_text()
+        '{"idx": 0}\\n'
+    """
+    dropped: list[dict[str, Any]] = []
+    for pfin in sorted(pdout.glob("*.jsonl")):
+        kept_lines: list[bytes] = []
+        num_dropped_before = len(dropped)
+        with pfin.open("rb") as fhin:
+            for raw_line in fhin:
+                try:
+                    row = json.loads(raw_line)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    row = None
+                if isinstance(row, dict) and should_drop(row):
+                    dropped.append(row)
+                else:
+                    kept_lines.append(raw_line)
+
+        if len(dropped) > num_dropped_before:
+            pftmp = pfin.with_suffix(".jsonl.tmp")
+            pftmp.write_bytes(b"".join(kept_lines))
+            pftmp.replace(pfin)
+
+    return dropped
+
+
 def ensure_returns_bool(
     func: Callable[..., Any], *args: Any, **kwargs: Any
 ) -> bool:
@@ -403,6 +451,7 @@ __all__ = [
     "is_in_range",
     "count_lines",
     "dataset_signature",
+    "drop_jsonl_rows",
     "ensure_returns_bool",
     "ensure_returns_dict",
     "extract_prompt_prefix",

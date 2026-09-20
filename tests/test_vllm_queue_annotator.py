@@ -1192,6 +1192,14 @@ class AlwaysFailingVLLMClient(Client[ProviderRuntimeOptions]):
         self.destroy_called += 1
 
 
+class DeadVLLMClient(AlwaysFailingVLLMClient):
+    """A server that answers every request with an error and is unreachable."""
+
+    def is_healthy(self, timeout: float = 5.0) -> bool:
+        _ = timeout
+        return False
+
+
 def test_raises_after_consecutive_failed_batches(tmp_path: Path) -> None:
     # Verifies the circuit breaker fires through the queue annotator's
     # out-of-order batch completion, not just the base class's serial loop.
@@ -1215,3 +1223,125 @@ def test_raises_after_consecutive_failed_batches(tmp_path: Path) -> None:
         )
 
     assert all(client.destroy_called == 1 for client in clients)
+
+
+# --------------------------------------------------------------------------
+# Dead-server eviction
+# --------------------------------------------------------------------------
+
+
+def test_dead_server_is_evicted_and_the_run_finishes_with_zero_errors(
+    tmp_path: Path,
+) -> None:
+    dead = DeadVLLMClient(base_url="http://w0")
+    healthy = FakeVLLMOnlineClient(base_url="http://w1")
+    annotator = VLLMQueueAnnotator(
+        clients=[dead, healthy],
+        batch_size=1,
+        max_concurrent_batches_per_client=1,
+    )
+
+    result = annotator.run_annotation(
+        output_dir=tmp_path / "out",
+        prepared_dataset=_make_dataset(3),
+        keep_idx_column=True,
+    )
+
+    assert sorted(result["idx"]) == [0, 1, 2]
+    assert all(error is None for error in result["error"])
+    assert annotator.client_count() == 1
+    assert annotator.clients == [healthy]
+
+
+def test_all_dead_servers_raise_too_many_consecutive_failed_batches(
+    tmp_path: Path,
+) -> None:
+    clients = [DeadVLLMClient(base_url=f"http://w{i}") for i in range(2)]
+    annotator = VLLMQueueAnnotator(
+        clients=clients,
+        batch_size=1,
+        max_concurrent_batches_per_client=1,
+    )
+
+    with pytest.raises(TooManyConsecutiveFailedBatchesError):
+        annotator.run_annotation(
+            output_dir=tmp_path / "out",
+            prepared_dataset=_make_dataset(2),
+        )
+
+    assert annotator.client_count() == 0
+
+
+def test_batch_failing_entirely_on_a_healthy_server_keeps_it_in_the_pool(
+    tmp_path: Path,
+) -> None:
+    # Verifies a healthy server keeps its place in the pool and the errors of
+    # its failed batch are written.
+    client = AlwaysFailingVLLMClient(base_url="http://w0")
+    annotator = VLLMQueueAnnotator(clients=[client], batch_size=2)
+
+    result = annotator.run_annotation(
+        output_dir=tmp_path / "out",
+        prepared_dataset=_make_dataset(2),
+        keep_idx_column=True,
+    )
+
+    assert sorted(result["idx"]) == [0, 1]
+    assert all(error == "connection refused" for error in result["error"])
+    assert annotator.client_count() == 1
+    assert annotator.clients == [client]
+
+
+def test_evicted_server_can_be_added_again_by_base_url(
+    tmp_path: Path,
+) -> None:
+    dead = DeadVLLMClient(base_url="http://w0")
+    healthy = FakeVLLMOnlineClient(base_url="http://w1")
+    annotator = VLLMQueueAnnotator(
+        clients=[dead, healthy],
+        batch_size=1,
+        max_concurrent_batches_per_client=1,
+    )
+    annotator.run_annotation(
+        output_dir=tmp_path / "out",
+        prepared_dataset=_make_dataset(2),
+        keep_idx_column=True,
+    )
+    assert annotator.client_count() == 1
+
+    revived = FakeVLLMOnlineClient(base_url="http://w0")
+    annotator.add_client_for_base_url("http://w0", lambda base_url: revived)
+    assert annotator.client_count() == 2
+
+    result = annotator.run_annotation(
+        output_dir=tmp_path / "out2",
+        prepared_dataset=_make_dataset(2),
+        keep_idx_column=True,
+    )
+
+    assert sorted(result["idx"]) == [0, 1]
+    assert revived.n_batches == 1
+
+
+def test_set_max_concurrent_batches_per_client_works_after_an_eviction(
+    tmp_path: Path,
+) -> None:
+    # Verifies the eviction leaves no stale slots behind that would make the
+    # pool-consistency check in set_max_concurrent_batches_per_client fail.
+    dead = DeadVLLMClient(base_url="http://w0")
+    healthy = FakeVLLMOnlineClient(base_url="http://w1")
+    annotator = VLLMQueueAnnotator(
+        clients=[dead, healthy],
+        batch_size=1,
+        max_concurrent_batches_per_client=2,
+    )
+    annotator.run_annotation(
+        output_dir=tmp_path / "out",
+        prepared_dataset=_make_dataset(2),
+        keep_idx_column=True,
+    )
+    assert annotator.client_count() == 1
+
+    annotator.set_max_concurrent_batches_per_client(3)
+
+    assert annotator.max_concurrent_batches_per_client == 3

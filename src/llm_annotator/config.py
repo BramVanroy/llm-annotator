@@ -11,9 +11,8 @@ from __future__ import annotations
 import dataclasses
 import glob
 import json
+import threading
 import time
-import urllib.error
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_args
@@ -34,6 +33,10 @@ from llm_annotator.annotator import (
     VLLMQueueAnnotator,
 )
 from llm_annotator.clients.base import Client, ProviderRuntimeOptions
+from llm_annotator.clients.vllm_online_client import (
+    VLLMOnlineClient,
+    server_is_healthy,
+)
 from llm_annotator.logging_utils import get_logger
 
 
@@ -251,17 +254,6 @@ def _client_class(provider: ProviderName) -> type[Client[Any]]:
     raise ValueError(f"Unknown provider '{provider}'.")
 
 
-def _server_is_ready(url: str, timeout: float) -> bool:
-    """Return whether a vLLM server answers its health endpoint."""
-    health = f"{url.removesuffix('/v1').rstrip('/')}/health"
-    try:
-        with urllib.request.urlopen(health, timeout=timeout) as response:
-            return int(response.status) == 200
-    except (urllib.error.URLError, OSError) as exc:
-        LOGGER.debug(f"vLLM server at '{url}' is not ready yet: {exc}")
-        return False
-
-
 def wait_for_servers(
     base_urls: list[str], timeout: float, min_servers: int = 1
 ) -> list[str]:
@@ -293,7 +285,7 @@ def wait_for_servers(
             results = zip(
                 pending,
                 pool.map(
-                    lambda url: _server_is_ready(
+                    lambda url: server_is_healthy(
                         url, min(5, max(remaining, 0))
                     ),
                     pending,
@@ -976,8 +968,6 @@ class ClientConfig(_StrictBase):
         # A pool is `vllm_online`-only (enforced in validation), so the server
         # client is named directly here rather than looked up: only it takes
         # the `base_url` that distinguishes one pool member from the next.
-        from llm_annotator.clients.vllm_online_client import VLLMOnlineClient
-
         base_urls = self.resolve_base_urls(root)
         if self.wait_for_servers:
             # The pool source is read once here, so it can name fewer servers
@@ -1053,20 +1043,15 @@ class ClientConfig(_StrictBase):
             return self.pool.servers
 
     def _watch_pool(self, root: Path, annotator: VLLMQueueAnnotator) -> None:
-        """Add configured vLLM servers to an active pool as they become ready."""
-        static_urls = (
-            set(dict.fromkeys(self.base_urls)) if self.base_urls else None
-        )
-        if (
-            static_urls is not None
-            and annotator.client_base_urls() >= static_urls
-        ):
-            return
+        """Add configured vLLM servers to an active pool once they are ready.
 
+        A server is a candidate whenever the pool does not hold it, so this
+        admits a server that starts late as well as one that the annotator
+        evicted and that answers ``/health`` again.
+        """
         kwargs = dict(self.init)
         if self.model is not None:
             kwargs["model"] = self.model
-        known_urls = annotator.client_base_urls()
 
         def discover() -> list[str]:
             try:
@@ -1076,48 +1061,31 @@ class ClientConfig(_StrictBase):
 
         def watch() -> None:
             while not annotator.is_shutting_down:
-
-                def probe(url: str) -> tuple[str, bool]:
-                    return url, _server_is_ready(url, 5)
-
+                pooled_urls = annotator.client_base_urls()
                 candidates = [
-                    url for url in discover() if url not in known_urls
+                    url for url in discover() if url not in pooled_urls
                 ]
-                if candidates:
-                    with ThreadPoolExecutor(
-                        max_workers=len(candidates)
-                    ) as pool:
-                        readiness = list(pool.map(probe, candidates))
-                else:
-                    readiness = []
-
-                for url, is_ready in readiness:
-                    if annotator.is_shutting_down:
-                        return
-                    if not is_ready:
-                        continue
-                    if annotator.is_shutting_down:
-                        return
-                    from llm_annotator.clients.vllm_online_client import (
-                        VLLMOnlineClient,
+                with ThreadPoolExecutor(
+                    max_workers=len(candidates) or 1
+                ) as pool:
+                    readiness = list(
+                        pool.map(
+                            lambda url: server_is_healthy(url, 5), candidates
+                        )
                     )
 
-                    annotator.add_client_for_base_url(
-                        url,
-                        lambda base_url: VLLMOnlineClient(
-                            base_url=base_url, **kwargs
-                        ),
-                    )
-                    if url in annotator.client_base_urls():
-                        known_urls.add(url)
+                for url, is_ready in zip(candidates, readiness, strict=True):
                     if annotator.is_shutting_down:
                         return
-                if static_urls is not None and known_urls >= static_urls:
-                    return
+                    if is_ready:
+                        annotator.add_client_for_base_url(
+                            url,
+                            lambda base_url: VLLMOnlineClient(
+                                base_url=base_url, **kwargs
+                            ),
+                        )
                 if annotator.wait_for_shutdown(timeout=1):
                     return
-
-        import threading
 
         threading.Thread(
             target=watch, name="vllm-pool-watcher", daemon=True

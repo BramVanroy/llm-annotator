@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import shutil
 import string
 from collections import Counter
@@ -59,6 +60,7 @@ from llm_annotator.clients.vllm_offline_client import VLLMOfflineClient
 from llm_annotator.logging_utils import get_logger
 from llm_annotator.utils import (
     dataset_signature,
+    drop_jsonl_rows,
     ensure_returns_bool,
     ensure_returns_dict,
     extract_prompt_prefix,
@@ -141,6 +143,41 @@ def _resolve_samples_per_output_file(
         )
 
     return max_samples_per_output_file
+
+
+def is_retried_error(
+    row: dict[str, Any],
+    *,
+    retry_errors: bool | Sequence[str],
+    task_prefix: str = "",
+) -> bool:
+    """Check whether ``retry_errors`` selects a finished row for another attempt.
+
+    Args:
+        row: One row of a progress file.
+        retry_errors: ``True`` selects every errored row. A sequence selects
+            the errored rows whose ``error_type`` is in it.
+        task_prefix: Prefix of the internal column names.
+
+    Returns:
+        Whether the row has an error that ``retry_errors`` selects.
+
+    Examples:
+        >>> row = {"error": "refused", "error_type": "ConnectError"}
+        >>> is_retried_error(row, retry_errors=True)
+        True
+        >>> is_retried_error(row, retry_errors=["APITimeoutError"])
+        False
+        >>> is_retried_error({"error": None}, retry_errors=True)
+        False
+    """
+    if not retry_errors or row.get(f"{task_prefix}error") is None:
+        return False
+    if retry_errors is True:
+        return True
+    if isinstance(retry_errors, str):
+        retry_errors = [retry_errors]
+    return row.get(f"{task_prefix}error_type") in retry_errors
 
 
 @dataclass(frozen=True, slots=True)
@@ -900,6 +937,13 @@ class Annotator:
             )
         ]
 
+    @staticmethod
+    def _all_errored(results: list[dict[str, Any]], task_prefix: str) -> bool:
+        """Return whether a batch has results and every one of them errored."""
+        return bool(results) and all(
+            res.get(f"{task_prefix}error") is not None for res in results
+        )
+
     def _annotate_batch(
         self,
         *,
@@ -1390,6 +1434,7 @@ class Annotator:
         system_message: str | None = None,
         keep_idx_column: bool = False,
         max_consecutive_failed_batches: int = 10,
+        retry_errors: bool | Sequence[str] = False,
     ) -> Dataset:
         """Run model generation on already prepared annotation inputs.
 
@@ -1434,7 +1479,16 @@ class Annotator:
                 batches in a row come back with every sample errored (e.g. a
                 vLLM server that died mid-run), instead of continuing to
                 dispatch batches against a backend that isn't responding.
-                Set to 0 to disable.
+                The rows of such batches are only written once a later batch
+                succeeds, so a run that aborts leaves them to the resumed
+                run. Set to 0 to disable.
+            retry_errors: Annotate rows again that finished with an error in
+                an earlier run. By default such rows are final, so that an
+                error caused by the sample (e.g. a prompt longer than the
+                context) is not repeated on every resume. ``True`` redoes
+                every errored row, a sequence redoes only those error types,
+                e.g. ``["ConnectError", "APITimeoutError"]``. The selected
+                rows are removed from the progress files before the run.
 
         Returns:
             Final concatenated annotation dataset.
@@ -1572,6 +1626,18 @@ class Annotator:
         process_pdout = root_pdout / f"{task_prefix}{PROGRESS_DS_LOCAL_SUBDIR}"
         process_pdout.mkdir(exist_ok=True, parents=True)
 
+        if retry_errors:
+            retried_rows = drop_jsonl_rows(
+                process_pdout,
+                lambda row: is_retried_error(
+                    row, retry_errors=retry_errors, task_prefix=task_prefix
+                ),
+            )
+            self._logger.info(
+                f"Removed {len(retried_rows):,} errored sample(s) from the"
+                " progress files; they are annotated again ('retry_errors')."
+            )
+
         # Get indices from the local
         skip_idxs = self._get_skip_idxs(
             process_pdout=process_pdout,
@@ -1635,79 +1701,85 @@ class Annotator:
             num_retries_invalid=num_retries_invalid,
         )
 
+        def write_rows(rows: list[dict[str, Any]]) -> None:
+            """Append rows to the progress files and upload when it is time."""
+            nonlocal fhout, processed_n_samples
+            for row in rows:
+                fhout.write(json.dumps(row, default=str) + "\n")
+                fhout.flush()
+                processed_n_samples += 1
+
+                time_to_upload = (
+                    upload_every_n_samples > 0
+                    and processed_n_samples % upload_every_n_samples == 0
+                )
+                # Cap the file size even when nothing is pushed to the Hub:
+                # otherwise a long run leaves one unbounded JSONL that every
+                # restart has to parse in full.
+                file_is_full = (
+                    samples_per_output_file > 0
+                    and processed_n_samples % samples_per_output_file == 0
+                )
+
+                if time_to_upload or file_is_full:
+                    fhout.close()
+                    remove_empty_jsonl_files(process_pdout)
+                    if time_to_upload and hub_id:
+                        self.push_progress_to_hub(
+                            process_pdout,
+                            hub_id=hub_id,
+                            task_prefix=task_prefix,
+                        )
+                    pfout = self.get_pfout_name(
+                        process_pdout=process_pdout,
+                        max_samples_per_output_file=samples_per_output_file,
+                        processed_n_samples=processed_n_samples,
+                    )
+                    fhout = pfout.open("a", encoding="utf-8")
+
+        # Rows of batches in which every sample errored. They are written once
+        # a later batch succeeds and dropped when the run aborts, so that the
+        # resumed run annotates them instead of keeping the errors.
+        held_back_rows: list[dict[str, Any]] = []
         consecutive_failed_batches = 0
         try:
             for batch, results in annotated_batches:
-                batch_size = len(batch[idx_column])
-                if keep_columns is True:
-                    inputs = [
-                        {k: v[i] for k, v in batch.items()}
-                        for i in range(batch_size)
-                    ]
-                else:
-                    inputs = [
-                        {
+                rows = [
+                    {
+                        **{
                             k: v[i]
                             for k, v in batch.items()
-                            if k in keep_columns  # type: ignore[operator]
-                        }
-                        for i in range(batch_size)
-                    ]
+                            if keep_columns is True or k in keep_columns  # type: ignore[operator]
+                        },
+                        **res,
+                    }
+                    for i, res in enumerate(results)
+                ]
 
-                for result_idx, res in enumerate(results):
-                    inp = inputs[result_idx]
-                    data_sample = {**inp, **res}
-                    fhout.write(json.dumps(data_sample, default=str) + "\n")
-                    fhout.flush()
-                    processed_n_samples += 1
-
-                    time_to_upload = (
-                        upload_every_n_samples > 0
-                        and processed_n_samples % upload_every_n_samples == 0
-                    )
-                    # Cap the file size even when nothing is pushed to the Hub:
-                    # otherwise a long run leaves one unbounded JSONL that every
-                    # restart has to parse in full.
-                    file_is_full = (
-                        samples_per_output_file > 0
-                        and processed_n_samples % samples_per_output_file == 0
-                    )
-
-                    if time_to_upload or file_is_full:
-                        fhout.close()
-                        remove_empty_jsonl_files(process_pdout)
-                        if time_to_upload and hub_id:
-                            self.push_progress_to_hub(
-                                process_pdout,
-                                hub_id=hub_id,
-                                task_prefix=task_prefix,
-                            )
-                        pfout = self.get_pfout_name(
-                            process_pdout=process_pdout,
-                            max_samples_per_output_file=samples_per_output_file,
-                            processed_n_samples=processed_n_samples,
-                        )
-                        fhout = pfout.open("a", encoding="utf-8")
-
-                batch_failed = bool(results) and all(
-                    res.get(f"{task_prefix}error") is not None
-                    for res in results
-                )
-                consecutive_failed_batches = (
-                    consecutive_failed_batches + 1 if batch_failed else 0
-                )
-                if (
-                    max_consecutive_failed_batches
-                    and consecutive_failed_batches
-                    >= max_consecutive_failed_batches
+                if max_consecutive_failed_batches and self._all_errored(
+                    results, task_prefix
                 ):
-                    raise TooManyConsecutiveFailedBatchesError(
-                        f"{consecutive_failed_batches} consecutive batches"
-                        " failed entirely; aborting instead of continuing"
-                        " to burn compute against a backend that isn't"
-                        " responding. Last error:"
-                        f" {results[-1].get(f'{task_prefix}error')}"
-                    )
+                    held_back_rows.extend(rows)
+                    consecutive_failed_batches += 1
+                    if (
+                        consecutive_failed_batches
+                        >= max_consecutive_failed_batches
+                    ):
+                        raise TooManyConsecutiveFailedBatchesError(
+                            f"{consecutive_failed_batches} consecutive batches"
+                            " failed entirely; aborting instead of continuing"
+                            " to burn compute against a backend that isn't"
+                            " responding. Their rows were not written, so a"
+                            " resumed run annotates them again. Last error:"
+                            f" {results[-1].get(f'{task_prefix}error')}"
+                        )
+                    continue
+
+                consecutive_failed_batches = 0
+                write_rows(held_back_rows + rows)
+                held_back_rows = []
+
+            write_rows(held_back_rows)
         finally:
             # Closing the generator lets alternative execution strategies
             # (e.g. the multi-server queue) shut their workers down when the
@@ -1768,6 +1840,7 @@ class Annotator:
         keep_idx_column: bool = False,
         max_consecutive_failed_batches: int = 10,
         reuse_idx_column: bool = False,
+        retry_errors: bool | Sequence[str] = False,
     ) -> Dataset:
         """Annotate an existing dataset in one call.
 
@@ -1824,6 +1897,9 @@ class Annotator:
             reuse_idx_column: Whether an ``idx_column`` that already exists in
                 the dataset is kept as the sample id, see
                 [`prepare_data`][llm_annotator.annotator.Annotator.prepare_data].
+            retry_errors: Annotate rows again that finished with an error in
+                an earlier run, see
+                [`run_annotation`][llm_annotator.annotator.Annotator.run_annotation].
 
         Returns:
             The concatenated annotation dataset.
@@ -1895,6 +1971,7 @@ class Annotator:
             system_message=system_message,
             keep_idx_column=keep_idx_column,
             max_consecutive_failed_batches=max_consecutive_failed_batches,
+            retry_errors=retry_errors,
         )
 
     @destroy_on_error
@@ -1920,6 +1997,7 @@ class Annotator:
         num_retries_invalid: int = 5,
         keep_idx_column: bool = False,
         max_consecutive_failed_batches: int = 10,
+        retry_errors: bool | Sequence[str] = False,
     ) -> Dataset:
         """Generate a new dataset from prompts.
 
@@ -1954,6 +2032,9 @@ class Annotator:
             max_consecutive_failed_batches: Abort the run once this many
                 batches in a row come back with every sample errored.
                 Set to 0 to disable.
+            retry_errors: Annotate rows again that finished with an error in
+                an earlier run, see
+                [`run_annotation`][llm_annotator.annotator.Annotator.run_annotation].
 
         Returns:
             The concatenated annotation dataset.
@@ -2007,6 +2088,7 @@ class Annotator:
             num_retries_invalid=num_retries_invalid,
             keep_idx_column=keep_idx_column,
             max_consecutive_failed_batches=max_consecutive_failed_batches,
+            retry_errors=retry_errors,
         )
 
     def _load_progress_files(self, process_pdout: Path) -> Dataset:
@@ -2233,6 +2315,24 @@ class Annotator:
 
         mtd_dir.joinpath("annotation_metadata.json").write_text(
             json.dumps(mtd, indent=4, default=str), encoding="utf-8"
+        )
+
+        errors = {k: v for k, v in error_type_counts.items() if k != "none"}
+        num_invalid = valid_fields_counts["invalid"]
+        summary = (
+            f"Annotated {len(dataset):,} sample(s): {sum(errors.values()):,}"
+            f" with an error, {num_invalid:,} with invalid fields."
+        )
+        if errors:
+            summary += (
+                f" Errors per type: {errors}. Errored rows are final. To"
+                " annotate them again, run with 'retry_errors=True'"
+                " ('llm-annotate --retry-errors'), or name the error types"
+                " to redo only those."
+            )
+        self._logger.log(
+            logging.WARNING if errors or num_invalid else logging.INFO,
+            summary,
         )
 
         if hub_id:
@@ -2790,6 +2890,48 @@ class VLLMQueueAnnotator(Annotator):
 
         Returns:
             The batch together with one result per sample, in order.
+
+        Raises:
+            RuntimeError: If the pool is shutting down.
+            TooManyConsecutiveFailedBatchesError: If the last server of the
+                pool was evicted.
+        """
+        while True:
+            client = self._acquire_client()
+            is_dead = False
+            try:
+                results = self._annotate_batch(
+                    batch=batch, client=client, **kwargs
+                )
+                # The errors of an entirely failed batch are only kept when
+                # the server is healthy. A server that stopped answering
+                # fails every batch regardless of the samples, so its batch
+                # is sent to another server.
+                is_dead = (
+                    self._all_errored(results, kwargs.get("task_prefix", ""))
+                    and not client.is_healthy()
+                )
+            finally:
+                with self._clients_lock:
+                    self._checked_out_clients -= 1
+                    if is_dead:
+                        self._evict_client_locked(client)
+                    elif not self._destroyed.is_set() and any(
+                        client is member for member in self.clients
+                    ):
+                        self._client_pool.put(client)
+
+            if not is_dead:
+                return batch, results
+
+    def _acquire_client(self) -> Client[Any]:
+        """Block until a client has a free request slot and check it out.
+
+        Returns:
+            The checked-out client.
+
+        Raises:
+            RuntimeError: If the pool is shutting down.
         """
         while True:
             if self._shutdown_started.is_set():
@@ -2807,17 +2949,48 @@ class VLLMQueueAnnotator(Annotator):
                     "Cannot start a new batch request after shutdown begins."
                 )
             self._checked_out_clients += 1
-        try:
-            results = self._annotate_batch(
-                batch=batch, client=client, **kwargs
-            )
-        finally:
-            with self._clients_lock:
-                self._checked_out_clients -= 1
-                if not self._destroyed.is_set():
-                    self._client_pool.put(client)
+        return client
 
-        return batch, results
+    def _evict_client_locked(self, client: Client[Any]) -> None:
+        """Remove a server that stopped answering from the pool.
+
+        The pool watcher of a config-driven run admits the server again once
+        its ``/health`` endpoint answers.
+
+        Args:
+            client: The client of the server to remove.
+
+        Raises:
+            TooManyConsecutiveFailedBatchesError: If no server is left.
+        """
+        clients = cast(list[Client[Any]], self.clients)
+        if not any(client is member for member in clients):
+            return
+        self.clients = [member for member in clients if member is not client]
+
+        free_slots = []
+        while True:
+            try:
+                free_slots.append(self._client_pool.get_nowait())
+            except Empty:
+                break
+        for slot in free_slots:
+            if slot is not client:
+                self._client_pool.put(slot)
+
+        base_url = getattr(client, "base_url", None)
+        self._logger.warning(
+            f"The vLLM server at '{base_url}' failed a whole batch and does"
+            " not answer '/health'. Removed it from the pool;"
+            f" {len(self.clients)} server(s) left. Its batches are sent to"
+            " the other servers."
+        )
+        if not self.clients:
+            raise TooManyConsecutiveFailedBatchesError(
+                "No vLLM server in the pool answers '/health' any more, so"
+                " the run stops. The rows of the failed batches were not"
+                " written, so a resumed run annotates them."
+            )
 
     def _iter_and_annotate_batches(
         self,
@@ -2932,4 +3105,5 @@ __all__ = [
     "SelectionRecord",
     "VLLMQueueAnnotator",
     "destroy_on_error",
+    "is_retried_error",
 ]

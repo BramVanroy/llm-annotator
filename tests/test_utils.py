@@ -81,6 +81,41 @@ def test_count_lines_and_remove_empty_jsonl_files(tmp_path: Path) -> None:
     assert not p_empty.exists()
 
 
+def test_drop_jsonl_rows_drops_matches_and_keeps_untouched_files(
+    tmp_path: Path,
+) -> None:
+    # Verifies matching rows are dropped from one file while a file without
+    # any match is left byte-identical, and a broken trailing line survives.
+    matching = tmp_path / "matching.jsonl"
+    matching_bytes = (
+        json.dumps({"idx": 0, "error": None}).encode()
+        + b"\n"
+        + json.dumps({"idx": 1, "error": "boom"}).encode()
+        + b"\n"
+        + b'{"idx": 2, "error": "half-writ'
+    )
+    matching.write_bytes(matching_bytes)
+
+    untouched = tmp_path / "untouched.jsonl"
+    untouched_bytes = json.dumps({"idx": 3, "error": None}).encode() + b"\n"
+    untouched.write_bytes(untouched_bytes)
+    untouched_inode_before = untouched.stat().st_ino
+
+    dropped = utils.drop_jsonl_rows(
+        tmp_path, lambda row: row.get("error") is not None
+    )
+
+    assert dropped == [{"idx": 1, "error": "boom"}]
+    assert matching.read_bytes() == (
+        json.dumps({"idx": 0, "error": None}).encode()
+        + b"\n"
+        + b'{"idx": 2, "error": "half-writ'
+    )
+    # An untouched file is never rewritten, not merely rewritten unchanged.
+    assert untouched.read_bytes() == untouched_bytes
+    assert untouched.stat().st_ino == untouched_inode_before
+
+
 def test_ensure_returns_bool_and_dict() -> None:
     # Verifies return-type guard helpers for bool and dict outputs.
     assert utils.ensure_returns_bool(lambda: True) is True

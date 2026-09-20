@@ -34,9 +34,11 @@ import yaml
 from datasets import Dataset
 
 from llm_annotator.annotator import (
+    PROGRESS_DS_LOCAL_SUBDIR,
     Annotator,
     SelectionRecord,
     VLLMQueueAnnotator,
+    is_retried_error,
 )
 from llm_annotator.config import (
     ClientConfig,
@@ -46,7 +48,7 @@ from llm_annotator.config import (
     load_pipeline_config,
 )
 from llm_annotator.logging_utils import configure_logging, get_logger
-from llm_annotator.utils import dataset_signature
+from llm_annotator.utils import dataset_signature, drop_jsonl_rows
 
 
 LOGGER = get_logger("pipeline")
@@ -445,7 +447,9 @@ def _resolve_selection(
 
 
 def run_pipeline(
-    config: PipelineConfig, selected: Sequence[str] | None = None
+    config: PipelineConfig,
+    selected: Sequence[str] | None = None,
+    retry_errors: bool | Sequence[str] = False,
 ) -> Dataset:
     """Run a pipeline, or part of one, and return the resulting dataset.
 
@@ -463,6 +467,11 @@ def run_pipeline(
         config: The validated pipeline configuration.
         selected: Names of the steps to run. ``None`` runs all of them. The
             names must form a contiguous run of the pipeline.
+        retry_errors: Annotate rows again that finished with an error.
+            ``True`` redoes every errored row of the selected steps, a
+            sequence redoes only those error types, e.g. ``["ConnectError"]``.
+            A row that is redone in one step is also redone in every selected
+            step after it, because those steps read what it produces.
 
     Returns:
         The dataset produced by the last step that ran.
@@ -491,6 +500,7 @@ def run_pipeline(
     annotator: Annotator | None = None
     active_client_key: str | None = None
     runs_last_step = chosen.stop >= len(config.steps)
+    retried_idxs: set[Any] = set()
 
     try:
         for index, step in enumerate(config.steps):
@@ -510,6 +520,29 @@ def run_pipeline(
             if step.type == "generate":
                 dataset = _generate_dataset(step, config.config_dir)
 
+            if retry_errors and index in chosen:
+                task_prefix = step.resolved_task_prefix()
+                retried_rows = drop_jsonl_rows(
+                    step_dir
+                    / STEP_ANNOTATE_SUBDIR
+                    / f"{task_prefix}{PROGRESS_DS_LOCAL_SUBDIR}",
+                    lambda row: (
+                        row.get(config.idx_column) in retried_idxs
+                        or is_retried_error(
+                            row,
+                            retry_errors=retry_errors,
+                            task_prefix=task_prefix,
+                        )
+                    ),
+                )
+                retried_idxs.update(
+                    row[config.idx_column] for row in retried_rows
+                )
+                LOGGER.info(
+                    f"{label}: {len(retried_rows):,} sample(s) are annotated"
+                    " again (retry_errors)."
+                )
+
             is_outdated = False
             if _is_complete(step_output):
                 request = _selection_request(config, dataset, index == 0)
@@ -517,7 +550,9 @@ def run_pipeline(
                     step_dir / STEP_ANNOTATE_SUBDIR,
                     step.resolved_task_prefix(),
                 )
-                is_outdated = record is not None and record.is_stale(**request)
+                is_outdated = bool(retried_idxs) or (
+                    record is not None and record.is_stale(**request)
+                )
                 if not is_outdated:
                     LOGGER.info(
                         f"{label}: already finished, loading its result from"
@@ -540,11 +575,12 @@ def run_pipeline(
                 )
 
             if is_outdated:
-                LOGGER.info(
-                    f"{label}: its input or sample selection changed since it"
-                    " finished. Resuming it; rows in its progress files are"
-                    " not sent to the model again."
-                )
+                if not retried_idxs:
+                    LOGGER.info(
+                        f"{label}: its input or sample selection changed"
+                        " since it finished. Resuming it; rows in its"
+                        " progress files are not sent to the model again."
+                    )
                 # Before the step runs: the annotator replaces the selection
                 # record, and a crash after that would leave an old result
                 # that passes for a finished one.
@@ -961,6 +997,17 @@ def main(args: list[str] | None = None) -> None:
         " output is used as the input. Defaults to the whole pipeline.",
     )
     parser.add_argument(
+        "--retry-errors",
+        nargs="*",
+        metavar="ERROR_TYPE",
+        default=None,
+        help="Annotate the rows again that finished with an error, in the"
+        " selected steps and in the steps that read them. Without a value"
+        " every errored row is redone; with values only those error types,"
+        " as in --retry-errors ConnectError APITimeoutError. The end-of-run"
+        " summary lists the error types of a run.",
+    )
+    parser.add_argument(
         "--hosts-file",
         type=Path,
         default=None,
@@ -1035,7 +1082,15 @@ def main(args: list[str] | None = None) -> None:
             print(arg)
         return
 
-    run_pipeline(config, selected=selected)
+    run_pipeline(
+        config,
+        selected=selected,
+        retry_errors=(
+            False
+            if parsed.retry_errors is None
+            else parsed.retry_errors or True
+        ),
+    )
 
 
 __all__ = ["main", "run_pipeline"]

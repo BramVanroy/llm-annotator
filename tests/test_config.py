@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-import logging
 import threading
-import urllib.error
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +9,6 @@ import pytest
 from pydantic import ValidationError
 
 import llm_annotator.config as config_mod
-from llm_annotator.clients import vllm_online_client as vllm_online_client_mod
 from llm_annotator.config import (
     ClientConfig,
     DatasetConfig,
@@ -256,7 +253,7 @@ def test_wait_for_servers_returns_the_minimum_ready_members(
 ) -> None:
     ready_urls = {"http://a:8000/v1", "http://b:8000/v1"}
     monkeypatch.setattr(
-        "llm_annotator.config._server_is_ready",
+        "llm_annotator.config.server_is_healthy",
         lambda url, timeout: url in ready_urls,
     )
 
@@ -274,24 +271,6 @@ def test_wait_for_servers_validates_against_unique_urls() -> None:
             timeout=1,
             min_servers=3,
         )
-
-
-def test_server_is_ready_logs_the_probe_error(
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    def fail(*args: Any, **kwargs: Any) -> None:
-        _ = args
-        _ = kwargs
-        raise urllib.error.URLError("connection refused")
-
-    monkeypatch.setattr(config_mod.urllib.request, "urlopen", fail)
-    with caplog.at_level(logging.DEBUG, logger="llm_annotator.config"):
-        assert not config_mod._server_is_ready("http://a:8000/v1", 1)
-
-    assert any(
-        "connection refused" in record.message for record in caplog.records
-    )
 
 
 def test_pool_min_servers_cannot_exceed_servers() -> None:
@@ -438,6 +417,11 @@ def test_pool_watcher_stops_after_destroy(
         def add_client(self, client: Any) -> None:
             self.added.append(client)
 
+        def add_client_for_base_url(
+            self, base_url: str, client_factory: Any
+        ) -> None:
+            self.added.append(client_factory(base_url))
+
         def destroy(self) -> None:
             self._closed.set()
 
@@ -451,7 +435,7 @@ def test_pool_watcher_stops_after_destroy(
         finally:
             ready_check_finished.set()
 
-    monkeypatch.setattr(config_mod, "_server_is_ready", fake_ready)
+    monkeypatch.setattr(config_mod, "server_is_healthy", fake_ready)
     monkeypatch.setattr(
         ClientConfig,
         "resolve_base_urls",
@@ -498,9 +482,7 @@ def test_build_client_caps_the_wait_at_the_servers_it_found(
         return base_urls
 
     monkeypatch.setattr(config_mod, "wait_for_servers", fake_wait)
-    monkeypatch.setattr(
-        vllm_online_client_mod, "VLLMOnlineClient", FakePooledClient
-    )
+    monkeypatch.setattr(config_mod, "VLLMOnlineClient", FakePooledClient)
 
     clients = client.build_client(tmp_path)
 
@@ -564,12 +546,10 @@ def test_pool_watcher_keeps_polling_dynamic_discovery(
         return ["http://w0:8000/v1", "http://w1:8000/v1"]
 
     monkeypatch.setattr(
-        config_mod, "_server_is_ready", lambda url, timeout: True
+        config_mod, "server_is_healthy", lambda url, timeout: True
     )
     monkeypatch.setattr(ClientConfig, "resolve_base_urls", fake_resolve)
-    monkeypatch.setattr(
-        vllm_online_client_mod, "VLLMOnlineClient", FakeDiscoveredClient
-    )
+    monkeypatch.setattr(config_mod, "VLLMOnlineClient", FakeDiscoveredClient)
     annotator = FakeAnnotator()
 
     client._watch_pool(tmp_path, annotator)  # type: ignore[arg-type]
@@ -578,6 +558,70 @@ def test_pool_watcher_keeps_polling_dynamic_discovery(
     assert resolve_calls >= 2
     assert [added_client.base_url for added_client in annotator.added] == [
         "http://w1:8000/v1"
+    ]
+
+
+def test_pool_watcher_readmits_an_evicted_static_server(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A pool configured with static base_urls keeps probing every URL that
+    # the running pool does not currently hold, so a server that the
+    # annotator evicted is admitted again once it answers '/health'.
+    client = ClientConfig(
+        provider="vllm_online",
+        model="m",
+        base_urls=["http://w0:8000/v1", "http://w1:8000/v1"],
+    )
+    added = threading.Event()
+
+    class FakeAnnotator:
+        def __init__(self) -> None:
+            # w0 was evicted earlier; only w1 remains in the pool.
+            self.clients = [
+                type("ClientRef", (), {"base_url": "http://w1:8000/v1"})()
+            ]
+            self.added: list[Any] = []
+            self._closed = threading.Event()
+
+        @property
+        def is_shutting_down(self) -> bool:
+            return self._closed.is_set()
+
+        def wait_for_shutdown(self, timeout: float) -> bool:
+            _ = timeout
+            return self._closed.wait(0.01)
+
+        def client_count(self) -> int:
+            return len(self.clients)
+
+        def client_base_urls(self) -> set[str]:
+            return {str(client.base_url) for client in self.clients}
+
+        def add_client_for_base_url(
+            self, base_url: str, client_factory: Any
+        ) -> None:
+            discovered_client = client_factory(base_url)
+            self.clients.append(discovered_client)
+            self.added.append(discovered_client)
+            added.set()
+            self._closed.set()
+
+    class FakeReadmittedClient:
+        def __init__(self, *, base_url: str, **kwargs: Any) -> None:
+            _ = kwargs
+            self.base_url = base_url
+
+    monkeypatch.setattr(
+        config_mod, "server_is_healthy", lambda url, timeout: True
+    )
+    monkeypatch.setattr(config_mod, "VLLMOnlineClient", FakeReadmittedClient)
+    annotator = FakeAnnotator()
+
+    client._watch_pool(tmp_path, annotator)  # type: ignore[arg-type]
+
+    assert added.wait(5)
+    assert [added_client.base_url for added_client in annotator.added] == [
+        "http://w0:8000/v1"
     ]
 
 
