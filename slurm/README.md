@@ -58,6 +58,21 @@ pick one per run:
 ./slurm/submit_pipeline.sh --cluster-env slurm/clusters/leonardo.env my-pipeline.yaml
 ```
 
+## Overriding the config for one submission
+
+`--set KEY=VALUE` is the same flag `llm-annotate` takes, forwarded to every step
+job of the submission. A dotted key reaches a nested value, and repeating the
+flag sets more than one:
+
+```sh
+./slurm/submit_pipeline.sh --set dataset.max_num_samples=50000 my-pipeline.yaml
+```
+
+Every step of one submission therefore sees the same overrides, which is what a
+growing run needs: resubmitting with a higher `dataset.max_num_samples` extends
+the pipeline as a whole rather than one step at a time, which is what
+`docs/growing-a-run.md` describes.
+
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `SLURM_ACCOUNT` | – | Project to charge. Empty means no `--account`. |
@@ -232,7 +247,7 @@ are submitted with `--export=ALL`.
 | `CANCEL_SERVERS_ON_EXIT` | `1` | Whether a finished client `scancel`s its step's server array. `0` leaves the GPUs running. |
 | `SBATCH_CMD` | `sbatch` | The command that queues a job, for a site whose `sbatch` is wrapped. A submit this refuses ends the run: the steps after it would otherwise depend on a job id that was never issued. |
 | `OUTPUT_DIR`, `HUB_ID`, `OVERWRITE` | from the config | Override the config's `output_dir` / `hub_id`, or discard existing step output |
-| `MAX_NUM_SAMPLES`, `SHUFFLE_SEED` | from the config | Override `dataset.max_num_samples` / `dataset.shuffle_seed` for every step of this submission. Raising the cap and resubmitting grows the run: finished rows are not annotated again. |
+| `ANNOTATE_SET` | – | What `--set` fills: config overrides for this submission, one `KEY=VALUE` per line, passed to `llm-annotate --set` on every step job. Set it directly only when scripting the submitter; `--set` is the way in. |
 
 ## Resuming
 

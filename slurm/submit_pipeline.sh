@@ -41,12 +41,15 @@ Options:
   --dry-run          Print the jobs that would be submitted, submit nothing.
   --steps a,b        Submit only these steps instead of the whole pipeline.
                      Everything before them must already have finished.
+  --set KEY=VALUE    Override one config key for every step of this
+                     submission; repeat for more than one. Passed straight to
+                     `llm-annotate --set`, so a dotted key reaches a nested
+                     value: --set dataset.max_num_samples=50000.
   --cluster-env FILE Site settings to use (default: slurm/cluster.env).
   -h, --help         Show this message.
 
 Common environment overrides (all optional, see slurm/README.md):
   OUTPUT_DIR, HUB_ID, OVERWRITE=1   override the config for this run
-  MAX_NUM_SAMPLES, SHUFFLE_SEED     override the dataset selection
   EXTRA_DEPENDENCY=afterok:123456   hang the chain off another job
   POOL_WAIT                         how long a client waits for its servers
   CANCEL_SERVERS_ON_EXIT=0          keep servers alive after their step ends
@@ -56,12 +59,25 @@ EOF
 
 DRY_RUN=0
 STEP_FILTER=""
+ANNOTATE_SET="${ANNOTATE_SET:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --steps)
       STEP_FILTER="${2:?--steps needs a comma-separated list of step names}"
+      shift
+      ;;
+    --set)
+      SETTING="${2:?--set needs KEY=VALUE}"
+      if [[ "$SETTING" != *=* ]]; then
+        echo "--set needs KEY=VALUE, got '${SETTING}'" >&2
+        exit 1
+      fi
+      # One per line, because a value may contain anything a config value may
+      # contain, including the comma that separates --export entries. The jobs
+      # read it out of the environment instead, which --export=ALL carries.
+      ANNOTATE_SET="${ANNOTATE_SET:+${ANNOTATE_SET}$'\n'}${SETTING}"
       shift
       ;;
     --cluster-env)
@@ -171,8 +187,15 @@ wants_step() {
   [[ ",${STEP_FILTER}," == *",$1,"* ]]
 }
 
+export ANNOTATE_SET
+
 echo "Config:  ${ANNOTATE_CONFIG}"
 echo "Cluster: ${CLUSTER_ENV}$([[ -f "$CLUSTER_ENV" ]] || echo ' (not found, using defaults)')"
+if [[ -n "$ANNOTATE_SET" ]]; then
+  # Printed, because it travels in the environment rather than in the sbatch
+  # line a --dry-run shows.
+  echo "Set:     $(tr '\n' ' ' <<< "$ANNOTATE_SET")"
+fi
 
 PREV_CLIENT=""
 STEP_COUNT=0

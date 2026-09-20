@@ -139,13 +139,14 @@ fi
 if [[ "${OVERWRITE:-0}" == "1" ]]; then
   ANNOTATE_ARGS+=(--overwrite)
 fi
-# Every step job of one submission sees the same cap, so a pipeline submitted
-# with a larger MAX_NUM_SAMPLES grows as a whole rather than step by step.
-if [[ -n "${MAX_NUM_SAMPLES:-}" ]]; then
-  ANNOTATE_ARGS+=(--max-num-samples "$MAX_NUM_SAMPLES")
-fi
-if [[ -n "${SHUFFLE_SEED:-}" ]]; then
-  ANNOTATE_ARGS+=(--shuffle-seed "$SHUFFLE_SEED")
+# Config overrides for this submission, one KEY=VALUE per line, as
+# submit_pipeline.sh --set left them. Every step job of one submission sees the
+# same ones, so a pipeline resubmitted with a larger dataset.max_num_samples
+# grows as a whole rather than step by step.
+if [[ -n "${ANNOTATE_SET:-}" ]]; then
+  while IFS= read -r setting; do
+    [[ -n "$setting" ]] && ANNOTATE_ARGS+=(--set "$setting")
+  done <<< "$ANNOTATE_SET"
 fi
 
 set +e

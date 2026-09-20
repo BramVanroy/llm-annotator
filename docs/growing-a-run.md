@@ -106,16 +106,15 @@ therefore works one job at a time, the same way
 resume. Selecting only a later step while an earlier one is still out of date raises an error that
 says to run the earlier step first, or to select it too.
 
-The SLURM submitter passes the cap to every step job of one submission through the
-`MAX_NUM_SAMPLES` environment variable, which becomes `--max-num-samples` on each step's
-`llm-annotate` call:
+The SLURM submitter takes the same `--set KEY=VALUE` as the CLI and forwards it to every step job
+of one submission:
 
 ```sh
-MAX_NUM_SAMPLES=50000 ./slurm/submit_pipeline.sh pilot.yaml
+./slurm/submit_pipeline.sh --set dataset.max_num_samples=50000 pilot.yaml
 ```
 
-`SHUFFLE_SEED` works the same way. Set the cap on the submission rather than per job, so that all
-steps of one run agree about how many rows they select.
+`dataset.shuffle_seed` and any other config key work the same way. Set the cap on the submission
+rather than per job, so that all steps of one run agree about how many rows they select.
 
 ## Runs made by an older version
 

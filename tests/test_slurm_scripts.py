@@ -219,6 +219,33 @@ def test_annotate_stops_waiting_when_the_server_array_is_gone(
     assert "--url-glob" in recorded
 
 
+def test_annotate_forwards_config_overrides(tmp_path: Path) -> None:
+    """ANNOTATE_SET becomes one --set per line, values kept whole."""
+    pool_dir = tmp_path / "pool"
+    _publish(pool_dir, 1)
+
+    process, recorded = _run_annotate(
+        tmp_path,
+        pool_dir,
+        MIN_SERVERS="1",
+        ANNOTATE_SET=(
+            "dataset.max_num_samples=50000\n"
+            "dataset.shuffle_seed=42\n"
+            "steps.0.prompt=two words"
+        ),
+    )
+
+    assert process.returncode == 0, process.stderr
+    assert recorded[-6:] == [
+        "--set",
+        "dataset.max_num_samples=50000",
+        "--set",
+        "dataset.shuffle_seed=42",
+        "--set",
+        "steps.0.prompt=two words",
+    ]
+
+
 def _write_pool_config(tmp_path: Path, pool: dict[str, int]) -> Path:
     """Write a one-step pooled-vLLM config and return its path."""
     config_path = tmp_path / "pipeline.yaml"
@@ -246,7 +273,10 @@ def _write_pool_config(tmp_path: Path, pool: dict[str, int]) -> Path:
 
 
 def _run_submit(
-    tmp_path: Path, config_path: Path, dry_run: bool = True
+    tmp_path: Path,
+    config_path: Path,
+    dry_run: bool = True,
+    extra: list[str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run `slurm/submit_pipeline.sh` over one config without a scheduler.
 
@@ -259,6 +289,7 @@ def _run_submit(
         tmp_path: Directory for the fake binaries and the log directory.
         config_path: Pipeline config to submit.
         dry_run: Whether to pass ``--dry-run``.
+        extra: Further arguments for the submitter.
 
     Returns:
         The finished process.
@@ -267,6 +298,7 @@ def _run_submit(
     command = ["/bin/bash", str(SLURM_DIR / "submit_pipeline.sh")]
     if dry_run:
         command.append("--dry-run")
+    command.extend(extra or [])
     command.append(str(config_path))
 
     return subprocess.run(
@@ -342,3 +374,45 @@ def test_submit_pipeline_stops_when_a_submit_is_refused(
     assert process.returncode == 1
     assert "could not queue the servers of step 'write'" in process.stderr
     assert "Submitted" not in process.stdout
+
+
+@pytest.mark.skipif(
+    not (VENV_PATH / "bin" / "llm-annotate").exists(),
+    reason="the submitter reads the config through the installed CLI",
+)
+def test_submit_pipeline_rejects_a_set_without_a_value(
+    tmp_path: Path,
+) -> None:
+    """A --set that is not KEY=VALUE fails on the login node."""
+    config_path = _write_pool_config(
+        tmp_path, {"servers": 2, "min_servers": 1}
+    )
+
+    process = _run_submit(
+        tmp_path, config_path, extra=["--set", "dataset.max_num_samples"]
+    )
+
+    assert process.returncode == 1
+    assert "--set needs KEY=VALUE" in process.stderr
+
+
+@pytest.mark.skipif(
+    not (VENV_PATH / "bin" / "llm-annotate").exists(),
+    reason="the submitter reads the config through the installed CLI",
+)
+def test_submit_pipeline_reports_its_config_overrides(
+    tmp_path: Path,
+) -> None:
+    """Overrides travel in the environment, so the submitter prints them."""
+    config_path = _write_pool_config(
+        tmp_path, {"servers": 2, "min_servers": 1}
+    )
+
+    process = _run_submit(
+        tmp_path,
+        config_path,
+        extra=["--set", "dataset.max_num_samples=50000"],
+    )
+
+    assert process.returncode == 0, process.stderr
+    assert "dataset.max_num_samples=50000" in process.stdout
