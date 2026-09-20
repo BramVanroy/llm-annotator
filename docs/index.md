@@ -220,7 +220,8 @@ cp slurm/cluster.env.example slurm/cluster.env   # once, per cluster
   with the `llm-annotate` CLI.
 - Staged `prepare_data` + `run_annotation` pipeline for SLURM and
   cluster workflows:  expensive data preparation is done once and stored.
-- Resume interrupted generation runs from JSONL checkpoints.
+- Resume interrupted generation runs from JSONL checkpoints, and grow a finished run by raising
+  `dataset.max_num_samples` and re-running; see [Growing a run](growing-a-run.md).
 - Validate and post-process outputs with custom callables.
 - Enforce structured responses through JSON schemas.
 - Keep a thinking model's reasoning trace in its own column, separated from the

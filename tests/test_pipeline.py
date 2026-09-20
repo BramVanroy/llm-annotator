@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 import pytest
 from datasets import Dataset
 
-from llm_annotator.annotator import Annotator, VLLMQueueAnnotator
+from llm_annotator.annotator import (
+    Annotator,
+    SelectionRecord,
+    VLLMQueueAnnotator,
+)
 from llm_annotator.clients.base import (
     Client,
     Provider,
@@ -16,6 +21,7 @@ from llm_annotator.clients.base import (
 )
 from llm_annotator.config import ClientConfig, PipelineConfig
 from llm_annotator.pipeline import (
+    STEP_ANNOTATE_SUBDIR,
     _hosts_file_override,
     _load_input_dataset,
     main,
@@ -226,6 +232,46 @@ def three_step_config(tmp_path: Path) -> PipelineConfig:
             ],
         }
     )
+
+
+def growth_config(
+    tmp_path: Path,
+    big_source: Path,
+    *,
+    max_num_samples: int,
+    shuffle_seed: int | None = 1,
+    **overrides: Any,
+) -> PipelineConfig:
+    """Build a two-step pipeline over a growable source dataset."""
+    return two_step_config(
+        tmp_path,
+        dataset={
+            "path": big_source,
+            "max_num_samples": max_num_samples,
+            "shuffle_seed": shuffle_seed,
+        },
+        **overrides,
+    )
+
+
+def generate_first_config(
+    tmp_path: Path, prompts: list[str], **overrides: Any
+) -> PipelineConfig:
+    """Build a single-step pipeline whose first step generates its data."""
+    data: dict[str, Any] = {
+        "output_dir": tmp_path / "out",
+        "config_dir": tmp_path,
+        "verbose": False,
+        "client": {
+            "provider": "openai",
+            "model": "gen",
+            "batch_size": 2,
+            "num_proc": None,
+        },
+        "steps": [{"name": "make", "type": "generate", "prompts": prompts}],
+    }
+    data.update(overrides)
+    return PipelineConfig.model_validate(data)
 
 
 # --- source dataset loading ---------------------------------------------------
@@ -1024,3 +1070,277 @@ def test_queue_settings_follow_the_step(
     }
     run_pipeline(config)
     assert seen == [(8, 2), (3, 1)]
+
+
+# --- growing a run -------------------------------------------------------------
+
+
+def test_pipeline_growth_annotates_only_new_rows(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    big_source = source_dataset(tmp_path / "growth", num_rows=40)
+
+    first = run_pipeline(
+        growth_config(tmp_path, big_source, max_num_samples=10)
+    )
+    assert len(first) == 10
+    first_texts = set(first["text"])
+    built_clients.clear()
+
+    second_config = growth_config(tmp_path, big_source, max_num_samples=20)
+    second = run_pipeline(second_config)
+
+    writer, judge = built_clients
+    assert len(writer.seen_prompts) == 10
+    assert len(judge.seen_prompts) == 10
+
+    assert len(second) == 20
+    second_texts = second["text"]
+    assert len(set(second_texts)) == 20
+    assert first_texts <= set(second_texts)
+
+    assert "idx" not in second.column_names
+    step1_output = Dataset.load_from_disk(
+        str(second_config.step_dir(0) / "output")
+    )
+    assert "idx" in step1_output.column_names
+
+    # Every judge prompt embeds both 'question_v1' (rendered by step 1) and
+    # 'text' (the source column) for what must be the same source row; a
+    # misalignment between the growth run's old and new rows would show up
+    # as two different document ids in one prompt.
+    for prompt in judge.seen_prompts:
+        ids = set(re.findall(r"document \d+", prompt))
+        assert len(ids) == 1
+
+
+def test_pipeline_growth_third_run_with_no_change_builds_nothing(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    big_source = source_dataset(tmp_path / "growth", num_rows=40)
+    run_pipeline(growth_config(tmp_path, big_source, max_num_samples=10))
+    run_pipeline(growth_config(tmp_path, big_source, max_num_samples=20))
+    built_clients.clear()
+
+    run_pipeline(growth_config(tmp_path, big_source, max_num_samples=20))
+    assert built_clients == []
+
+
+def test_pipeline_growth_step_at_a_time_matches_one_shot(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    big_source = source_dataset(tmp_path / "growth", num_rows=40)
+
+    one_shot_dir = tmp_path / "one-shot"
+    run_pipeline(growth_config(one_shot_dir, big_source, max_num_samples=10))
+    one_shot = run_pipeline(
+        growth_config(one_shot_dir, big_source, max_num_samples=20)
+    )
+
+    piecewise_dir = tmp_path / "piecewise"
+    run_pipeline(growth_config(piecewise_dir, big_source, max_num_samples=10))
+    piecewise_config = growth_config(
+        piecewise_dir, big_source, max_num_samples=20
+    )
+    run_pipeline(piecewise_config, selected=["write"])
+    piecewise = run_pipeline(piecewise_config, selected=["rate"])
+
+    assert piecewise.column_names == one_shot.column_names
+    assert piecewise.to_dict() == one_shot.to_dict()
+
+
+def test_pipeline_growth_selecting_only_the_stale_downstream_step_raises(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    big_source = source_dataset(tmp_path / "growth", num_rows=40)
+    run_pipeline(growth_config(tmp_path, big_source, max_num_samples=10))
+
+    with pytest.raises(ValueError, match="finished for another selection"):
+        run_pipeline(
+            growth_config(tmp_path, big_source, max_num_samples=20),
+            selected=["rate"],
+        )
+
+
+def test_pipeline_growth_rejects_a_changed_seed(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    big_source = source_dataset(tmp_path / "growth", num_rows=40)
+    run_pipeline(growth_config(tmp_path, big_source, max_num_samples=10))
+
+    with pytest.raises(ValueError, match="shuffle_seed"):
+        run_pipeline(
+            growth_config(
+                tmp_path, big_source, max_num_samples=20, shuffle_seed=2
+            )
+        )
+
+
+def test_pipeline_growth_rejects_a_shrunk_cap(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    big_source = source_dataset(tmp_path / "growth", num_rows=40)
+    run_pipeline(growth_config(tmp_path, big_source, max_num_samples=20))
+
+    with pytest.raises(ValueError, match="shrank"):
+        run_pipeline(growth_config(tmp_path, big_source, max_num_samples=10))
+
+
+def test_pipeline_growth_recovers_after_a_rejected_attempt(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    big_source = source_dataset(tmp_path / "growth", num_rows=40)
+    run_pipeline(growth_config(tmp_path, big_source, max_num_samples=10))
+
+    with pytest.raises(ValueError, match="shuffle_seed"):
+        run_pipeline(
+            growth_config(
+                tmp_path, big_source, max_num_samples=20, shuffle_seed=2
+            )
+        )
+
+    built_clients.clear()
+    final = run_pipeline(
+        growth_config(tmp_path, big_source, max_num_samples=10)
+    )
+    assert len(final) == 10
+    # Nothing changed relative to what already finished, so no client sends
+    # any prompt again.
+    for client in built_clients:
+        assert client.seen_prompts == []
+
+
+def test_pipeline_growth_recovers_from_a_crash_during_extension(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    built_clients: list[EchoClient],
+) -> None:
+    big_source = source_dataset(tmp_path / "growth", num_rows=40)
+
+    # The pilot run is unaffected: only the extension run's 'judge' client
+    # must fail, and only on its first batch.
+    run_pipeline(growth_config(tmp_path, big_source, max_num_samples=10))
+    built_clients.clear()
+
+    class FlakyClient(EchoClient):
+        """Fails the first batch a 'judge' instance is asked to answer."""
+
+        fail_next = True
+
+        def batch_generate(
+            self,
+            *,
+            messages: list[list[dict[str, str]]],
+            options: ProviderRuntimeOptions | None = None,
+            gen_kwargs: dict[str, Any] | None = None,
+        ) -> list[Response]:
+            if FlakyClient.fail_next and self.model == "judge":
+                FlakyClient.fail_next = False
+                raise RuntimeError("boom")
+            return super().batch_generate(
+                messages=messages, options=options, gen_kwargs=gen_kwargs
+            )
+
+    created: list[EchoClient] = []
+
+    def fake_build_client(
+        self: ClientConfig, root: Path
+    ) -> Client[Any] | list[Client[Any]]:
+        _ = root
+        client = FlakyClient(model=self.model or "echo")
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(ClientConfig, "build_client", fake_build_client)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        run_pipeline(growth_config(tmp_path, big_source, max_num_samples=20))
+
+    assert [c.model for c in created] == ["writer", "judge"]
+    writer_before_crash = created[0]
+    assert len(writer_before_crash.seen_prompts) == 10
+    created.clear()
+
+    final = run_pipeline(
+        growth_config(tmp_path, big_source, max_num_samples=20)
+    )
+    assert len(final) == 20
+    assert len(set(final["text"])) == 20
+    # Step 1 already finished (and was saved) during the crashed run, so
+    # resuming only rebuilds step 2's client; it sends the 10 rows it never
+    # got to before the crash, not step 1's rows again.
+    assert [c.model for c in created] == ["judge"]
+    assert len(created[0].seen_prompts) == 10
+
+
+def test_legacy_run_without_a_selection_record_blocks_growth(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    config = two_step_config(tmp_path)
+    run_pipeline(config)
+
+    record_path = SelectionRecord.path(
+        config.step_dir(0) / STEP_ANNOTATE_SUBDIR,
+        config.steps[0].resolved_task_prefix(),
+    )
+    assert record_path.is_file()
+    record_path.unlink()
+
+    grown = two_step_config(
+        tmp_path,
+        dataset={"path": tmp_path / "source", "max_num_samples": 2},
+    )
+    with pytest.raises(
+        ValueError, match="did not record its sample selection"
+    ):
+        run_pipeline(grown)
+
+    # A second attempt raises again: the failed run must not have rewritten
+    # pipeline.json with the new, unrecorded cap.
+    with pytest.raises(
+        ValueError, match="did not record its sample selection"
+    ):
+        run_pipeline(grown)
+
+    # Restoring the original settings still works: nothing changed relative
+    # to what pipeline.json remembers.
+    restored = run_pipeline(two_step_config(tmp_path))
+    assert len(restored) == 4
+
+    # overwrite=True on a selection that includes step 1 skips the guard.
+    overwritten = run_pipeline(
+        two_step_config(
+            tmp_path,
+            overwrite=True,
+            dataset={"path": tmp_path / "source", "max_num_samples": 2},
+        )
+    )
+    assert len(overwritten) == 2
+
+
+def test_generate_step_growth_sends_only_new_prompts(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    prompts = [f"Write fact {i}." for i in range(5)]
+    first = run_pipeline(generate_first_config(tmp_path, prompts))
+    assert len(first) == 5
+    built_clients.clear()
+
+    grown_prompts = prompts + [f"Write fact {i}." for i in range(5, 8)]
+    second = run_pipeline(generate_first_config(tmp_path, grown_prompts))
+
+    assert len(second) == 8
+    assert len(built_clients) == 1
+    assert built_clients[0].seen_prompts == grown_prompts[5:]
+
+
+def test_generate_step_editing_a_prompt_raises(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    prompts = [f"Write fact {i}." for i in range(5)]
+    run_pipeline(generate_first_config(tmp_path, prompts))
+
+    edited = list(prompts)
+    edited[2] = "A different prompt entirely."
+    with pytest.raises(ValueError, match="source dataset changed"):
+        run_pipeline(generate_first_config(tmp_path, edited))

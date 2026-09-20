@@ -31,7 +31,9 @@ Key capabilities:
 - **SLURM out of the box**:  `slurm/submit_pipeline.sh` turns a config into one
   job chain per step, with everything cluster-specific in a single cluster file;
   see [slurm/README.md](slurm/README.md).
-- Resumable processing with JSONL checkpoints.
+- Resumable processing with JSONL checkpoints, including a pipeline that grows: raise
+  `dataset.max_num_samples` and re-run to annotate only the new rows (see
+  [docs/growing-a-run.md](docs/growing-a-run.md)).
 - Annotation of existing datasets and generation from scratch.
 - Structured outputs via JSON schema.
 - Reasoning traces in their own column, for thinking models on either vLLM

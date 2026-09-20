@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from datasets import Dataset
 
 from llm_annotator import utils
 
@@ -175,3 +176,63 @@ def test_add_schema_additional_properties_false() -> None:
         is False
     )
     assert updated["properties"]["locked"]["additionalProperties"] is True
+
+
+def test_dataset_signature_is_stable_for_equal_content() -> None:
+    # Two datasets built independently from the same content must agree.
+    first = Dataset.from_dict({"text": [f"row {i}" for i in range(10)]})
+    second = Dataset.from_dict({"text": [f"row {i}" for i in range(10)]})
+    assert utils.dataset_signature(first) == utils.dataset_signature(second)
+
+
+def test_dataset_signature_survives_a_disk_round_trip(tmp_path: Path) -> None:
+    # The same content must hash the same after save_to_disk/load_from_disk,
+    # not just for a freshly built in-memory dataset.
+    dataset = Dataset.from_dict({"text": [f"row {i}" for i in range(10)]})
+    before = utils.dataset_signature(dataset)
+
+    path = tmp_path / "ds"
+    dataset.save_to_disk(str(path))
+    reloaded = Dataset.load_from_disk(str(path))
+
+    assert utils.dataset_signature(reloaded) == before
+
+
+def test_dataset_signature_differs_for_a_different_row_count() -> None:
+    fewer = Dataset.from_dict({"text": [f"row {i}" for i in range(10)]})
+    more = Dataset.from_dict({"text": [f"row {i}" for i in range(11)]})
+    assert utils.dataset_signature(fewer) != utils.dataset_signature(more)
+
+
+def test_dataset_signature_differs_for_a_different_column_name() -> None:
+    original = Dataset.from_dict({"text": ["a", "b"]})
+    renamed = original.rename_column("text", "other")
+    assert utils.dataset_signature(original) != utils.dataset_signature(
+        renamed
+    )
+
+
+def test_dataset_signature_differs_for_a_changed_probed_row() -> None:
+    # With few rows every row is probed, so editing any one of them changes
+    # the signature.
+    original = Dataset.from_dict({"text": ["a", "b", "c"]})
+    changed = Dataset.from_dict({"text": ["a", "X", "c"]})
+    assert utils.dataset_signature(original) != utils.dataset_signature(
+        changed
+    )
+
+
+def test_dataset_signature_works_on_an_empty_dataset() -> None:
+    empty = Dataset.from_dict({"text": []})
+    assert utils.dataset_signature(empty) == utils.dataset_signature(empty)
+
+
+def test_dataset_signature_is_stable_for_a_bytes_column() -> None:
+    # The Arrow-view probe must not choke on a column whose values are raw
+    # bytes rather than decoded Python objects.
+    first = Dataset.from_dict({"data": [b"abc", b"def"]})
+    second = Dataset.from_dict({"data": [b"abc", b"def"]})
+    assert utils.dataset_signature(first) == utils.dataset_signature(second)
+
+    other = Dataset.from_dict({"data": [b"abc", b"xyz"]})
+    assert utils.dataset_signature(first) != utils.dataset_signature(other)
