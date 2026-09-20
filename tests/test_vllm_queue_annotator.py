@@ -190,12 +190,8 @@ def test_queue_size_defaults_and_floor() -> None:
     # and never drops below the number of slots (which would idle servers).
     clients = [FakeVLLMOnlineClient(base_url=f"http://w{i}") for i in range(3)]
     assert VLLMQueueAnnotator(clients=clients).queue_size == 48
-    assert (
-        VLLMQueueAnnotator(clients=clients, queue_size=1).queue_size == 12
-    )
-    assert (
-        VLLMQueueAnnotator(clients=clients, queue_size=10).queue_size == 12
-    )
+    assert VLLMQueueAnnotator(clients=clients, queue_size=1).queue_size == 12
+    assert VLLMQueueAnnotator(clients=clients, queue_size=10).queue_size == 12
 
     with pytest.raises(ValueError, match="positive integer"):
         VLLMQueueAnnotator(clients=clients, queue_size=0)
@@ -353,16 +349,20 @@ def test_clients_run_in_parallel(tmp_path: Path) -> None:
         FakeVLLMOnlineClient(base_url=f"http://w{i}", barrier=barrier)
         for i in range(n_clients)
     ]
-    annotator = VLLMQueueAnnotator(clients=clients, batch_size=2)
+    annotator = VLLMQueueAnnotator(
+        clients=clients,
+        batch_size=2,
+        max_concurrent_batches_per_client=1,
+    )
 
     result = annotator.run_annotation(
         output_dir=tmp_path / "out",
-        prepared_dataset=_make_dataset(16),
+        prepared_dataset=_make_dataset(8),
         keep_idx_column=True,
     )
 
-    assert len(result) == 16
-    assert all(client.n_batches > 0 for client in clients)
+    assert len(result) == 8
+    assert all(client.n_batches == 1 for client in clients)
 
 
 def test_late_client_is_used_by_waiting_worker(tmp_path: Path) -> None:

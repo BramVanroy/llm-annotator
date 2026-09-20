@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import threading
-import time
 import urllib.error
 from pathlib import Path
 from typing import Any
@@ -289,7 +288,9 @@ def test_server_is_ready_logs_the_probe_error(
     with caplog.at_level(logging.DEBUG, logger="llm_annotator.config"):
         assert not config_mod._server_is_ready("http://a:8000/v1", 1)
 
-    assert any("connection refused" in record.message for record in caplog.records)
+    assert any(
+        "connection refused" in record.message for record in caplog.records
+    )
 
 
 def test_pool_min_servers_cannot_exceed_servers() -> None:
@@ -406,6 +407,7 @@ def test_pool_watcher_stops_after_destroy(
         base_urls=["http://w0:8000/v1", "http://w1:8000/v1"],
     )
     entered = threading.Event()
+    ready_check_finished = threading.Event()
     released = threading.Event()
 
     class FakeAnnotator:
@@ -442,8 +444,11 @@ def test_pool_watcher_stops_after_destroy(
         _ = url
         _ = timeout
         entered.set()
-        released.wait(1)
-        return True
+        try:
+            released.wait(5)
+            return True
+        finally:
+            ready_check_finished.set()
 
     monkeypatch.setattr(config_mod, "_server_is_ready", fake_ready)
     monkeypatch.setattr(
@@ -454,10 +459,10 @@ def test_pool_watcher_stops_after_destroy(
     annotator = FakeAnnotator()
 
     client._watch_pool(tmp_path, annotator)  # type: ignore[arg-type]
-    assert entered.wait(1)
+    assert entered.wait(5)
     annotator.destroy()
     released.set()
-    time.sleep(0.1)
+    assert ready_check_finished.wait(5)
 
     assert annotator.added == []
 
