@@ -459,6 +459,8 @@ class ClientConfig(_StrictBase):
             be absolute, which is what a job scheduler writing into a scratch
             directory needs.
         queue_size: Batches kept in flight across the pool.
+        max_concurrent_batches_per_client: Maximum simultaneous batch requests
+            sent to each vLLM server.
         wait_for_servers: Seconds to wait for ``pool.min_servers`` servers'
             ``/health`` endpoints before starting. ``0`` disables the check.
         engine: How this step's vLLM engine is built. Applies to both vLLM
@@ -479,6 +481,7 @@ class ClientConfig(_StrictBase):
     hosts_file: Path | None = None
     url_glob: str | None = None
     queue_size: int | None = None
+    max_concurrent_batches_per_client: int = 4
     wait_for_servers: float = 60.0
     engine: EngineConfig = Field(default_factory=EngineConfig)
     pool: PoolConfig = Field(default_factory=PoolConfig)
@@ -776,7 +779,12 @@ class ClientConfig(_StrictBase):
                 clients=one_or_more_clients,
                 batch_size=self.batch_size,
                 queue_size=self.queue_size,
-                max_workers=expected_servers,
+                max_concurrent_batches_per_client=(
+                    self.max_concurrent_batches_per_client
+                ),
+                max_workers=(
+                    expected_servers * self.max_concurrent_batches_per_client
+                ),
                 num_proc=self.num_proc,
                 verbose=verbose,
             )
@@ -791,9 +799,11 @@ class ClientConfig(_StrictBase):
 
     def _watch_pool(self, root: Path, annotator: VLLMQueueAnnotator) -> None:
         """Add configured vLLM servers to an active pool as they become ready."""
-        max_workers = annotator.max_workers
-        assert max_workers is not None
-        if len(annotator.clients) >= max_workers:
+        expected_servers = max(
+            self.pool.servers,
+            len(list(dict.fromkeys(self.resolve_base_urls(root)))),
+        )
+        if len(annotator.clients) >= expected_servers:
             return
 
         kwargs = dict(self.init)
@@ -812,7 +822,7 @@ class ClientConfig(_StrictBase):
         def watch() -> None:
             while (
                 not annotator.is_shutting_down
-                and len(annotator.clients) < max_workers
+                and len(annotator.clients) < expected_servers
             ):
                 for url in discover():
                     if annotator.is_shutting_down:
@@ -831,7 +841,7 @@ class ClientConfig(_StrictBase):
                     known_urls.add(url)
                     if annotator.is_shutting_down:
                         return
-                    if len(annotator.clients) >= max_workers:
+                    if len(annotator.clients) >= expected_servers:
                         return
                 if annotator.wait_for_shutdown(timeout=5):
                     return

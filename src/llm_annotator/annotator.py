@@ -1986,7 +1986,7 @@ class VLLMQueueAnnotator(Annotator):
     it keeps a bounded queue of batches in flight over a pool of vLLM server clients,
     handing each batch to whichever server is free. The process can be simplified as:
 
-    - add all clients to a queue;
+    - add each client to a queue once per allowed concurrent request;
     - for each batch:
         - pop a client from the queue;
         - send the batch to that client;
@@ -2009,13 +2009,16 @@ class VLLMQueueAnnotator(Annotator):
         queue_size: Maximum number of batches in flight (dispatched but not yet
             written out). This bounds memory, *not* the amount of work: the
             full dataset is always annotated. ``None`` resolves to four batches
-            per client, and any value below ``len(clients)`` is raised to it,
-            since a smaller queue would leave servers idle. After
-            initialisation the attribute always holds the resolved value.
-        max_workers: Maximum worker threads used for batch annotation. Defaults
-            to the number of ready clients, but may be set higher when more
-            servers are expected to join later so some workers can wait on the
-            client pool and immediately pick up late-ready servers.
+            per concurrent request slot, and any lower value is raised to the
+            number of slots, since a smaller queue would leave servers idle.
+            After initialisation the attribute always holds the resolved value.
+        max_concurrent_batches_per_client: Maximum number of simultaneous
+            batch requests sent to each server. This is independent of
+            ``batch_size``. Defaults to four for high throughput.
+        max_workers: Maximum worker threads used for batch annotation. It can
+            exceed the initially available request slots when additional servers
+            are expected to join, allowing workers to wait for and immediately
+            use those late-ready servers.
         batch_size: Maximum number of samples sent to a worker in one request.
         num_proc: Number of processes for dataset preprocessing.
         verbose: Whether to print progress information.
@@ -2045,6 +2048,7 @@ class VLLMQueueAnnotator(Annotator):
     clients: Sequence[Client[Any]]
     queue_size: int | None = None
     max_workers: int | None = None
+    max_concurrent_batches_per_client: int = 4
     # Required in the base class but set to init=False here
     # since we derive it from the first client in the pool
     client: Client = field(init=False, repr=False)
@@ -2058,7 +2062,8 @@ class VLLMQueueAnnotator(Annotator):
         """Validate the pool, derive the defaults, and fill the client queue.
 
         Raises:
-            ValueError: If no clients are given or ``queue_size`` is not
+            ValueError: If no clients are given, ``queue_size`` is not
+                positive, or ``max_concurrent_batches_per_client`` is not
                 positive.
             TypeError: If a client is not a vLLM server client.
         """
@@ -2086,7 +2091,12 @@ class VLLMQueueAnnotator(Annotator):
 
         # not used here but to satisfy the base class and type-checer
         self.client = self.clients[0]
-        self.max_workers = max(len(self.clients), self.max_workers or 0)
+        self.max_concurrent_batches_per_client = (
+            self._resolve_max_concurrent_batches_per_client(
+                self.max_concurrent_batches_per_client
+            )
+        )
+        self.max_workers = max(self._max_workers, self.max_workers or 0)
         self._requested_queue_size = self.queue_size
         self.queue_size: int = self._resolve_queue_size(self.queue_size)
 
@@ -2097,7 +2107,24 @@ class VLLMQueueAnnotator(Annotator):
         self._destroyed = Event()
         self._clients_lock = Lock()
         for client in self.clients:
-            self._client_pool.put(client)
+            for _ in range(self.max_concurrent_batches_per_client):
+                self._client_pool.put(client)
+
+    @property
+    def _max_workers(self) -> int:
+        """Return the total number of concurrent batch requests."""
+        return len(self.clients) * self.max_concurrent_batches_per_client
+
+    def _resolve_max_concurrent_batches_per_client(
+        self, max_concurrent_batches_per_client: int
+    ) -> int:
+        """Validate the per-server concurrent-request limit."""
+        if max_concurrent_batches_per_client < 1:
+            raise ValueError(
+                "'max_concurrent_batches_per_client' must be a positive"
+                " integer."
+            )
+        return max_concurrent_batches_per_client
 
     def _resolve_queue_size(self, queue_size: int | None) -> int:
         """Turn the requested queue size into an effective one.
@@ -2113,21 +2140,21 @@ class VLLMQueueAnnotator(Annotator):
             ValueError: If ``queue_size`` is given but not positive.
         """
         if queue_size is None:
-            return 4 * len(self.clients)
+            return 4 * self._max_workers
 
         if queue_size < 1:
             raise ValueError(
                 "'queue_size' must be a positive integer or None."
             )
 
-        if queue_size < len(self.clients):
+        if queue_size < self._max_workers:
             self._logger.warning(
                 f"'queue_size' ({queue_size}) is smaller than the number of"
-                f" clients ({len(self.clients)}), which would leave servers"
-                " idle. We're raising it to the number of clients as a"
+                f" concurrent batch requests ({self._max_workers}), which"
+                " would leave servers idle. We're raising it to that number as a"
                 " sensible minimal value."
             )
-            return len(self.clients)
+            return self._max_workers
 
         return queue_size
 
@@ -2169,7 +2196,8 @@ class VLLMQueueAnnotator(Annotator):
                 client.destroy()
                 return
             cast(list[Client[Any]], self.clients).append(client)
-            self._client_pool.put(client)
+            for _ in range(self.max_concurrent_batches_per_client):
+                self._client_pool.put(client)
             self.set_queue_size(self._requested_queue_size)
 
     @property
@@ -2180,6 +2208,32 @@ class VLLMQueueAnnotator(Annotator):
     def wait_for_shutdown(self, timeout: float) -> bool:
         """Block until the pool is shutting down or the timeout elapses."""
         return self._shutdown_started.wait(timeout)
+
+    def set_max_concurrent_batches_per_client(
+        self, max_concurrent_batches_per_client: int
+    ) -> None:
+        """Change the concurrent-request limit for every server.
+
+        This may only be called between annotation runs because it rebuilds
+        the available-client queue.
+
+        Args:
+            max_concurrent_batches_per_client: Maximum simultaneous batch
+                requests sent to each server.
+
+        Raises:
+            ValueError: If the requested limit is not positive.
+        """
+        self.max_concurrent_batches_per_client = (
+            self._resolve_max_concurrent_batches_per_client(
+                max_concurrent_batches_per_client
+            )
+        )
+        self.queue_size = self._resolve_queue_size(self.queue_size)
+        self._client_pool = SimpleQueue()
+        for client in self.clients:
+            for _ in range(self.max_concurrent_batches_per_client):
+                self._client_pool.put(client)
 
     def destroy(self) -> None:
         """Clean up the resources of every client in the pool. Since clients

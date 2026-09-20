@@ -162,8 +162,10 @@ To force a fresh preparation even when local or Hub artifacts exist, pass
 `VLLMQueueAnnotator` spreads one workload over a pool of vLLM servers -- for
 instance one server per GPU of a multi-node SLURM allocation. It is a drop-in
 `Annotator`: the same four entry points, the same JSONL progress files, the same
-resume behaviour. The only difference is that batches are dispatched to whichever
-server is free, with at most `queue_size` batches in flight at a time.
+resume behaviour. Batches are dispatched to whichever server is free, with at
+most `queue_size` batches in flight at a time. Set
+`max_concurrent_batches_per_client` to send more than one request to each
+server without increasing the request `batch_size`.
 
 ```python
 from llm_annotator import (
@@ -179,7 +181,12 @@ clients = [
     for host in ("gcn1", "gcn2", "gcn3", "gcn4")
 ]
 
-with VLLMQueueAnnotator(clients=clients, batch_size=64, verbose=True) as anno:
+with VLLMQueueAnnotator(
+    clients=clients,
+    batch_size=64,
+    max_concurrent_batches_per_client=4,
+    verbose=True,
+) as anno:
     ds = anno.annotate_dataset(
         output_dir="outputs/imdb-sentiment",
         prompt_template="Classify the sentiment: {text}",

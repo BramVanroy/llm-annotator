@@ -375,9 +375,7 @@ def test_build_annotator_counts_unique_pool_members(
     )
     seen: dict[str, Any] = {}
 
-    def fake_build_client(
-        self: ClientConfig, root: Path
-    ) -> list[str]:
+    def fake_build_client(self: ClientConfig, root: Path) -> list[str]:
         _ = self
         _ = root
         return ["a", "b"]
@@ -396,7 +394,7 @@ def test_build_annotator_counts_unique_pool_members(
     annotator = client.build_annotator(tmp_path)
 
     assert isinstance(annotator, FakeAnnotator)
-    assert seen["max_workers"] == 2
+    assert seen["max_workers"] == 8
 
 
 def test_pool_watcher_stops_after_destroy(
@@ -413,7 +411,9 @@ def test_pool_watcher_stops_after_destroy(
     class FakeAnnotator:
         def __init__(self) -> None:
             self.max_workers = 2
-            self.clients = [type("ClientRef", (), {"base_url": "http://w0:8000/v1"})()]
+            self.clients = [
+                type("ClientRef", (), {"base_url": "http://w0:8000/v1"})()
+            ]
             self.added: list[Any] = []
             self._closed = threading.Event()
 

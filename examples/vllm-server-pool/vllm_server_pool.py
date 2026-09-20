@@ -107,7 +107,13 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         "--queue-size",
         type=int,
         default=None,
-        help="Batches kept in flight. Defaults to four per server.",
+        help="Batches kept in flight. Defaults to four per concurrent request.",
+    )
+    parser.add_argument(
+        "--max-concurrent-batches-per-client",
+        type=int,
+        default=4,
+        help="Simultaneous batch requests sent to each server (default: 4).",
     )
     parser.add_argument("--max-completion-tokens", type=int, default=128)
     parser.add_argument("--temperature", type=float, default=0.0)
@@ -225,6 +231,9 @@ def main(args: list[str] | None = None) -> None:
         clients=clients,
         batch_size=parsed.batch_size,
         queue_size=parsed.queue_size,
+        max_concurrent_batches_per_client=(
+            parsed.max_concurrent_batches_per_client
+        ),
         verbose=True,
     ) as annotator:
         results = annotator.annotate_dataset(

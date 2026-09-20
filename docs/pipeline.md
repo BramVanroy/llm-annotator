@@ -211,7 +211,7 @@ whichever moment it takes effect.
 
 | Group | Key | Used when | Providers |
 | --- | --- | --- | --- |
-| Execution | `batch_size`, `num_proc`, `queue_size`, `wait_for_servers` | the annotator drives the run | all |
+| Execution | `batch_size`, `num_proc`, `queue_size`, `max_concurrent_batches_per_client`, `wait_for_servers` | the annotator drives the run | all |
 | Connection | `init` | the client object is constructed | all |
 | Engine | `engine` | the vLLM engine is built | `vllm_offline`, `vllm_online` |
 | Pool | `pool` | a job submitter starts servers | `vllm_online` |
@@ -296,6 +296,7 @@ client:
   # hosts_file: logs/pool_123/hosts.txt   # one URL per line
   # url_glob: logs/pool_*/*.url           # one URL per file
   queue_size: 8
+  max_concurrent_batches_per_client: 4  # requests per server, independent of batch_size
   wait_for_servers: 300            # poll /health first; 0 disables
 ```
 

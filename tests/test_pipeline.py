@@ -979,7 +979,7 @@ def test_max_consecutive_failed_batches_follows_the_step(
     assert seen == [10, 3]
 
 
-def test_queue_size_follows_the_step(
+def test_queue_settings_follow_the_step(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # `queue_size` is deliberately absent from `cache_key`, so a reused pool
@@ -987,13 +987,15 @@ def test_queue_size_follows_the_step(
     class PoolClient(EchoClient):
         provider_type = Provider.VLLM_ONLINE
 
-    seen: list[int] = []
+    seen: list[tuple[int, int]] = []
     original = Annotator.annotate_dataset
 
     def spy(self: Annotator, *args: Any, **kwargs: Any) -> Any:
         assert isinstance(self, VLLMQueueAnnotator)
         assert self.queue_size is not None  # resolved in __post_init__
-        seen.append(self.queue_size)
+        seen.append(
+            (self.queue_size, self.max_concurrent_batches_per_client)
+        )
         return original(self, *args, **kwargs)
 
     def fake_build_client(
@@ -1014,9 +1016,13 @@ def test_queue_size_follows_the_step(
             "num_proc": None,
             "base_urls": ["http://a:8000/v1", "http://b:8000/v1"],
             "queue_size": 8,
+            "max_concurrent_batches_per_client": 2,
         },
     )
     # Same cache key as step 1, so the pool is reused rather than rebuilt.
-    config.steps[1].client = {"queue_size": 3}
+    config.steps[1].client = {
+        "queue_size": 3,
+        "max_concurrent_batches_per_client": 1,
+    }
     run_pipeline(config)
-    assert seen == [8, 3]
+    assert seen == [(8, 2), (3, 1)]
