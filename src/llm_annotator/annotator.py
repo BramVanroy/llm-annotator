@@ -2185,27 +2185,45 @@ class VLLMQueueAnnotator(Annotator):
         Raises:
             TypeError: If ``client`` is not a vLLM server client.
         """
+        with self._clients_lock:
+            self._add_client_locked(client)
+
+    def add_client_for_base_url(
+        self,
+        base_url: str,
+        client_factory: Callable[[str], Client[Any]],
+    ) -> None:
+        """Construct and add a late-ready server under the pool lock."""
+        with self._clients_lock:
+            if self._destroyed.is_set() or self._has_client_base_url_locked(
+                base_url
+            ):
+                return
+            self._add_client_locked(client_factory(base_url))
+
+    def _has_client_base_url_locked(self, base_url: object) -> bool:
+        return base_url is not None and any(
+            getattr(existing, "base_url", None) == base_url
+            for existing in self.clients
+        )
+
+    def _add_client_locked(self, client: Client[Any]) -> None:
         if getattr(client, "provider_type", None) != Provider.VLLM_ONLINE:
             raise TypeError(
                 "VLLMQueueAnnotator only supports vLLM server clients"
                 " (provider 'vllm_online'), got"
                 f" '{type(client).__name__}'."
             )
-        with self._clients_lock:
-            if self._destroyed.is_set():
-                client.destroy()
-                return
-            base_url = getattr(client, "base_url", None)
-            if base_url is not None and any(
-                getattr(existing, "base_url", None) == base_url
-                for existing in self.clients
-            ):
-                client.destroy()
-                return
-            cast(list[Client[Any]], self.clients).append(client)
-            for _ in range(self.max_concurrent_batches_per_client):
-                self._client_pool.put(client)
-            self.set_queue_size(self._requested_queue_size)
+        if self._destroyed.is_set():
+            client.destroy()
+            return
+        if self._has_client_base_url_locked(getattr(client, "base_url", None)):
+            client.destroy()
+            return
+        cast(list[Client[Any]], self.clients).append(client)
+        for _ in range(self.max_concurrent_batches_per_client):
+            self._client_pool.put(client)
+        self.set_queue_size(self._requested_queue_size)
 
     @property
     def is_shutting_down(self) -> bool:
@@ -2353,7 +2371,8 @@ class VLLMQueueAnnotator(Annotator):
         finally:
             with self._clients_lock:
                 self._checked_out_clients -= 1
-            self._client_pool.put(client)
+                if not self._shutdown_started.is_set():
+                    self._client_pool.put(client)
 
         return batch, results
 

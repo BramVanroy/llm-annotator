@@ -839,8 +839,11 @@ class ClientConfig(_StrictBase):
                         VLLMOnlineClient,
                     )
 
-                    annotator.add_client(
-                        VLLMOnlineClient(base_url=url, **kwargs)
+                    annotator.add_client_for_base_url(
+                        url,
+                        lambda base_url: VLLMOnlineClient(
+                            base_url=base_url, **kwargs
+                        ),
                     )
                     known_urls.add(url)
                     if annotator.is_shutting_down:

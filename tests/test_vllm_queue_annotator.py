@@ -141,6 +141,21 @@ def test_add_client_rejects_duplicate_base_url() -> None:
     assert duplicate.destroy_called == 1
 
 
+def test_add_client_for_base_url_skips_duplicate_construction() -> None:
+    existing = FakeVLLMOnlineClient(base_url="http://worker")
+    annotator = VLLMQueueAnnotator(clients=[existing], max_workers=2)
+    built: list[str] = []
+
+    def factory(base_url: str) -> FakeVLLMOnlineClient:
+        built.append(base_url)
+        return FakeVLLMOnlineClient(base_url=base_url)
+
+    annotator.add_client_for_base_url("http://worker", factory)
+
+    assert annotator.clients == [existing]
+    assert built == []
+
+
 def _make_dataset(
     n_samples: int, *, task_prefix: str = "", idx_column: str = "idx"
 ) -> Dataset:
@@ -244,6 +259,34 @@ def test_per_client_concurrency_cannot_change_mid_run() -> None:
     barrier.wait(timeout=1)
     worker.join(timeout=1)
     assert annotator.max_concurrent_batches_per_client == 4
+
+
+def test_checked_out_client_is_not_requeued_after_shutdown() -> None:
+    barrier = threading.Barrier(2)
+    client = FakeVLLMOnlineClient(barrier=barrier)
+    annotator = VLLMQueueAnnotator(
+        clients=[client], max_concurrent_batches_per_client=1
+    )
+    batch = {"messages": [[{"role": "user", "content": "hi"}]], "idx": [0]}
+
+    worker = threading.Thread(
+        target=annotator._annotate_batch_on_free_client,
+        args=(batch,),
+        kwargs={"options": None},
+        daemon=True,
+    )
+    worker.start()
+    for _ in range(100):
+        if client.n_batches:
+            break
+        threading.Event().wait(0.01)
+    assert client.n_batches == 1
+
+    annotator.destroy()
+    barrier.wait(timeout=1)
+    worker.join(timeout=1)
+
+    assert annotator._client_pool.qsize() == 0
 
 
 def test_set_queue_size_resolves_like_the_constructor() -> None:
