@@ -417,8 +417,9 @@ def test_pool_watcher_stops_after_destroy(
             self.added: list[Any] = []
             self._closed = threading.Event()
 
-        def accepts_new_clients(self) -> bool:
-            return not self._closed.is_set()
+        @property
+        def is_destroyed(self) -> bool:
+            return self._closed.is_set()
 
         def wait_for_shutdown(self, timeout: float) -> bool:
             return self._closed.wait(timeout)
