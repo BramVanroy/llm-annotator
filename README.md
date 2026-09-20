@@ -242,6 +242,14 @@ Paths inside the config resolve relative to the config file, so a config
 directory is self-contained. Finished steps write a snapshot and are skipped on
 a re-run, so an interrupted pipeline resumes rather than starting over.
 
+Any key can also be set on the command line, so one tracked config serves a
+pilot, the full run and a job script that reads the size from the environment:
+
+```sh
+llm-annotate my-pipeline.yaml --max-num-samples 2000
+llm-annotate my-pipeline.yaml --set steps.0.client.batch_size=8
+```
+
 A complete, runnable example lives in [examples/pipeline-qa/](examples/pipeline-qa/),
 and the full key reference is in [docs/pipeline.md](docs/pipeline.md).
 

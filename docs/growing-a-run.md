@@ -1,9 +1,13 @@
 # Growing a run
 
 A run can start as a pilot on a few thousand samples and grow later. Raise
-`dataset.max_num_samples` in the config and run the same command again on the same `output_dir`.
-No extra flag is needed. Every step of the pipeline resumes, and rows that are already finished
-are never sent to the model again.
+`dataset.max_num_samples` and run the same command again on the same `output_dir`. No extra flag
+is needed. Every step of the pipeline resumes, and rows that are already finished are never sent
+to the model again.
+
+The cap can be raised in the config file or on the command line with `--max-num-samples`. The two
+are the same setting; the flag exists so that one tracked config can serve the pilot, the full run
+and a job script that takes the number from an environment variable.
 
 ## The workflow
 
@@ -41,6 +45,13 @@ dataset:
 
 ```bash
 llm-annotate pilot.yaml
+```
+
+Or leave the file alone and pass the cap in:
+
+```bash
+llm-annotate pilot.yaml --max-num-samples 2000     # the pilot
+llm-annotate pilot.yaml --max-num-samples 50000    # the full run
 ```
 
 Both steps resume. The 2000 rows of the pilot are not sent to the model again. The 48000 new rows
@@ -95,6 +106,17 @@ therefore works one job at a time, the same way
 resume. Selecting only a later step while an earlier one is still out of date raises an error that
 says to run the earlier step first, or to select it too.
 
+The SLURM submitter passes the cap to every step job of one submission through the
+`MAX_NUM_SAMPLES` environment variable, which becomes `--max-num-samples` on each step's
+`llm-annotate` call:
+
+```sh
+MAX_NUM_SAMPLES=50000 ./slurm/submit_pipeline.sh pilot.yaml
+```
+
+`SHUFFLE_SEED` works the same way. Set the cap on the submission rather than per job, so that all
+steps of one run agree about how many rows they select.
+
 ## Runs made by an older version
 
 A run whose first step finished under llm-annotator 0.16 or older has no selection record. Its
@@ -112,6 +134,8 @@ unchanged config keeps working as before.
 - A prepared-data backup restored from a Hub branch, on a machine with no local selection record,
   is reused as is; there is nothing to compare it against.
 - `sort_by_length`, `batch_size` and the client settings may change between runs freely.
+- A cap given with `--max-num-samples` is compared exactly like one written in the config: the run
+  is judged on the resolved value, which `<output_dir>/pipeline.json` records.
 - A changed prompt or a changed `output_schema` is not detected. Finished rows keep the answers
   they already have.
 

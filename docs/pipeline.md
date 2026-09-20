@@ -478,16 +478,52 @@ a template containing the `{prompt}` placeholder:
 
 ```text
 llm-annotate [-h] [--output-dir OUTPUT_DIR] [--hub-id HUB_ID]
-             [--log-level LOG_LEVEL] [--overwrite] [--steps STEPS]
-             [--hosts-file HOSTS_FILE] [--describe-steps]
+             [--log-level LOG_LEVEL] [--overwrite]
+             [--max-num-samples MAX_NUM_SAMPLES] [--shuffle-seed SHUFFLE_SEED]
+             [--set KEY=VALUE] [--steps STEPS] [--hosts-file HOSTS_FILE]
+             [--serve-args STEP] [--describe-steps]
              config
 ```
 
 `--output-dir`, `--hub-id`, `--log-level` and `--overwrite` override the matching
 config keys, which is handy for pointing one config at a scratch directory or
 resuming with a different log level without editing the file. `--steps`,
-`--hosts-file` and `--describe-steps` are described under
+`--hosts-file`, `--serve-args` and `--describe-steps` are described under
 [Running one step at a time](#running-one-step-at-a-time).
+
+### Overriding config keys
+
+`--max-num-samples` and `--shuffle-seed` override `dataset.max_num_samples` and
+`dataset.shuffle_seed`, so a pilot, the full run and a later extension share one
+config file and differ only in the command that starts them:
+
+```bash
+llm-annotate cfg.yaml --max-num-samples 2000     # pilot
+llm-annotate cfg.yaml --max-num-samples 50000    # same output_dir, grows it
+llm-annotate cfg.yaml --max-num-samples "$N"     # from a job script
+```
+
+`--set KEY=VALUE` reaches every other key. A dotted key descends into a nested
+block, an integer segment indexes a list, and the value is read as YAML, so it
+gets the type it looks like:
+
+```bash
+llm-annotate cfg.yaml --set client.options.temperature=0.2
+llm-annotate cfg.yaml --set steps.0.client.batch_size=8 --set idx_column=row_id
+llm-annotate cfg.yaml --set 'steps.1.drop_columns=[rate_response, rate_error]'
+```
+
+A key that both a named flag and `--set` would set is an error, so there is no
+question of which one wins. The overrides are applied before validation, which
+means a typo is rejected the same way a typo in the file is, and the resolved
+values are written to `<output_dir>/pipeline.json`, so the run records what it
+actually used.
+
+The same mapping is available from Python, keyed the same way:
+
+```python
+config = load_pipeline_config("cfg.yaml", overrides={"dataset.max_num_samples": 50_000})
+```
 
 ## Full reference
 

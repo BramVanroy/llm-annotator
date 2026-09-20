@@ -46,6 +46,7 @@ Options:
 
 Common environment overrides (all optional, see slurm/README.md):
   OUTPUT_DIR, HUB_ID, OVERWRITE=1   override the config for this run
+  MAX_NUM_SAMPLES, SHUFFLE_SEED     override the dataset selection
   EXTRA_DEPENDENCY=afterok:123456   hang the chain off another job
   POOL_WAIT                         how long a client waits for its servers
   CANCEL_SERVERS_ON_EXIT=0          keep servers alive after their step ends

@@ -215,6 +215,7 @@ are submitted with `--export=ALL`.
 | `READY_TIMEOUT` | `1800` | Seconds a server waits for its own `/health` before giving up |
 | `CANCEL_SERVERS_ON_EXIT` | `1` | Whether a finished client `scancel`s its step's server array. `0` leaves the GPUs running. |
 | `OUTPUT_DIR`, `HUB_ID`, `OVERWRITE` | from the config | Override the config's `output_dir` / `hub_id`, or discard existing step output |
+| `MAX_NUM_SAMPLES`, `SHUFFLE_SEED` | from the config | Override `dataset.max_num_samples` / `dataset.shuffle_seed` for every step of this submission. Raising the cap and resubmitting grows the run: finished rows are not annotated again. |
 
 ## Resuming
 
