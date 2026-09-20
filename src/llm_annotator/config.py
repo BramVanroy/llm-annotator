@@ -434,7 +434,7 @@ class ClientConfig(_StrictBase):
     hosts_file: Path | None = None
     url_glob: str | None = None
     queue_size: int | None = None
-    max_concurrent_batches_per_client: int = 1
+    max_concurrent_batches_per_client: int = 4
     wait_for_servers: float = 60.0
     engine: EngineConfig = Field(default_factory=EngineConfig)
     pool: PoolConfig = Field(default_factory=PoolConfig)

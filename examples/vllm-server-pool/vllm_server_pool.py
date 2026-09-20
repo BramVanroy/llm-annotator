@@ -112,8 +112,8 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--max-concurrent-batches-per-client",
         type=int,
-        default=1,
-        help="Simultaneous batch requests sent to each server.",
+        default=4,
+        help="Simultaneous batch requests sent to each server (default: 4).",
     )
     parser.add_argument("--max-completion-tokens", type=int, default=128)
     parser.add_argument("--temperature", type=float, default=0.0)

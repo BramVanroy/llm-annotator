@@ -2013,7 +2013,7 @@ class VLLMQueueAnnotator(Annotator):
             After initialisation the attribute always holds the resolved value.
         max_concurrent_batches_per_client: Maximum number of simultaneous
             batch requests sent to each server. This is independent of
-            ``batch_size``. Defaults to one to preserve the original behavior.
+            ``batch_size``. Defaults to four for high throughput.
         batch_size: Maximum number of samples sent to a worker in one request.
         num_proc: Number of processes for dataset preprocessing.
         verbose: Whether to print progress information.
@@ -2042,7 +2042,7 @@ class VLLMQueueAnnotator(Annotator):
 
     clients: Sequence[Client[Any]]
     queue_size: int | None = None
-    max_concurrent_batches_per_client: int = 1
+    max_concurrent_batches_per_client: int = 4
     # Required in the base class but set to init=False here
     # since we derive it from the first client in the pool
     client: Client = field(init=False, repr=False)

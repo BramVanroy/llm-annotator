@@ -162,12 +162,16 @@ def test_rejects_non_vllm_clients() -> None:
 
 
 def test_queue_size_defaults_and_floor() -> None:
-    # Verifies queue_size defaults to four batches per client and never drops
-    # below the number of clients (which would idle servers).
+    # Verifies queue_size defaults to four batches per concurrent request slot
+    # and never drops below the number of slots (which would idle servers).
     clients = [FakeVLLMOnlineClient(base_url=f"http://w{i}") for i in range(3)]
-    assert VLLMQueueAnnotator(clients=clients).queue_size == 12
-    assert VLLMQueueAnnotator(clients=clients, queue_size=1).queue_size == 3
-    assert VLLMQueueAnnotator(clients=clients, queue_size=10).queue_size == 10
+    assert VLLMQueueAnnotator(clients=clients).queue_size == 48
+    assert (
+        VLLMQueueAnnotator(clients=clients, queue_size=1).queue_size == 12
+    )
+    assert (
+        VLLMQueueAnnotator(clients=clients, queue_size=10).queue_size == 12
+    )
 
     with pytest.raises(ValueError, match="positive integer"):
         VLLMQueueAnnotator(clients=clients, queue_size=0)
@@ -175,6 +179,10 @@ def test_queue_size_defaults_and_floor() -> None:
 
 def test_per_client_concurrency_defaults_and_validates() -> None:
     clients = [FakeVLLMOnlineClient(base_url=f"http://w{i}") for i in range(3)]
+    assert (
+        VLLMQueueAnnotator(clients=clients).max_concurrent_batches_per_client
+        == 4
+    )
     annotator = VLLMQueueAnnotator(
         clients=clients, max_concurrent_batches_per_client=2
     )
@@ -195,7 +203,9 @@ def test_set_queue_size_resolves_like_the_constructor() -> None:
     # Reusing a pool for another workload must go through the same
     # normalisation, or `queue_size` would stop holding a resolved value.
     clients = [FakeVLLMOnlineClient(base_url=f"http://w{i}") for i in range(3)]
-    annotator = VLLMQueueAnnotator(clients=clients, queue_size=10)
+    annotator = VLLMQueueAnnotator(
+        clients=clients, queue_size=10, max_concurrent_batches_per_client=1
+    )
 
     annotator.set_queue_size(5)
     assert annotator.queue_size == 5
@@ -346,7 +356,12 @@ def test_queue_size_bounds_in_flight_batches(tmp_path: Path) -> None:
                     state["in_flight"] -= 1
 
     clients = [CountingClient(base_url=f"http://w{i}") for i in range(4)]
-    annotator = VLLMQueueAnnotator(clients=clients, batch_size=2, queue_size=4)
+    annotator = VLLMQueueAnnotator(
+        clients=clients,
+        batch_size=2,
+        queue_size=4,
+        max_concurrent_batches_per_client=1,
+    )
     annotator.run_annotation(
         output_dir=tmp_path / "out", prepared_dataset=_make_dataset(40)
     )
@@ -483,7 +498,10 @@ def test_crash_and_resume_has_no_gaps_or_duplicates(tmp_path: Path) -> None:
         for i in range(2)
     ]
     crashing_annotator = VLLMQueueAnnotator(
-        clients=crashing, batch_size=5, queue_size=2
+        clients=crashing,
+        batch_size=5,
+        queue_size=2,
+        max_concurrent_batches_per_client=1,
     )
 
     with pytest.raises(RuntimeError, match="went down"):
@@ -769,7 +787,12 @@ def test_raises_after_consecutive_failed_batches(tmp_path: Path) -> None:
     clients = [
         AlwaysFailingVLLMClient(base_url=f"http://w{i}") for i in range(2)
     ]
-    annotator = VLLMQueueAnnotator(clients=clients, batch_size=1, queue_size=2)
+    annotator = VLLMQueueAnnotator(
+        clients=clients,
+        batch_size=1,
+        queue_size=2,
+        max_concurrent_batches_per_client=1,
+    )
 
     with pytest.raises(
         TooManyConsecutiveFailedBatchesError, match="3 consecutive batches"
