@@ -100,7 +100,7 @@ fi
 
 # A value left over in this shell from an earlier run must not leak into the
 # jobs through --export=ALL; each job derives its own.
-unset POOL_DIR STEP_NAME SERVER_JOB_ID NUM_SERVERS MODEL
+unset POOL_DIR STEP_NAME SERVER_JOB_ID NUM_SERVERS MIN_SERVERS MODEL
 
 if [[ -x "${VENV_PATH}/bin/llm-annotate" ]]; then
   ANNOTATE_CMD=("${VENV_PATH}/bin/llm-annotate")
@@ -175,6 +175,8 @@ while IFS= read -r step_json; do
   KIND=$(field "$step_json" kind)
   MODEL=$(field "$step_json" model)
   SERVERS=$(field "$step_json" servers)
+  MIN_SERVERS=$(field "$step_json" min_servers)
+  MIN_SERVERS="${MIN_SERVERS:-1}"
   GPUS_PER_VLLM_SERVER=$(field "$step_json" gpus_per_vllm_server)
   GPUS_PER_VLLM_SERVER="${GPUS_PER_VLLM_SERVER:-1}"
 
@@ -271,6 +273,9 @@ while IFS= read -r step_json; do
       POOL_DIR="${LOG_DIR}/pool_${SERVER_JOB}"
       (( DRY_RUN )) || mkdir -p "$POOL_DIR"
       echo "  servers: array ${SERVER_JOB}, ${SERVERS} x ${GPUS_PER_VLLM_SERVER} GPU(s) serving ${MODEL}"
+      if (( MIN_SERVERS < SERVERS )); then
+        echo "  client starts at ${MIN_SERVERS} ready server(s); the rest join the run as they arrive"
+      fi
 
       # No Slurm dependency on SERVER_JOB: for a job array, `after:<jobid>` is
       # only satisfied once every element has started, not the first one, so
@@ -284,7 +289,7 @@ while IFS= read -r step_json; do
         "${CPU_FLAGS[@]}" \
         "${CLIENT_SBATCH_ARGS[@]}" \
         "${DEP[@]}" \
-        --export="${STEP_EXPORT},POOL_DIR=${POOL_DIR},NUM_SERVERS=${SERVERS},SERVER_JOB_ID=${SERVER_JOB}" \
+        --export="${STEP_EXPORT},POOL_DIR=${POOL_DIR},NUM_SERVERS=${SERVERS},MIN_SERVERS=${MIN_SERVERS},SERVER_JOB_ID=${SERVER_JOB}" \
         slurm/vllm_annotate.sh)
       ;;
 

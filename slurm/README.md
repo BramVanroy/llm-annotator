@@ -102,7 +102,7 @@ llm-annotate my-pipeline.yaml --describe-steps
 ```
 
 ```json
-{"index": 1, "name": "write-qa", "kind": "vllm_pool", "model": "Qwen/Qwen3-8B", "servers": 4, "gpus_per_vllm_server": 2, ...}
+{"index": 1, "name": "write-qa", "kind": "vllm_pool", "model": "Qwen/Qwen3-8B", "servers": 4, "min_servers": 1, "gpus_per_vllm_server": 2, ...}
 {"index": 2, "name": "rate-qa",  "kind": "api", "model": "claude-haiku-4-5", ...}
 ```
 
@@ -129,11 +129,13 @@ client:
     tensor_parallel_size: 2   # GPUs per server, at most MAX_GPUS_PER_NODE
   pool:
     servers: 4                # four such servers for this step
+    min_servers: 2            # start annotating once two are ready
 ```
 
 Several small server jobs schedule far sooner than one large allocation, because
 each one fits on a partially used node. They also start at different times,
-which is fine: the client waits for the pool to fill before it begins.
+which is fine: the client starts once `pool.min_servers` are ready, and the
+remaining servers join the run as they leave the queue.
 
 ## Serving profiles
 
@@ -176,9 +178,11 @@ The server array writes into `<LOG_DIR>/pool_<array-job-id>/`, one `<task>.url`
 file per server containing that server's `http://<host>:<port>/v1`. A file
 appears only **after** the server answers `/health`, and is removed when the job
 ends, so every URL in the directory belongs to a server that is up right now.
-The client polls that directory, concatenates it into `hosts.txt` and passes it
-to the CLI as `--hosts-file`, which attaches it to that step alone — a step on
-another provider is left untouched.
+The client polls that directory until `min_servers` of the files are there,
+then passes the directory itself to the CLI as `--url-glob`, which attaches it
+to that step alone — a step on another provider is left untouched. A file of
+URLs would be read once; the glob is re-read while the run continues, so a
+server whose file appears after the run has started still joins the pool.
 
 Ports are `VLLM_PORT + array task id`, then probed upward for the first free one.
 Two array tasks can land on the same node (a 4-GPU node fits two
@@ -210,7 +214,7 @@ are submitted with `--export=ALL`.
 | --- | --- | --- |
 | `ANNOTATE_CONFIG` | *the positional argument* | JSON/YAML pipeline config to run |
 | `EXTRA_DEPENDENCY` | – | Slurm dependency expression (e.g. `afterok:123456`) the chain waits for. Applied to the **first** submitted step only; later steps inherit it through their predecessor, which is what lets several submissions be chained into one workflow. |
-| `POOL_WAIT` | `3600` | Seconds a client waits for at least one of its servers to register |
+| `POOL_WAIT` | `3600` | Seconds a client waits for `min_servers` of its servers to register |
 | `VLLM_PORT` | `8000` | Base port a server starts probing from. The array task id is added to it, then the first free port is taken. |
 | `READY_TIMEOUT` | `1800` | Seconds a server waits for its own `/health` before giving up |
 | `CANCEL_SERVERS_ON_EXIT` | `1` | Whether a finished client `scancel`s its step's server array. `0` leaves the GPUs running. |

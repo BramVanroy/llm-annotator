@@ -117,6 +117,48 @@ class FakeVLLMOnlineClient(Client[ProviderRuntimeOptions]):
         self.destroy_called += 1
 
 
+class GrowthClient(FakeVLLMOnlineClient):
+    """Blocks its first call on an event, then joins a barrier on request.
+
+    Used to prove that a server added mid-run raises the number of batches
+    kept in flight: the first call parks the only client while the pool still
+    has one member, and once a second client has joined, both clients' next
+    call is made to rendezvous on a shared barrier, which can only clear if
+    both calls are in flight at the same time.
+    """
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        block_first_call: bool = False,
+        event: threading.Event | None = None,
+        barrier: threading.Barrier | None = None,
+    ) -> None:
+        super().__init__(base_url=base_url)
+        self.block_first_call = block_first_call
+        self.event = event
+        self.rendezvous_barrier = barrier
+        self.calls = 0
+
+    def batch_generate(
+        self,
+        *,
+        messages: list[list[dict[str, str]]],
+        options: ProviderRuntimeOptions | None = None,
+        gen_kwargs: dict[str, Any] | None = None,
+    ) -> list[Response]:
+        self.calls += 1
+        if self.block_first_call and self.calls == 1:
+            assert self.event is not None
+            assert self.event.wait(5)
+        elif self.rendezvous_barrier is not None:
+            self.rendezvous_barrier.wait(timeout=5)
+        return super().batch_generate(
+            messages=messages, options=options, gen_kwargs=gen_kwargs
+        )
+
+
 def test_add_client_after_destroy_releases_client() -> None:
     existing = FakeVLLMOnlineClient()
     late = FakeVLLMOnlineClient()
@@ -508,6 +550,67 @@ def test_late_client_is_used_by_waiting_worker(tmp_path: Path) -> None:
     assert len(result["dataset"]) == 2
     assert first.n_batches == second.n_batches == 1
     assert annotator.queue_size == 8
+
+
+def test_late_client_joining_raises_in_flight_batch_count(
+    tmp_path: Path,
+) -> None:
+    # A pool that starts on one client keeps only `queue_size` batches in
+    # flight; a server joining mid-run must raise that limit immediately, so
+    # the next top-up dispatches more batches than the original pool allowed,
+    # not merely once the run is restarted.
+    first_call_event = threading.Event()
+    growth_barrier = threading.Barrier(2)
+
+    client_a = GrowthClient(
+        base_url="http://w0",
+        block_first_call=True,
+        event=first_call_event,
+        barrier=growth_barrier,
+    )
+    annotator = VLLMQueueAnnotator(
+        clients=[client_a],
+        batch_size=1,
+        queue_size=1,
+        max_concurrent_batches_per_client=1,
+        max_workers=4,
+    )
+    assert annotator.queue_size == 1
+
+    result: dict[str, Any] = {}
+    thread = threading.Thread(
+        target=lambda: result.setdefault(
+            "dataset",
+            annotator.run_annotation(
+                output_dir=tmp_path / "out",
+                prepared_dataset=_make_dataset(3),
+                keep_idx_column=True,
+            ),
+        )
+    )
+    thread.start()
+    for _ in range(200):
+        if client_a.calls:
+            break
+        threading.Event().wait(0.01)
+    assert client_a.calls == 1
+
+    client_b = GrowthClient(base_url="http://w1", barrier=growth_barrier)
+    annotator.add_client_for_base_url("http://w1", lambda base_url: client_b)
+    # Adding a client to a pool of one raises the resolved queue size right
+    # away, before the blocked first batch has even returned.
+    assert annotator.queue_size == 2
+
+    first_call_event.set()
+    thread.join(timeout=10)
+
+    assert not thread.is_alive()
+    assert len(result["dataset"]) == 3
+    # The barrier only clears if both clients' next call is in flight at the
+    # same time, which requires two batches dispatched at once -- impossible
+    # under the original queue_size of 1.
+    assert client_a.calls == 2
+    assert client_b.calls == 1
 
 
 def test_late_client_after_destroy_is_cleaned_up() -> None:

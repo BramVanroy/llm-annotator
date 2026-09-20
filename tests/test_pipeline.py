@@ -22,8 +22,8 @@ from llm_annotator.clients.base import (
 from llm_annotator.config import ClientConfig, PipelineConfig
 from llm_annotator.pipeline import (
     STEP_ANNOTATE_SUBDIR,
-    _hosts_file_override,
     _load_input_dataset,
+    _pool_source_override,
     main,
     run_pipeline,
 )
@@ -958,6 +958,24 @@ def test_cli_describe_steps_emits_json_lines(
     assert (rows[0]["servers"], rows[0]["gpus_per_vllm_server"]) == (4, 2)
 
 
+def test_cli_url_glob_reaches_the_step_config(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Once --url-glob names servers for the 'write' step, that step points at
+    # servers that already exist instead of needing its own pool started.
+    config_path = _write_mixed_config(tmp_path)
+    pattern = str(tmp_path / "pool_*" / "*.url")
+
+    main([str(config_path), "--describe-steps", "--url-glob", pattern])
+
+    rows = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.strip()
+    ]
+    assert [r["kind"] for r in rows] == ["vllm_online", "api"]
+
+
 def test_cli_serve_args_prints_one_argument_per_line(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1010,7 +1028,7 @@ def test_cli_hosts_file_targets_only_the_vllm_step(tmp_path: Path) -> None:
     hosts = tmp_path / "hosts.txt"
     hosts.write_text("http://a:8000/v1\n", encoding="utf-8")
 
-    override = _hosts_file_override(config_path, hosts, None)
+    override = _pool_source_override(config_path, hosts, None, None)
     assert override is not None
     assert set(override) == {"write"}
     # A command-line path means what the shell means by it, not what the
@@ -1021,7 +1039,44 @@ def test_cli_hosts_file_targets_only_the_vllm_step(tmp_path: Path) -> None:
 def test_cli_hosts_file_without_a_vllm_step(tmp_path: Path) -> None:
     config_path = _write_mixed_config(tmp_path)
     with pytest.raises(ValueError, match="none of the steps being run"):
-        _hosts_file_override(config_path, tmp_path / "hosts.txt", ["judge"])
+        _pool_source_override(
+            config_path, tmp_path / "hosts.txt", None, ["judge"]
+        )
+
+
+def test_cli_url_glob_targets_only_the_vllm_step(tmp_path: Path) -> None:
+    config_path = _write_mixed_config(tmp_path)
+
+    override = _pool_source_override(config_path, None, "pool_*/*.url", None)
+
+    assert override is not None
+    assert set(override) == {"write"}
+    assert "*" in override["write"]["url_glob"]
+    assert Path(override["write"]["url_glob"]).is_absolute()
+
+
+def test_cli_url_glob_absolute_pattern_is_kept_verbatim(
+    tmp_path: Path,
+) -> None:
+    # An already-absolute pattern must not be touched beyond expanduser: the
+    # wildcard has to survive so resolve_base_urls can still glob it later.
+    config_path = _write_mixed_config(tmp_path)
+    pattern = str(tmp_path / "pool_*" / "*.url")
+
+    override = _pool_source_override(config_path, None, pattern, None)
+
+    assert override is not None
+    assert override["write"]["url_glob"] == pattern
+
+
+def test_cli_hosts_file_and_url_glob_are_mutually_exclusive(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_mixed_config(tmp_path)
+    with pytest.raises(ValueError, match="both name the pool's servers"):
+        _pool_source_override(
+            config_path, tmp_path / "hosts.txt", "pool_*/*.url", None
+        )
 
 
 def test_cli_hosts_file_refuses_two_models_on_one_pool(tmp_path: Path) -> None:
@@ -1052,7 +1107,7 @@ def test_cli_hosts_file_refuses_two_models_on_one_pool(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="different models"):
-        _hosts_file_override(config_path, tmp_path / "hosts.txt", None)
+        _pool_source_override(config_path, tmp_path / "hosts.txt", None, None)
 
 
 def test_cli_steps_flag_runs_one_step(

@@ -468,6 +468,47 @@ def test_pool_watcher_stops_after_destroy(
     assert annotator.added == []
 
 
+def test_build_client_caps_the_wait_at_the_servers_it_found(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A pool directory that is still filling names fewer servers than
+    # `min_servers`; waiting for more than it names could never succeed.
+    (tmp_path / "pool_1").mkdir()
+    (tmp_path / "pool_1" / "0.url").write_text(
+        "http://w0:8000/v1\n", encoding="utf-8"
+    )
+    client = ClientConfig(
+        provider="vllm_online",
+        model="m",
+        url_glob="pool_*/*.url",
+        wait_for_servers=1,
+        pool=PoolConfig(servers=4, min_servers=3),
+    )
+    seen: dict[str, Any] = {}
+
+    class FakePooledClient:
+        def __init__(self, *, base_url: str, **kwargs: Any) -> None:
+            _ = kwargs
+            self.base_url = base_url
+
+    def fake_wait(
+        base_urls: list[str], timeout: float, min_servers: int = 1
+    ) -> list[str]:
+        seen["min_servers"] = min_servers
+        return base_urls
+
+    monkeypatch.setattr(config_mod, "wait_for_servers", fake_wait)
+    monkeypatch.setattr(
+        vllm_online_client_mod, "VLLMOnlineClient", FakePooledClient
+    )
+
+    clients = client.build_client(tmp_path)
+
+    assert isinstance(clients, list)
+    assert len(clients) == 1
+    assert seen["min_servers"] == 1
+
+
 def test_pool_watcher_keeps_polling_dynamic_discovery(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1071,7 +1112,7 @@ def test_describe_steps_reports_every_step() -> None:
                     "prompt": "x",
                     "client": {
                         "engine": {"tensor_parallel_size": 2},
-                        "pool": {"servers": 4},
+                        "pool": {"servers": 4, "min_servers": 2},
                     },
                 },
                 {
@@ -1095,11 +1136,15 @@ def test_describe_steps_reports_every_step() -> None:
         4,
         2,
     )
+    # A pool starts once this many of its servers are ready.
+    assert described[0]["min_servers"] == 2
     # The hosted step needs no accelerator, so it reports the neutral default.
     assert (described[1]["servers"], described[1]["gpus_per_vllm_server"]) == (
         1,
         1,
     )
+    # A step that never asked for a pool still reports the default minimum.
+    assert described[1]["min_servers"] == 1
 
 
 # --- dotted overrides --------------------------------------------------------

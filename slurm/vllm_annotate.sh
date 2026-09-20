@@ -15,8 +15,9 @@
 # The step decides what this job needs, which the submitter has already worked
 # out from the config with `llm-annotate --describe-steps`:
 #
-#   POOL_DIR set    a companion server array is starting up; wait for it to
-#                   publish its URLs, then annotate over the whole pool
+#   POOL_DIR set    a companion server array is starting up; wait for
+#                   MIN_SERVERS of it to publish their URLs, then annotate over
+#                   the pool, which keeps growing as the rest arrive
 #   POOL_DIR unset  nothing to wait for. Either the step calls a hosted API
 #                   (no accelerator at all) or it loads the model in-process,
 #                   in which case the submitter asked for GPUs on this job.
@@ -35,6 +36,10 @@ cd "$REPO_ROOT"
 : "${ANNOTATE_CONFIG:?Set ANNOTATE_CONFIG to a JSON/YAML pipeline config}"
 : "${STEP_NAME:?Set STEP_NAME to the step of that config to run}"
 : "${NUM_SERVERS:=1}"
+# How many of them have to be up before annotating starts. submit_pipeline.sh
+# passes the step's own `pool.min_servers`; a manual submission that only says
+# how large the pool is waits for all of it.
+: "${MIN_SERVERS:=${NUM_SERVERS}}"
 : "${POOL_WAIT:=3600}"
 
 echo "Starting on $(date)"
@@ -64,7 +69,7 @@ ANNOTATE_ARGS=(--steps "$STEP_NAME")
 
 # With a pool, wait for the servers to publish their URLs before starting.
 if [[ -n "${POOL_DIR:-}" ]]; then
-  echo "Pool: ${POOL_DIR} (waiting for ${NUM_SERVERS} server(s))"
+  echo "Pool: ${POOL_DIR} (starting at ${MIN_SERVERS} of ${NUM_SERVERS} server(s))"
 
   count_urls() {
     local files=("$POOL_DIR"/*.url)
@@ -73,9 +78,9 @@ if [[ -n "${POOL_DIR:-}" ]]; then
 
   deadline=$(( SECONDS + POOL_WAIT ))
   ready=$(count_urls)
-  while (( ready < NUM_SERVERS )); do
+  while (( ready < MIN_SERVERS )); do
     if (( SECONDS > deadline )); then
-      echo "Waited ${POOL_WAIT}s for ${NUM_SERVERS} server(s), ${ready} showed up."
+      echo "Waited ${POOL_WAIT}s for ${MIN_SERVERS} server(s), ${ready} showed up."
       break
     fi
     sleep 10
@@ -88,12 +93,13 @@ if [[ -n "${POOL_DIR:-}" ]]; then
     exit 1
   fi
 
-  HOSTS_FILE="${POOL_DIR}/hosts.txt"
-  cat "$POOL_DIR"/*.url > "$HOSTS_FILE"
-  echo "Annotating over ${ready} server(s):"
-  cat "$HOSTS_FILE"
+  echo "Annotating over ${ready} of ${NUM_SERVERS} server(s):"
+  cat "$POOL_DIR"/*.url
 
-  ANNOTATE_ARGS+=(--hosts-file "$HOSTS_FILE")
+  # The glob rather than a snapshot of it: the client re-reads the pool
+  # directory while it runs, so the servers still queued join this step as
+  # soon as they publish their URL.
+  ANNOTATE_ARGS+=(--url-glob "${POOL_DIR}/*.url")
 fi
 
 # Everything else lives in the config; these are the run-level overrides.

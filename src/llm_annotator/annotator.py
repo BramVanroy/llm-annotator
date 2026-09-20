@@ -2709,7 +2709,9 @@ class VLLMQueueAnnotator(Annotator):
         At most ``queue_size`` batches are in flight at any time and a new one
         is dispatched as soon as a finished batch has been handed to the
         caller, so memory stays bounded while every server stays busy until
-        the dataset is exhausted.
+        the dataset is exhausted. A server that joins the pool mid-run raises
+        ``queue_size``, and the next top-up dispatches the extra batches, so a
+        run that started on a partial pool grows into the full one.
 
         Args:
             prepared_dataset: The dataset still left to annotate.
@@ -2774,14 +2776,16 @@ class VLLMQueueAnnotator(Annotator):
             )
             return True
 
-        # `__post_init__` always resolves `queue_size` to a positive int.
-        queue_size = cast(int, self.queue_size)
+        def _fill_queue() -> None:
+            """Dispatch batches until the current queue size is reached."""
+            # `__post_init__` always resolves `queue_size` to a positive int,
+            # and a server that joins mid-run raises it, so it is read again
+            # on every top-up instead of once.
+            while len(pending) < cast(int, self.queue_size) and _submit_next():
+                pass
 
         try:
-            # pre-fill the queue to its maximum size
-            # running Futures are in `pending`
-            while len(pending) < queue_size and _submit_next():
-                pass
+            _fill_queue()
 
             # start retrieving first results and replacing the completed
             # jobs with new ones until the work is done
@@ -2791,7 +2795,7 @@ class VLLMQueueAnnotator(Annotator):
                     batch, results = future.result()
                     pbar.update(1)
                     yield batch, results
-                    _submit_next()
+                _fill_queue()
         finally:
             pbar.close()
             pool.shutdown(wait=False, cancel_futures=True)
