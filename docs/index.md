@@ -157,6 +157,49 @@ with Annotator(client=client, verbose=True) as anno:
 To force a fresh preparation even when local or Hub artifacts exist, pass
 `force_data_preparation=True` to `prepare_data` (or to `annotate_dataset`).
 
+### Errors and retries
+
+A client's `on_error` setting (`"raise"`, `"warn"` or `"ignore"`) decides what
+happens when a request fails. With `"warn"` or `"ignore"` the client returns a
+`Response` with `error` and `error_type` set instead of raising, and the
+annotator records those two fields on the sample and marks it invalid.
+
+An errored row is final once it is written: a run that resumes the same
+`output_dir` does not send it to the model again, so an error that the sample
+itself causes (a prompt longer than the model's context, for instance) is not
+repeated on every resume. Pass `retry_errors=True` to annotate every errored
+row again, or a list of `error_type` values to annotate only those. The
+selected rows are removed from the progress files before the run starts, so
+they are annotated like rows that never ran.
+
+```python
+ds = anno.run_annotation(
+    output_dir="outputs/imdb-sentiment",
+    prompt_template="Classify the sentiment: {text}",
+    prepared_dataset=prepared_dataset,
+    retry_errors=["ConnectError", "APITimeoutError"],
+)
+```
+
+The same option exists for a config-driven pipeline as `--retry-errors`, see
+[Command line](pipeline.md#command-line):
+
+```bash
+llm-annotate my-pipeline.yaml --retry-errors ConnectError APITimeoutError
+```
+
+When every sample of a batch errors, the backend is probably down. The rows
+of such a batch are held back and written once a later batch succeeds. After
+`max_consecutive_failed_batches` (default 10) such batches in a row, the run
+stops with `TooManyConsecutiveFailedBatchesError`. The rows that are held back
+at that point are never written, so the resumed run annotates them again. Set
+it to 0 to disable both the abort and the hold-back.
+
+Every run ends with a log line that says how many samples finished with an
+error (with a count per `error_type`, which are the names that `retry_errors`
+takes) and how many have invalid fields. The same counts are written to
+`<output_dir>/metadata/annotation_metadata.json`.
+
 ### Many vLLM servers at once
 
 `VLLMQueueAnnotator` spreads one workload over a pool of vLLM servers -- for
@@ -205,6 +248,12 @@ with VLLMQueueAnnotator(
 Because results are written per sample and keyed by `idx`, re-running the exact
 same call after a crash, a timeout or a preemption picks up where the previous
 attempt stopped.
+
+A server that fails a whole batch and then does not answer `/health` is
+removed from the pool, and its batch is sent to another server (no errored
+rows are written for it). The run stops only once no server is left. A
+config-driven run also re-admits a server that recovers, see
+[Many vLLM servers](pipeline.md#many-vllm-servers).
 
 A cluster job submitter needs nothing beyond the [config file](pipeline.md) and
 four CLI flags to drive this: `--describe-steps` to plan the allocation,
