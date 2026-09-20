@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -48,6 +49,17 @@ def _fake_bin(tmp_path: Path) -> Path:
     sleeper = bin_dir / "sleep"
     sleeper.write_text("#!/bin/bash\nexec /bin/sleep 0.2\n", encoding="utf-8")
     sleeper.chmod(0o755)
+
+    # `pool_alive` shells out to squeue; FAKE_SQUEUE_OUTPUT lets a test say
+    # what it reports for the array without a scheduler. Unset, it behaves
+    # like a live array so tests that never set SERVER_JOB_ID are unaffected
+    # (pool_alive returns early for them and never calls this at all).
+    squeue = bin_dir / "squeue"
+    squeue.write_text(
+        "#!/bin/bash\nprintf '%s' \"${FAKE_SQUEUE_OUTPUT-RUNNING}\"\n",
+        encoding="utf-8",
+    )
+    squeue.chmod(0o755)
 
     return bin_dir
 
@@ -169,6 +181,30 @@ def test_annotate_fails_when_no_server_registers(tmp_path: Path) -> None:
     assert recorded == []
 
 
+def test_annotate_stops_waiting_when_the_server_array_is_gone(
+    tmp_path: Path,
+) -> None:
+    """An empty pool stops waiting once squeue reports no array left."""
+    pool_dir = tmp_path / "pool"
+    _publish(pool_dir, 1)
+
+    started = time.monotonic()
+    process, recorded = _run_annotate(
+        tmp_path,
+        pool_dir,
+        MIN_SERVERS="3",
+        SERVER_JOB_ID="12345",
+        POOL_WAIT="600",
+        FAKE_SQUEUE_OUTPUT="",
+    )
+    elapsed = time.monotonic() - started
+
+    assert process.returncode == 0, process.stderr
+    assert elapsed < 30, "should stop well short of POOL_WAIT, not sit it out"
+    assert "has no element left in the queue" in process.stdout
+    assert "--url-glob" in recorded
+
+
 def _write_pool_config(tmp_path: Path, pool: dict[str, int]) -> Path:
     """Write a one-step pooled-vLLM config and return its path."""
     config_path = tmp_path / "pipeline.yaml"
@@ -228,3 +264,43 @@ def test_submit_pipeline_exports_min_servers(tmp_path: Path) -> None:
     assert process.returncode == 0, process.stderr
     assert "client starts at 2 ready server(s)" in process.stdout
     assert "NUM_SERVERS=4,MIN_SERVERS=2" in process.stderr
+
+
+@pytest.mark.skipif(
+    not (VENV_PATH / "bin" / "llm-annotate").exists(),
+    reason="the submitter reads the config through the installed CLI",
+)
+def test_submit_pipeline_pool_dependency_is_or_joined(
+    tmp_path: Path,
+) -> None:
+    """The client is released by any one server, not the whole array."""
+    config_path = _write_pool_config(
+        tmp_path, {"servers": 4, "min_servers": 2}
+    )
+
+    process = subprocess.run(
+        [
+            "/bin/bash",
+            str(SLURM_DIR / "submit_pipeline.sh"),
+            "--dry-run",
+            str(config_path),
+        ],
+        env={
+            "PATH": os.environ["PATH"],
+            "REPO_ROOT": str(REPO_ROOT),
+            "CLUSTER_ENV": str(tmp_path / "absent.env"),
+            "LOG_DIR": str(tmp_path / "logs"),
+            "VENV_PATH": str(VENV_PATH),
+            "HOME": os.environ.get("HOME", str(tmp_path)),
+        },
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+
+    assert process.returncode == 0, process.stderr
+    assert (
+        "--dependency=after:<job-id>_1?after:<job-id>_2?"
+        "after:<job-id>_3?after:<job-id>_4" in process.stderr
+    )
+    assert "--kill-on-invalid-dep=yes" in process.stderr

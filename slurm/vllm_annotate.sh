@@ -17,7 +17,10 @@
 #
 #   POOL_DIR set    a companion server array is starting up; wait for
 #                   MIN_SERVERS of it to publish their URLs, then annotate over
-#                   the pool, which keeps growing as the rest arrive
+#                   the pool, which keeps growing as the rest arrive. This job
+#                   was held in the queue until one of those servers began, so
+#                   what is left to wait for is a model load, not a GPU
+#                   allocation
 #   POOL_DIR unset  nothing to wait for. Either the step calls a hosted API
 #                   (no accelerator at all) or it loads the model in-process,
 #                   in which case the submitter asked for GPUs on this job.
@@ -40,7 +43,12 @@ cd "$REPO_ROOT"
 # passes the step's own `pool.min_servers`; a manual submission that only says
 # how large the pool is waits for all of it.
 : "${MIN_SERVERS:=${NUM_SERVERS}}"
-: "${POOL_WAIT:=3600}"
+# Matches READY_TIMEOUT, so a client cannot give up on a server before the
+# server gives up on itself. Submitted through submit_pipeline.sh this job only
+# starts once a server of its own pool has, so the wait is a model load rather
+# than an allocation; raise it for a manual run against a pool that is still
+# queued.
+: "${POOL_WAIT:=1800}"
 
 echo "Starting on $(date)"
 echo "Host: $(hostname)"
@@ -76,11 +84,30 @@ if [[ -n "${POOL_DIR:-}" ]]; then
     [[ -e "${files[0]}" ]] && echo "${#files[@]}" || echo 0
   }
 
+  # Slurm counts a cancelled job as having satisfied an `after:` dependency, so
+  # a server array that was killed off (its own dependency failed, or someone
+  # scancelled it) releases this client rather than holding it back. Sitting
+  # out the whole POOL_WAIT for servers that are not coming only delays the
+  # error, so stop as soon as the array has no element left in the queue. A
+  # squeue that fails to answer says nothing about the array, so that counts
+  # as alive.
+  pool_alive() {
+    [[ -n "${SERVER_JOB_ID:-}" ]] || return 0
+    local elements
+    elements=$(squeue -j "$SERVER_JOB_ID" -h -o '%T' 2> /dev/null) || return 0
+    [[ -n "$elements" ]]
+  }
+
   deadline=$(( SECONDS + POOL_WAIT ))
   ready=$(count_urls)
   while (( ready < MIN_SERVERS )); do
     if (( SECONDS > deadline )); then
       echo "Waited ${POOL_WAIT}s for ${MIN_SERVERS} server(s), ${ready} showed up."
+      break
+    fi
+    if ! pool_alive; then
+      echo "Server job ${SERVER_JOB_ID} has no element left in the queue," \
+        "so ${ready} server(s) is all this step is going to get."
       break
     fi
     sleep 10

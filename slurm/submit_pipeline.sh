@@ -277,18 +277,36 @@ while IFS= read -r step_json; do
         echo "  client starts at ${MIN_SERVERS} ready server(s); the rest join the run as they arrive"
       fi
 
-      # No Slurm dependency on SERVER_JOB: for a job array, `after:<jobid>` is
-      # only satisfied once every element has started, not the first one, so
-      # gating the client on it can leave an already-ready server sitting
-      # idle behind pool-mates that are still queued (e.g. behind a per-user
-      # GPU quota) -- burning that server's own time limit before the client
-      # ever gets to use it. The client is submitted on the same dependency
-      # as the servers instead, and waits for them itself via POOL_WAIT.
+      # One `after:` per array element, or-joined, so the client is released
+      # as soon as the *first* server has begun. `after:<array-id>` as a whole
+      # is only satisfied once every element has started, which leaves a ready
+      # server idle behind pool-mates that are still queued (a per-user GPU
+      # quota is enough to do that), burning that server's own SERVER_TIME.
+      # Waiting in the queue rather than on the compute node also means
+      # CLIENT_TIME starts counting when there is something to annotate
+      # against: a CPU partition schedules in minutes and a GPU partition can
+      # take days. What is left after the dependency is the model load and the
+      # rest of the pool arriving, which is the client's own POOL_WAIT.
+      CLIENT_DEP=""
+      for (( element = 1; element <= SERVERS; element++ )); do
+        CLIENT_DEP="${CLIENT_DEP:+${CLIENT_DEP}?}after:${SERVER_JOB}_${element}"
+      done
+
+      # This replaces the step's own dependency instead of adding to it, since
+      # Slurm reads one separator per expression (`,` for and, `?` for or) and
+      # the two cannot be mixed. Nothing is lost: a server cannot start before
+      # the previous step has succeeded, so the client inherits that through
+      # the array it waits on. A cancelled job also satisfies `after:`, so an
+      # array that Slurm kills off releases the client instead of stranding
+      # it, and the client recognises that case rather than sitting out its
+      # POOL_WAIT; --kill-on-invalid-dep covers what Slurm flags as
+      # unsatisfiable outright.
       CLIENT_JOB=$(submit \
         "${CLIENT_FLAGS[@]}" \
         "${CPU_FLAGS[@]}" \
         "${CLIENT_SBATCH_ARGS[@]}" \
-        "${DEP[@]}" \
+        --dependency="$CLIENT_DEP" \
+        --kill-on-invalid-dep=yes \
         --export="${STEP_EXPORT},POOL_DIR=${POOL_DIR},NUM_SERVERS=${SERVERS},MIN_SERVERS=${MIN_SERVERS},SERVER_JOB_ID=${SERVER_JOB}" \
         slurm/vllm_annotate.sh)
       ;;
