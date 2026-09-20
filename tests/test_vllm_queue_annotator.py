@@ -117,6 +117,111 @@ class FakeVLLMOnlineClient(Client[ProviderRuntimeOptions]):
         self.destroy_called += 1
 
 
+def test_add_client_after_destroy_releases_client() -> None:
+    existing = FakeVLLMOnlineClient()
+    late = FakeVLLMOnlineClient()
+    annotator = VLLMQueueAnnotator(clients=[existing], max_workers=2)
+
+    annotator.destroy()
+    annotator.add_client(late)
+
+    assert annotator.is_shutting_down
+    assert annotator.clients == [existing]
+    assert late.destroy_called == 1
+
+
+def test_add_client_rejects_duplicate_base_url() -> None:
+    existing = FakeVLLMOnlineClient(base_url="http://worker")
+    duplicate = FakeVLLMOnlineClient(base_url="http://worker")
+    annotator = VLLMQueueAnnotator(clients=[existing], max_workers=2)
+
+    annotator.add_client(duplicate)
+
+    assert annotator.clients == [existing]
+    assert duplicate.destroy_called == 1
+
+
+def test_add_client_for_base_url_skips_duplicate_construction() -> None:
+    existing = FakeVLLMOnlineClient(base_url="http://worker")
+    annotator = VLLMQueueAnnotator(clients=[existing], max_workers=2)
+    built: list[str] = []
+
+    def factory(base_url: str) -> FakeVLLMOnlineClient:
+        built.append(base_url)
+        return FakeVLLMOnlineClient(base_url=base_url)
+
+    annotator.add_client_for_base_url("http://worker", factory)
+
+    assert annotator.clients == [existing]
+    assert built == []
+
+
+def test_add_client_for_base_url_destroys_client_if_shutdown_starts() -> None:
+    existing = FakeVLLMOnlineClient(base_url="http://worker")
+    annotator = VLLMQueueAnnotator(clients=[existing], max_workers=2)
+    started = threading.Event()
+    release = threading.Event()
+    built: list[FakeVLLMOnlineClient] = []
+
+    def factory(base_url: str) -> FakeVLLMOnlineClient:
+        started.set()
+        assert release.wait(5)
+        client = FakeVLLMOnlineClient(base_url=base_url)
+        built.append(client)
+        return client
+
+    thread = threading.Thread(
+        target=annotator.add_client_for_base_url,
+        args=("http://late-worker", factory),
+    )
+    thread.start()
+    assert started.wait(5)
+
+    annotator._shutdown_started.set()
+    release.set()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert annotator.clients == [existing]
+    assert [client.destroy_called for client in built] == [1]
+
+
+def test_add_client_for_base_url_rechecks_requested_url_after_construction() -> (
+    None
+):
+    existing = FakeVLLMOnlineClient(base_url="http://worker")
+    annotator = VLLMQueueAnnotator(clients=[existing], max_workers=2)
+    started = threading.Event()
+    release = threading.Event()
+    built: list[FakeVLLMOnlineClient] = []
+
+    def factory(base_url: str) -> FakeVLLMOnlineClient:
+        _ = base_url
+        started.set()
+        assert release.wait(5)
+        client = FakeVLLMOnlineClient(base_url="http://different-worker")
+        built.append(client)
+        return client
+
+    thread = threading.Thread(
+        target=annotator.add_client_for_base_url,
+        args=("http://late-worker", factory),
+    )
+    thread.start()
+    assert started.wait(5)
+
+    annotator.add_client(FakeVLLMOnlineClient(base_url="http://late-worker"))
+    release.set()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert [getattr(client, "base_url") for client in annotator.clients] == [
+        "http://worker",
+        "http://late-worker",
+    ]
+    assert [client.destroy_called for client in built] == [1]
+
+
 def _make_dataset(
     n_samples: int, *, task_prefix: str = "", idx_column: str = "idx"
 ) -> Dataset:
@@ -166,12 +271,8 @@ def test_queue_size_defaults_and_floor() -> None:
     # and never drops below the number of slots (which would idle servers).
     clients = [FakeVLLMOnlineClient(base_url=f"http://w{i}") for i in range(3)]
     assert VLLMQueueAnnotator(clients=clients).queue_size == 48
-    assert (
-        VLLMQueueAnnotator(clients=clients, queue_size=1).queue_size == 12
-    )
-    assert (
-        VLLMQueueAnnotator(clients=clients, queue_size=10).queue_size == 12
-    )
+    assert VLLMQueueAnnotator(clients=clients, queue_size=1).queue_size == 12
+    assert VLLMQueueAnnotator(clients=clients, queue_size=10).queue_size == 12
 
     with pytest.raises(ValueError, match="positive integer"):
         VLLMQueueAnnotator(clients=clients, queue_size=0)
@@ -197,6 +298,61 @@ def test_per_client_concurrency_defaults_and_validates() -> None:
         VLLMQueueAnnotator(
             clients=clients, max_concurrent_batches_per_client=0
         )
+
+
+def test_per_client_concurrency_cannot_change_mid_run() -> None:
+    barrier = threading.Barrier(2)
+    client = FakeVLLMOnlineClient(barrier=barrier)
+    annotator = VLLMQueueAnnotator(clients=[client])
+    batch = {"messages": [[{"role": "user", "content": "hi"}]], "idx": [0]}
+
+    worker = threading.Thread(
+        target=annotator._annotate_batch_on_free_client,
+        args=(batch,),
+        kwargs={"options": None},
+        daemon=True,
+    )
+    worker.start()
+    for _ in range(100):
+        if client.n_batches:
+            break
+        threading.Event().wait(0.01)
+    assert client.n_batches == 1
+
+    with pytest.raises(RuntimeError, match="between annotation runs"):
+        annotator.set_max_concurrent_batches_per_client(2)
+
+    barrier.wait(timeout=1)
+    worker.join(timeout=1)
+    assert annotator.max_concurrent_batches_per_client == 4
+
+
+def test_checked_out_client_is_not_requeued_after_shutdown() -> None:
+    barrier = threading.Barrier(2)
+    client = FakeVLLMOnlineClient(barrier=barrier)
+    annotator = VLLMQueueAnnotator(
+        clients=[client], max_concurrent_batches_per_client=1
+    )
+    batch = {"messages": [[{"role": "user", "content": "hi"}]], "idx": [0]}
+
+    worker = threading.Thread(
+        target=annotator._annotate_batch_on_free_client,
+        args=(batch,),
+        kwargs={"options": None},
+        daemon=True,
+    )
+    worker.start()
+    for _ in range(100):
+        if client.n_batches:
+            break
+        threading.Event().wait(0.01)
+    assert client.n_batches == 1
+
+    annotator.destroy()
+    barrier.wait(timeout=1)
+    worker.join(timeout=1)
+
+    assert annotator._client_pool.qsize() == 0
 
 
 def test_set_queue_size_resolves_like_the_constructor() -> None:
@@ -302,16 +458,157 @@ def test_clients_run_in_parallel(tmp_path: Path) -> None:
         FakeVLLMOnlineClient(base_url=f"http://w{i}", barrier=barrier)
         for i in range(n_clients)
     ]
-    annotator = VLLMQueueAnnotator(clients=clients, batch_size=2)
+    annotator = VLLMQueueAnnotator(
+        clients=clients,
+        batch_size=2,
+        max_concurrent_batches_per_client=1,
+    )
 
     result = annotator.run_annotation(
         output_dir=tmp_path / "out",
-        prepared_dataset=_make_dataset(16),
+        prepared_dataset=_make_dataset(8),
         keep_idx_column=True,
     )
 
-    assert len(result) == 16
-    assert all(client.n_batches > 0 for client in clients)
+    assert len(result) == 8
+    assert all(client.n_batches == 1 for client in clients)
+
+
+def test_late_client_is_used_by_waiting_worker(tmp_path: Path) -> None:
+    barrier = threading.Barrier(2)
+    first = FakeVLLMOnlineClient(base_url="http://w0", barrier=barrier)
+    second = FakeVLLMOnlineClient(base_url="http://w1", barrier=barrier)
+    annotator = VLLMQueueAnnotator(
+        clients=[first],
+        batch_size=1,
+        max_concurrent_batches_per_client=1,
+        max_workers=2,
+    )
+    result: dict[str, Any] = {}
+
+    thread = threading.Thread(
+        target=lambda: result.setdefault(
+            "dataset",
+            annotator.run_annotation(
+                output_dir=tmp_path / "out",
+                prepared_dataset=_make_dataset(2),
+                keep_idx_column=True,
+            ),
+        )
+    )
+    thread.start()
+    for _ in range(100):
+        if first.n_batches:
+            break
+        threading.Event().wait(0.01)
+    annotator.add_client(second)
+    thread.join(timeout=10)
+
+    assert not thread.is_alive()
+    assert len(result["dataset"]) == 2
+    assert first.n_batches == second.n_batches == 1
+    assert annotator.queue_size == 8
+
+
+def test_late_client_after_destroy_is_cleaned_up() -> None:
+    first = FakeVLLMOnlineClient(base_url="http://w0")
+    late = FakeVLLMOnlineClient(base_url="http://w1")
+    annotator = VLLMQueueAnnotator(clients=[first], batch_size=1)
+
+    annotator.destroy()
+    annotator.add_client(late)
+
+    assert [getattr(client, "base_url") for client in annotator.clients] == [
+        "http://w0"
+    ]
+    assert late.destroy_called == 1
+
+
+def test_late_client_after_shutdown_start_is_cleaned_up() -> None:
+    first = FakeVLLMOnlineClient(base_url="http://w0")
+    late = FakeVLLMOnlineClient(base_url="http://w1")
+    annotator = VLLMQueueAnnotator(clients=[first], batch_size=1)
+
+    annotator._shutdown_started.set()
+    annotator.add_client(late)
+
+    assert [getattr(client, "base_url") for client in annotator.clients] == [
+        "http://w0"
+    ]
+    assert late.destroy_called == 1
+
+
+def test_shutdown_started_prevents_new_batch_checkout() -> None:
+    client = FakeVLLMOnlineClient(base_url="http://w0")
+    annotator = VLLMQueueAnnotator(
+        clients=[client], batch_size=1, max_concurrent_batches_per_client=1
+    )
+    annotator._shutdown_started.set()
+    batch = next(_make_dataset(1).iter(1))
+
+    with pytest.raises(RuntimeError, match="Cannot start a new batch request"):
+        annotator._annotate_batch_on_free_client(
+            batch,
+            options=None,
+            gen_kwargs=None,
+            task_prefix="",
+            validate_fn=None,
+            postprocess_fn=None,
+            num_retries_invalid=5,
+        )
+
+    assert client.n_batches == 0
+
+
+def test_checked_out_client_is_not_requeued_after_destroy() -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingClient(FakeVLLMOnlineClient):
+        def batch_generate(
+            self,
+            *,
+            messages: list[list[dict[str, str]]],
+            options: ProviderRuntimeOptions | None = None,
+            gen_kwargs: dict[str, Any] | None = None,
+        ) -> list[Response]:
+            started.set()
+            assert release.wait(5)
+            return super().batch_generate(
+                messages=messages, options=options, gen_kwargs=gen_kwargs
+            )
+
+    client = BlockingClient(base_url="http://w0")
+    annotator = VLLMQueueAnnotator(
+        clients=[client], batch_size=1, max_concurrent_batches_per_client=1
+    )
+    batch = next(_make_dataset(1).iter(1))
+    completed: dict[str, Any] = {}
+
+    thread = threading.Thread(
+        target=lambda: completed.setdefault(
+            "result",
+            annotator._annotate_batch_on_free_client(
+                batch,
+                options=None,
+                gen_kwargs=None,
+                task_prefix="",
+                validate_fn=None,
+                postprocess_fn=None,
+                num_retries_invalid=5,
+            ),
+        )
+    )
+    thread.start()
+    assert started.wait(5)
+
+    annotator.destroy()
+    release.set()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert "result" in completed
+    assert annotator._client_pool.qsize() == 0
 
 
 def test_multiple_batches_per_client_run_in_parallel(tmp_path: Path) -> None:

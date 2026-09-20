@@ -1,20 +1,27 @@
 from __future__ import annotations
 
 import json
+import logging
+import threading
+import urllib.error
 from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
+import llm_annotator.config as config_mod
+from llm_annotator.clients import vllm_online_client as vllm_online_client_mod
 from llm_annotator.config import (
     ClientConfig,
     DatasetConfig,
     EngineConfig,
     PipelineConfig,
+    PoolConfig,
     StepConfig,
     load_config_file,
     load_pipeline_config,
+    wait_for_servers,
 )
 
 
@@ -244,6 +251,58 @@ def test_is_pool_flag() -> None:
     ).is_pool()
 
 
+def test_wait_for_servers_returns_the_minimum_ready_members(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ready_urls = {"http://a:8000/v1", "http://b:8000/v1"}
+    monkeypatch.setattr(
+        "llm_annotator.config._server_is_ready",
+        lambda url, timeout: url in ready_urls,
+    )
+
+    assert wait_for_servers(
+        ["http://a:8000/v1", "http://b:8000/v1", "http://c:8000/v1"],
+        timeout=1,
+        min_servers=2,
+    ) == ["http://a:8000/v1", "http://b:8000/v1"]
+
+
+def test_wait_for_servers_validates_against_unique_urls() -> None:
+    with pytest.raises(ValueError, match="between 1 and 2"):
+        wait_for_servers(
+            ["http://a:8000/v1", "http://a:8000/v1", "http://b:8000/v1"],
+            timeout=1,
+            min_servers=3,
+        )
+
+
+def test_server_is_ready_logs_the_probe_error(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def fail(*args: Any, **kwargs: Any) -> None:
+        _ = args
+        _ = kwargs
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(config_mod.urllib.request, "urlopen", fail)
+    with caplog.at_level(logging.DEBUG, logger="llm_annotator.config"):
+        assert not config_mod._server_is_ready("http://a:8000/v1", 1)
+
+    assert any(
+        "connection refused" in record.message for record in caplog.records
+    )
+
+
+def test_pool_min_servers_cannot_exceed_servers() -> None:
+    with pytest.raises(ValueError, match="cannot exceed"):
+        ClientConfig(
+            provider="vllm_online",
+            model="m",
+            pool=PoolConfig(servers=2, min_servers=3),
+        )
+
+
 def test_resolve_base_urls_from_hosts_file(tmp_path: Path) -> None:
     hosts = tmp_path / "hosts.txt"
     hosts.write_text(
@@ -302,6 +361,183 @@ def test_resolve_base_urls_reports_empty_glob(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="matched no files"):
         client.resolve_base_urls(tmp_path)
+
+
+def test_build_annotator_counts_unique_pool_members(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client = ClientConfig(
+        provider="vllm_online",
+        model="m",
+        base_urls=[
+            "http://a:8000/v1",
+            "http://a:8000/v1",
+            "http://b:8000/v1",
+        ],
+    )
+    seen: dict[str, Any] = {}
+
+    def fake_build_client(self: ClientConfig, root: Path) -> list[str]:
+        _ = self
+        _ = root
+        return ["a", "b"]
+
+    class FakeAnnotator:
+        def __init__(self, **kwargs: Any) -> None:
+            seen.update(kwargs)
+            self.max_workers = kwargs["max_workers"]
+
+    monkeypatch.setattr(ClientConfig, "build_client", fake_build_client)
+    monkeypatch.setattr(config_mod, "VLLMQueueAnnotator", FakeAnnotator)
+    monkeypatch.setattr(
+        ClientConfig, "_watch_pool", lambda self, root, annotator: None
+    )
+
+    annotator = client.build_annotator(tmp_path)
+
+    assert isinstance(annotator, FakeAnnotator)
+    assert seen["max_workers"] == 8
+
+
+def test_pool_watcher_stops_after_destroy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client = ClientConfig(
+        provider="vllm_online",
+        model="m",
+        base_urls=["http://w0:8000/v1", "http://w1:8000/v1"],
+    )
+    entered = threading.Event()
+    ready_check_finished = threading.Event()
+    released = threading.Event()
+
+    class FakeAnnotator:
+        def __init__(self) -> None:
+            self.max_workers = 2
+            self.clients = [
+                type("ClientRef", (), {"base_url": "http://w0:8000/v1"})()
+            ]
+            self.added: list[Any] = []
+            self._closed = threading.Event()
+
+        @property
+        def is_shutting_down(self) -> bool:
+            return self._closed.is_set()
+
+        def wait_for_shutdown(self, timeout: float) -> bool:
+            return self._closed.wait(timeout)
+
+        def client_count(self) -> int:
+            return len(self.clients)
+
+        def client_base_urls(self) -> set[str]:
+            return {
+                str(getattr(client, "base_url")) for client in self.clients
+            }
+
+        def add_client(self, client: Any) -> None:
+            self.added.append(client)
+
+        def destroy(self) -> None:
+            self._closed.set()
+
+    def fake_ready(url: str, timeout: float) -> bool:
+        _ = url
+        _ = timeout
+        entered.set()
+        try:
+            released.wait(5)
+            return True
+        finally:
+            ready_check_finished.set()
+
+    monkeypatch.setattr(config_mod, "_server_is_ready", fake_ready)
+    monkeypatch.setattr(
+        ClientConfig,
+        "resolve_base_urls",
+        lambda self, root: ["http://w1:8000/v1"],
+    )
+    annotator = FakeAnnotator()
+
+    client._watch_pool(tmp_path, annotator)  # type: ignore[arg-type]
+    assert entered.wait(5)
+    annotator.destroy()
+    released.set()
+    assert ready_check_finished.wait(5)
+
+    assert annotator.added == []
+
+
+def test_pool_watcher_keeps_polling_dynamic_discovery(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client = ClientConfig(
+        provider="vllm_online", model="m", url_glob="pool_*/*.url"
+    )
+    added = threading.Event()
+    resolve_calls = 0
+
+    class FakeAnnotator:
+        def __init__(self) -> None:
+            self.clients = [
+                type("ClientRef", (), {"base_url": "http://w0:8000/v1"})()
+            ]
+            self.added: list[Any] = []
+            self._closed = threading.Event()
+
+        @property
+        def is_shutting_down(self) -> bool:
+            return self._closed.is_set()
+
+        def wait_for_shutdown(self, timeout: float) -> bool:
+            _ = timeout
+            return self._closed.wait(0.01)
+
+        def client_count(self) -> int:
+            return len(self.clients)
+
+        def client_base_urls(self) -> set[str]:
+            return {str(client.base_url) for client in self.clients}
+
+        def add_client_for_base_url(
+            self, base_url: str, client_factory: Any
+        ) -> None:
+            discovered_client = client_factory(base_url)
+            self.clients.append(discovered_client)
+            self.added.append(discovered_client)
+            added.set()
+            self._closed.set()
+
+    class FakeDiscoveredClient:
+        def __init__(self, *, base_url: str, **kwargs: Any) -> None:
+            _ = kwargs
+            self.base_url = base_url
+
+    def fake_resolve(self: ClientConfig, root: Path) -> list[str]:
+        _ = self
+        _ = root
+        nonlocal resolve_calls
+        resolve_calls += 1
+        if resolve_calls == 1:
+            return ["http://w0:8000/v1"]
+        return ["http://w0:8000/v1", "http://w1:8000/v1"]
+
+    monkeypatch.setattr(
+        config_mod, "_server_is_ready", lambda url, timeout: True
+    )
+    monkeypatch.setattr(ClientConfig, "resolve_base_urls", fake_resolve)
+    monkeypatch.setattr(
+        vllm_online_client_mod, "VLLMOnlineClient", FakeDiscoveredClient
+    )
+    annotator = FakeAnnotator()
+
+    client._watch_pool(tmp_path, annotator)  # type: ignore[arg-type]
+
+    assert added.wait(5)
+    assert resolve_calls >= 2
+    assert [added_client.base_url for added_client in annotator.added] == [
+        "http://w1:8000/v1"
+    ]
 
 
 # --- step validation ---------------------------------------------------------

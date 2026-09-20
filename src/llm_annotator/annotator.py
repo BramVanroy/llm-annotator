@@ -16,7 +16,8 @@ from functools import wraps
 from math import ceil
 from os import cpu_count
 from pathlib import Path
-from queue import SimpleQueue
+from queue import Empty, SimpleQueue
+from threading import Event, Lock
 from typing import (
     Any,
     Callable,
@@ -2014,6 +2015,10 @@ class VLLMQueueAnnotator(Annotator):
         max_concurrent_batches_per_client: Maximum number of simultaneous
             batch requests sent to each server. This is independent of
             ``batch_size``. Defaults to four for high throughput.
+        max_workers: Maximum worker threads used for batch annotation. It can
+            exceed the initially available request slots when additional servers
+            are expected to join, allowing workers to wait for and immediately
+            use those late-ready servers.
         batch_size: Maximum number of samples sent to a worker in one request.
         num_proc: Number of processes for dataset preprocessing.
         verbose: Whether to print progress information.
@@ -2042,11 +2047,17 @@ class VLLMQueueAnnotator(Annotator):
 
     clients: Sequence[Client[Any]]
     queue_size: int | None = None
+    max_workers: int | None = None
     max_concurrent_batches_per_client: int = 4
     # Required in the base class but set to init=False here
     # since we derive it from the first client in the pool
     client: Client = field(init=False, repr=False)
     _client_pool: SimpleQueue[Client[Any]] = field(init=False, repr=False)
+    _requested_queue_size: int | None = field(init=False, repr=False)
+    _shutdown_started: Event = field(init=False, repr=False)
+    _destroyed: Event = field(init=False, repr=False)
+    _clients_lock: Lock = field(init=False, repr=False)
+    _checked_out_clients: int = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         """Validate the pool, derive the defaults, and fill the client queue.
@@ -2086,14 +2097,18 @@ class VLLMQueueAnnotator(Annotator):
                 self.max_concurrent_batches_per_client
             )
         )
+        self.max_workers = max(self._max_workers, self.max_workers or 0)
+        self._requested_queue_size = self.queue_size
         self.queue_size: int = self._resolve_queue_size(self.queue_size)
 
         # Load balancing: a batch is only dispatched once a client is free, so
         # a slow server never gets a backlog while another one idles.
         self._client_pool = SimpleQueue()
-        for client in self.clients:
-            for _ in range(self.max_concurrent_batches_per_client):
-                self._client_pool.put(client)
+        self._shutdown_started = Event()
+        self._destroyed = Event()
+        self._clients_lock = Lock()
+        self._checked_out_clients = 0
+        self._rebuild_client_pool()
 
     @property
     def _max_workers(self) -> int:
@@ -2158,7 +2173,92 @@ class VLLMQueueAnnotator(Annotator):
         Raises:
             ValueError: If ``queue_size`` is given but not positive.
         """
+        self._requested_queue_size = queue_size
         self.queue_size = self._resolve_queue_size(queue_size)
+
+    def add_client(self, client: Client[Any]) -> None:
+        """Add a vLLM server that became ready after annotation started.
+
+        Args:
+            client: Ready vLLM server client to make available to workers.
+
+        Raises:
+            TypeError: If ``client`` is not a vLLM server client.
+        """
+        with self._clients_lock:
+            self._add_client_locked(client)
+
+    def add_client_for_base_url(
+        self,
+        base_url: str,
+        client_factory: Callable[[str], Client[Any]],
+    ) -> None:
+        """Construct and add a late-ready server under the pool lock."""
+        with self._clients_lock:
+            if (
+                self._shutdown_started.is_set()
+                or self._destroyed.is_set()
+                or self._has_client_base_url_locked(base_url)
+            ):
+                return
+        client = client_factory(base_url)
+        with self._clients_lock:
+            if (
+                self._shutdown_started.is_set()
+                or self._destroyed.is_set()
+                or self._has_client_base_url_locked(base_url)
+            ):
+                client.destroy()
+                return
+            self._add_client_locked(client)
+
+    def _has_client_base_url_locked(self, base_url: object) -> bool:
+        return base_url is not None and any(
+            getattr(existing, "base_url", None) == base_url
+            for existing in self.clients
+        )
+
+    def _add_client_locked(self, client: Client[Any]) -> None:
+        if getattr(client, "provider_type", None) != Provider.VLLM_ONLINE:
+            raise TypeError(
+                "VLLMQueueAnnotator only supports vLLM server clients"
+                " (provider 'vllm_online'), got"
+                f" '{type(client).__name__}'."
+            )
+        if self._shutdown_started.is_set() or self._destroyed.is_set():
+            client.destroy()
+            return
+        if self._has_client_base_url_locked(getattr(client, "base_url", None)):
+            client.destroy()
+            return
+        cast(list[Client[Any]], self.clients).append(client)
+        self.max_workers = max(self.max_workers or 0, self._max_workers)
+        for _ in range(self.max_concurrent_batches_per_client):
+            self._client_pool.put(client)
+        self.set_queue_size(self._requested_queue_size)
+
+    @property
+    def is_shutting_down(self) -> bool:
+        """Whether the annotator has begun releasing its clients."""
+        return self._shutdown_started.is_set()
+
+    def wait_for_shutdown(self, timeout: float) -> bool:
+        """Block until the pool is shutting down or the timeout elapses."""
+        return self._shutdown_started.wait(timeout)
+
+    def client_count(self) -> int:
+        """Return the current number of pool members."""
+        with self._clients_lock:
+            return len(self.clients)
+
+    def client_base_urls(self) -> set[str]:
+        """Return the base URLs currently registered in the pool."""
+        with self._clients_lock:
+            return {
+                str(base_url)
+                for client in self.clients
+                if (base_url := getattr(client, "base_url", None)) is not None
+            }
 
     def set_max_concurrent_batches_per_client(
         self, max_concurrent_batches_per_client: int
@@ -2174,16 +2274,33 @@ class VLLMQueueAnnotator(Annotator):
 
         Raises:
             ValueError: If the requested limit is not positive.
+            RuntimeError: If called while annotation is in progress.
         """
-        self.max_concurrent_batches_per_client = (
-            self._resolve_max_concurrent_batches_per_client(
-                max_concurrent_batches_per_client
+        with self._clients_lock:
+            total_slots = (
+                len(self.clients) * self.max_concurrent_batches_per_client
             )
-        )
-        self.queue_size = self._resolve_queue_size(self.queue_size)
+            if (
+                self._checked_out_clients
+                or self._client_pool.qsize() != total_slots
+            ):
+                raise RuntimeError(
+                    "'max_concurrent_batches_per_client' can only be changed"
+                    " between annotation runs."
+                )
+            self.max_concurrent_batches_per_client = (
+                self._resolve_max_concurrent_batches_per_client(
+                    max_concurrent_batches_per_client
+                )
+            )
+            self.queue_size = self._resolve_queue_size(self.queue_size)
+            self._rebuild_client_pool()
+
+    def _rebuild_client_pool(self) -> None:
+        """Recreate the available-client queue in round-robin order."""
         self._client_pool = SimpleQueue()
-        for client in self.clients:
-            for _ in range(self.max_concurrent_batches_per_client):
+        for _ in range(self.max_concurrent_batches_per_client):
+            for client in self.clients:
                 self._client_pool.put(client)
 
     def destroy(self) -> None:
@@ -2199,8 +2316,12 @@ class VLLMQueueAnnotator(Annotator):
         Raises:
             BaseException: The first error raised by a client, if any.
         """
+        self._shutdown_started.set()
+        with self._clients_lock:
+            self._destroyed.set()
+            clients = list(self.clients)
         first_error: BaseException | None = None
-        for client in self.clients:
+        for client in clients:
             try:
                 client.destroy()
             except BaseException as exc:  # noqa: BLE001 - re-raised below
@@ -2254,13 +2375,31 @@ class VLLMQueueAnnotator(Annotator):
         Returns:
             The batch together with one result per sample, in order.
         """
-        client = self._client_pool.get()
+        while True:
+            if self._shutdown_started.is_set():
+                raise RuntimeError(
+                    "Cannot start a new batch request after shutdown begins."
+                )
+            try:
+                client = self._client_pool.get(timeout=1)
+                break
+            except Empty:
+                continue
+        with self._clients_lock:
+            if self._shutdown_started.is_set():
+                raise RuntimeError(
+                    "Cannot start a new batch request after shutdown begins."
+                )
+            self._checked_out_clients += 1
         try:
             results = self._annotate_batch(
                 batch=batch, client=client, **kwargs
             )
         finally:
-            self._client_pool.put(client)
+            with self._clients_lock:
+                self._checked_out_clients -= 1
+                if not self._destroyed.is_set():
+                    self._client_pool.put(client)
 
         return batch, results
 
@@ -2314,7 +2453,7 @@ class VLLMQueueAnnotator(Annotator):
         }
 
         pool = ThreadPoolExecutor(
-            max_workers=self._max_workers,
+            max_workers=cast(int, self.max_workers),
             thread_name_prefix="vllm-queue-worker",
         )
         pending: set[Future[Any]] = set()
