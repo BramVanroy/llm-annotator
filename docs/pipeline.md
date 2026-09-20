@@ -441,6 +441,37 @@ outputs/pipeline-qa/
 └── final/                 # the last step's dataset
 ```
 
+### How large a progress file is
+
+A step appends every finished sample to a JSONL file under
+`<NN>-<name>/annotate/<task_prefix>progress_backup/`, and opens a new file
+every `max_samples_per_output_file` samples. A resume reads all of those files
+back to learn which ids are already done, so the value sets two costs against
+each other:
+
+- Many small files: every resume opens and parses each one, which is slow on a
+  shared network filesystem, and some filesystems limit how many files a
+  directory may hold.
+- Few large files: the file that is currently open is re-uploaded in full on
+  every Hub progress push, and one corrupt file costs more rows. (No finished
+  sample is lost at a crash either way, because every line is flushed as it is
+  written. A half-written last line is detected and dropped on the next run.)
+
+The default, `auto`, is one percent of the rows of the step's prepared
+dataset, with a floor of 1000 samples, so a step writes at most 100 progress
+files: 12 files of 1000 samples for 12,000 rows, 100 files of 5000 samples for
+500,000 rows. Set a number to fix the size instead, or `0` to write a single
+file of unlimited size:
+
+```yaml
+steps:
+  - name: write-qa
+    max_samples_per_output_file: 20000   # "auto" (the default), or 0 for one file
+```
+
+The same key is a keyword argument of `annotate_dataset`, `run_annotation` and
+`generate_dataset` in the Python API, with the same default.
+
 ## Pushing to the Hub
 
 The top-level `hub_id` is the **final** dataset only; it is pushed once, after

@@ -13,6 +13,7 @@ from llm_annotator.annotator import (
     Annotator,
     SelectionRecord,
     _create_messages,
+    _resolve_samples_per_output_file,
     destroy_on_error,
 )
 from llm_annotator.clients.base import (
@@ -1489,6 +1490,103 @@ def test_run_annotation_chunks_output_files_without_hub(
     assert [
         len(pfin.read_text(encoding="utf-8").splitlines()) for pfin in files
     ] == [4, 4, 2]
+    assert result["idx"] == list(range(10))
+
+
+@pytest.mark.parametrize(
+    ("value", "num_rows", "expected"),
+    [
+        ("auto", 500_000, 5000),
+        ("auto", 2_000, 1000),
+        (250, 500_000, 250),
+        (0, 500_000, 0),
+        (None, 500_000, 0),
+    ],
+)
+def test_resolve_samples_per_output_file(
+    value: Any, num_rows: int, expected: int
+) -> None:
+    # Verifies "auto" scaling above the floor, the floor itself, and that a
+    # fixed int, 0 and None pass through unchanged (None as 0).
+    assert (
+        _resolve_samples_per_output_file(value, num_rows=num_rows) == expected
+    )
+
+
+@pytest.mark.parametrize("value", [-1, "nope"])
+def test_resolve_samples_per_output_file_rejects_bad_values(
+    value: Any,
+) -> None:
+    # Verifies a negative int and a non-"auto" string both raise.
+    with pytest.raises(ValueError, match="max_samples_per_output_file"):
+        _resolve_samples_per_output_file(value, num_rows=10)
+
+
+def test_run_annotation_auto_chunks_by_the_resolved_size(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Verifies max_samples_per_output_file="auto" resolves against the
+    # prepared dataset's row count and chunks the progress files accordingly.
+    monkeypatch.setattr(
+        "llm_annotator.annotator.MIN_AUTO_SAMPLES_PER_OUTPUT_FILE", 2
+    )
+    monkeypatch.setattr(
+        "llm_annotator.annotator.AUTO_OUTPUT_FILE_FRACTION", 0.5
+    )
+    annotator = Annotator(client=DummyClient(), batch_size=2)
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": list(range(8)),
+            "messages": [
+                [{"role": "user", "content": f"q{idx}"}] for idx in range(8)
+            ],
+        }
+    )
+
+    out_dir = tmp_path / "out"
+    result = annotator.run_annotation(
+        output_dir=out_dir,
+        prepared_dataset=prepared_ds,
+        max_samples_per_output_file="auto",
+        keep_idx_column=True,
+    )
+
+    files = sorted((out_dir / "progress_backup").glob("*.jsonl"))
+    assert [pfin.name for pfin in files] == [
+        "progress_backup_0.jsonl",
+        "progress_backup_1.jsonl",
+    ]
+    assert [
+        len(pfin.read_text(encoding="utf-8").splitlines()) for pfin in files
+    ] == [4, 4]
+    assert result["idx"] == list(range(8))
+
+
+def test_run_annotation_auto_below_floor_writes_one_file(
+    tmp_path: Path,
+) -> None:
+    # Verifies that with the real constants, a run under the 1000-sample
+    # floor still writes a single progress file.
+    annotator = Annotator(client=DummyClient(), batch_size=2)
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": list(range(10)),
+            "messages": [
+                [{"role": "user", "content": f"q{idx}"}] for idx in range(10)
+            ],
+        }
+    )
+
+    out_dir = tmp_path / "out"
+    result = annotator.run_annotation(
+        output_dir=out_dir,
+        prepared_dataset=prepared_ds,
+        max_samples_per_output_file="auto",
+        keep_idx_column=True,
+    )
+
+    files = sorted((out_dir / "progress_backup").glob("*.jsonl"))
+    assert [pfin.name for pfin in files] == ["progress_backup_0.jsonl"]
     assert result["idx"] == list(range(10))
 
 

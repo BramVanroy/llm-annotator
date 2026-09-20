@@ -78,6 +78,64 @@ PROGRESS_BACKUP_BRANCH_SUFF = "progress_backup"
 PROGRESS_DS_LOCAL_SUBDIR = "progress_backup"
 SELECTION_RECORD_FILE = "selection.json"
 
+# "auto" writes one progress file per this fraction of the run, so the number
+# of files stays bounded no matter how large the dataset is.
+AUTO_OUTPUT_FILE_FRACTION = 0.01
+MIN_AUTO_SAMPLES_PER_OUTPUT_FILE = 1000
+
+
+def _resolve_samples_per_output_file(
+    max_samples_per_output_file: int | Literal["auto"] | None,
+    *,
+    num_rows: int,
+) -> int:
+    """Turn a configured progress-file size into a concrete sample count.
+
+    ``"auto"`` is one percent of the run, with a floor of 1000 samples, which
+    keeps the number of progress files at 100 or below.
+
+    Args:
+        max_samples_per_output_file: ``"auto"``, a positive sample count, or
+            0 (``None`` is read as 0) for a single file of unlimited size.
+        num_rows: Number of rows the run covers, used by ``"auto"``.
+
+    Returns:
+        Samples per progress file, or 0 for a single file of unlimited size.
+
+    Raises:
+        ValueError: If the value is neither ``"auto"`` nor a non-negative
+            integer.
+
+    Examples:
+        >>> _resolve_samples_per_output_file("auto", num_rows=500_000)
+        5000
+        >>> _resolve_samples_per_output_file("auto", num_rows=2_000)
+        1000
+        >>> _resolve_samples_per_output_file(250, num_rows=500_000)
+        250
+    """
+    if max_samples_per_output_file == "auto":
+        return max(
+            MIN_AUTO_SAMPLES_PER_OUTPUT_FILE,
+            ceil(num_rows * AUTO_OUTPUT_FILE_FRACTION),
+        )
+
+    if max_samples_per_output_file is None:
+        return 0
+
+    if (
+        isinstance(max_samples_per_output_file, bool)
+        or not isinstance(max_samples_per_output_file, int)
+        or max_samples_per_output_file < 0
+    ):
+        raise ValueError(
+            "'max_samples_per_output_file' must be \"auto\", 0 (a single"
+            " file of unlimited size) or a positive integer, but got"
+            f" {max_samples_per_output_file!r}"
+        )
+
+    return max_samples_per_output_file
+
 
 @dataclass(frozen=True, slots=True)
 class SelectionRecord:
@@ -1318,7 +1376,7 @@ class Annotator:
         output_schema: str | dict[str, Any] | None = None,
         idx_column: str = "idx",
         upload_every_n_samples: int | None = 10_000,
-        max_samples_per_output_file: int = 1000,
+        max_samples_per_output_file: int | Literal["auto"] = "auto",
         task_prefix: str = "",
         validate_fn: Callable | None = None,
         postprocess_fn: Callable | None = None,
@@ -1354,7 +1412,12 @@ class Annotator:
                 injected into ``options.json_schema``.
             idx_column: Column name used as unique identifier.
             upload_every_n_samples: Upload to Hub every N samples.
-            max_samples_per_output_file: Maximum samples per output file.
+            max_samples_per_output_file: Samples per JSONL progress
+                file. ``"auto"`` is one percent of the rows with a floor
+                of 1000, so at most 100 files are written and a resume
+                stays cheap. A fixed number trades the samples lost at a
+                crash against the cost of rescanning the files on every
+                resume; 0 writes a single file of unlimited size.
             task_prefix: Prefix for internal columns and file names.
             validate_fn: Optional custom validation function.
             postprocess_fn: Optional postprocessing function that takes in a sample and must return a dict.
@@ -1377,14 +1440,12 @@ class Annotator:
                 entirely.
         """
         upload_every_n_samples = upload_every_n_samples or 0
-        if (
-            max_samples_per_output_file is not None
-            and max_samples_per_output_file < 0
-        ):
-            raise ValueError(
-                "'max_samples_per_output_file' must be None or 0 or a positive integer"
-            )
-        max_samples_per_output_file = max_samples_per_output_file or 0
+        # Rejected here so a bad value fails before any data is loaded. The
+        # concrete size needs the prepared dataset's row count, so it is
+        # resolved again once that dataset is in hand.
+        _resolve_samples_per_output_file(
+            max_samples_per_output_file, num_rows=0
+        )
 
         if max_consecutive_failed_batches < 0:
             raise ValueError(
@@ -1474,6 +1535,17 @@ class Annotator:
                 " Please ensure the prepared dataset includes the index column with name matching 'idx_column' argument."
             )
 
+        samples_per_output_file = _resolve_samples_per_output_file(
+            max_samples_per_output_file, num_rows=len(prepared_dataset)
+        )
+        if max_samples_per_output_file == "auto" and self.verbose:
+            self._logger.info(
+                f"Writing progress files of {samples_per_output_file:,}"
+                f" samples over {len(prepared_dataset):,} rows. Set"
+                " 'max_samples_per_output_file' to a fixed number to change"
+                " that."
+            )
+
         # Only empty the output directory after potentially reading the cached input
         # To overwrite the cached prepared dataset, the user must explicitly delete
         # the prepared data directory or set force_data_preparation=True in prepare_data.
@@ -1536,7 +1608,7 @@ class Annotator:
 
         pfout = self.get_pfout_name(
             process_pdout=process_pdout,
-            max_samples_per_output_file=max_samples_per_output_file,
+            max_samples_per_output_file=samples_per_output_file,
             processed_n_samples=processed_n_samples,
         )
         fhout = pfout.open("a", encoding="utf-8")
@@ -1591,9 +1663,8 @@ class Annotator:
                     # otherwise a long run leaves one unbounded JSONL that every
                     # restart has to parse in full.
                     file_is_full = (
-                        max_samples_per_output_file > 0
-                        and processed_n_samples % max_samples_per_output_file
-                        == 0
+                        samples_per_output_file > 0
+                        and processed_n_samples % samples_per_output_file == 0
                     )
 
                     if time_to_upload or file_is_full:
@@ -1605,7 +1676,7 @@ class Annotator:
                             )
                         pfout = self.get_pfout_name(
                             process_pdout=process_pdout,
-                            max_samples_per_output_file=max_samples_per_output_file,
+                            max_samples_per_output_file=samples_per_output_file,
                             processed_n_samples=processed_n_samples,
                         )
                         fhout = pfout.open("a", encoding="utf-8")
@@ -1680,7 +1751,7 @@ class Annotator:
         gen_kwargs: dict[str, Any] | None = None,
         output_schema: str | dict[str, Any] | None = None,
         upload_every_n_samples: int | None = 10_000,
-        max_samples_per_output_file: int = 1000,
+        max_samples_per_output_file: int | Literal["auto"] = "auto",
         validate_fn: Callable | None = None,
         postprocess_fn: Callable | None = None,
         num_retries_invalid: int = 5,
@@ -1727,7 +1798,12 @@ class Annotator:
                 for anything the options dataclass does not name.
             output_schema: Optional JSON schema for structured output.
             upload_every_n_samples: Upload checkpoint cadence.
-            max_samples_per_output_file: Maximum samples per output file.
+            max_samples_per_output_file: Samples per JSONL progress
+                file. ``"auto"`` is one percent of the rows with a floor
+                of 1000, so at most 100 files are written and a resume
+                stays cheap. A fixed number trades the samples lost at a
+                crash against the cost of rescanning the files on every
+                resume; 0 writes a single file of unlimited size.
             validate_fn: Optional validation callback.
             postprocess_fn: Optional postprocessing callback.
             num_retries_invalid: Number of retries for invalid outputs.
@@ -1827,7 +1903,7 @@ class Annotator:
         output_schema: str | dict[str, Any] | None = None,
         idx_column: str = "idx",
         upload_every_n_samples: int | None = 10_000,
-        max_samples_per_output_file: int = 1000,
+        max_samples_per_output_file: int | Literal["auto"] = "auto",
         task_prefix: str = "",
         validate_fn: Callable | None = None,
         postprocess_fn: Callable | None = None,
@@ -1854,7 +1930,12 @@ class Annotator:
             output_schema: Optional JSON schema for structured output.
             idx_column: Column name used as the stable sample identifier.
             upload_every_n_samples: Upload checkpoint cadence.
-            max_samples_per_output_file: Maximum samples per output file.
+            max_samples_per_output_file: Samples per JSONL progress
+                file. ``"auto"`` is one percent of the rows with a floor
+                of 1000, so at most 100 files are written and a resume
+                stays cheap. A fixed number trades the samples lost at a
+                crash against the cost of rescanning the files on every
+                resume; 0 writes a single file of unlimited size.
             task_prefix: Prefix for internal column names and output files.
             validate_fn: Optional validation callback.
             postprocess_fn: Optional postprocessing callback.

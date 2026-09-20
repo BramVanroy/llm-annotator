@@ -181,7 +181,6 @@ def main(args: list[str] | None = None) -> None:
             options=options,
             output_schema=output_schema,
             system_message=system_message,
-            max_samples_per_output_file=1000,
         )
 
 

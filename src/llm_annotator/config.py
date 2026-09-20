@@ -16,7 +16,7 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Literal, get_args
+from typing import Annotated, Any, Literal, get_args
 
 import yaml
 from pydantic import (
@@ -1005,6 +1005,11 @@ class StepConfig(_StrictBase):
         sort_by_length: Sort prompts by length for more efficient batching.
         num_retries_invalid: Retries for samples that fail schema validation.
         max_samples_per_output_file: Samples per JSONL progress file.
+            ``"auto"`` (the default) is one percent of the rows with a
+            floor of 1000, so at most 100 files are written and a resume
+            stays cheap. A fixed number trades the samples lost at a
+            crash against the cost of rescanning the files on every
+            resume; 0 writes a single file of unlimited size.
         max_consecutive_failed_batches: Abort the step once this many
             batches in a row come back with every sample errored, instead
             of continuing to burn compute against an unresponsive backend.
@@ -1035,7 +1040,9 @@ class StepConfig(_StrictBase):
     task_prefix: str | None = None
     sort_by_length: bool | Literal["shortest_first", "longest_first"] = False
     num_retries_invalid: int = Field(default=5, ge=0)
-    max_samples_per_output_file: int = Field(default=1000, ge=0)
+    max_samples_per_output_file: (
+        Annotated[int, Field(ge=0)] | Literal["auto"]
+    ) = "auto"
     max_consecutive_failed_batches: int = Field(default=10, ge=0)
     upload_every_n_samples: int | None = None
     hub_id: str | None = None
