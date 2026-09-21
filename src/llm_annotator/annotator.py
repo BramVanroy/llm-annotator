@@ -1228,7 +1228,7 @@ class Annotator:
             ValueError: If the client did not return exactly one response per
                 input, which would silently drop or misalign samples.
         """
-        output_schema = options.json_schema if options is not None else None
+        output_schema = options.output_schema if options is not None else None
         messages = batch[f"{task_prefix}messages"]
         if not messages:
             return []
@@ -2078,30 +2078,34 @@ class Annotator:
 
         Raises:
             TypeError: If ``output_schema`` does not decode to a mapping.
-            ValueError: If the schema is given twice, or if one of its
+            ValueError: If ``options`` holds a schema, or if one of its
                 top-level properties has the name of a column that the
                 annotator writes itself.
         """
-        if output_schema is not None:
-            if isinstance(output_schema, str):
-                output_schema = json.loads(output_schema)
-            if not isinstance(output_schema, dict):
-                raise TypeError("'output_schema' must decode to a dictionary.")
-            if options is not None and options.json_schema is not None:
-                raise ValueError(
-                    "Provide 'output_schema' OR set 'options.json_schema', not both."
-                )
-            options = dataclasses.replace(
-                options or ProviderRuntimeOptions(),
-                json_schema=output_schema,
+        if options is not None and options.output_schema is not None:
+            raise ValueError(
+                "Pass the schema as the 'output_schema' argument, not as"
+                " 'options.output_schema'. The annotator sets the options"
+                " field itself, so that the selection record holds the"
+                " schema of the run."
             )
+        if output_schema is None:
+            return None, options
 
-        schema = options.json_schema if options is not None else None
-        if schema:
+        if isinstance(output_schema, str):
+            output_schema = json.loads(output_schema)
+        if not isinstance(output_schema, dict):
+            raise TypeError("'output_schema' must decode to a dictionary.")
+        options = dataclasses.replace(
+            options or ProviderRuntimeOptions(),
+            output_schema=output_schema,
+        )
+
+        if output_schema:
             reserved = _bookkeeping_columns(
                 task_prefix=task_prefix, idx_column=idx_column
             )
-            taken = sorted(set(schema.get("properties", {})) & reserved)
+            taken = sorted(set(output_schema.get("properties", {})) & reserved)
             if taken:
                 names = ", ".join(f"'{name}'" for name in taken)
                 raise ValueError(
@@ -2236,8 +2240,11 @@ class Annotator:
             options: Runtime options passed to the client.
             gen_kwargs: Extra request parameters merged over ``options``,
                 for anything the options dataclass does not name.
-            output_schema: Convenience JSON schema input. When provided, it is
-                injected into ``options.json_schema``.
+            output_schema: JSON schema of the response, as a mapping or as
+                JSON text. The client constrains the response to it, and
+                every top-level property becomes a column. This is the only
+                way to give a schema: ``options.output_schema`` is set from
+                it and raises ``ValueError`` when the caller sets it.
             idx_column: Column name used as unique identifier.
             upload_every_n_samples: Upload to Hub every N samples.
             max_samples_per_output_file: Samples per JSONL progress

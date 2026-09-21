@@ -30,7 +30,7 @@ def test_openai_generate_builds_payload_and_parses_response(
         options=OpenAIRuntimeOptions(
             max_completion_tokens=12,
             temperature=0.2,
-            json_schema={"type": "object"},
+            output_schema={"type": "object"},
         ),
         gen_kwargs={"temperature": 0.9},
     )
@@ -557,7 +557,7 @@ def test_batch_api_build_request_includes_json_schema(
         [{"role": "user", "content": "x"}],
         OpenAIRuntimeOptions(
             max_completion_tokens=8,
-            json_schema={"type": "object", "properties": {}},
+            output_schema={"type": "object", "properties": {}},
         ),
         None,
     )

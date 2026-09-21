@@ -141,7 +141,7 @@ def test_guided_json_generation_with_smollm(
             max_completion_tokens=32,
             temperature=0.0,
             seed=7,
-            json_schema=schema,
+            output_schema=schema,
         ),
     )
 

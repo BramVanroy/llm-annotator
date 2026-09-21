@@ -68,8 +68,8 @@ class EchoClient(Client[ProviderRuntimeOptions]):
         self.seen_prompts.append(prompt)
 
         text = prompt
-        if options is not None and options.json_schema is not None:
-            properties = options.json_schema.get("properties", {})
+        if options is not None and options.output_schema is not None:
+            properties = options.output_schema.get("properties", {})
             payload: dict[str, Any] = {}
             for name, spec in properties.items():
                 if spec.get("type") == "integer":
@@ -1274,9 +1274,7 @@ def test_cli_describe_steps_env_survives_awkward_values(
         [
             str(config_path),
             "--set",
-            'steps.0.name=wri te,"x',
-            "--set",
-            "steps.0.client.model=a model/with space",
+            'steps.0.client.model=a model/with space,"x',
             "--describe-steps",
             "--format",
             "env",
@@ -1285,8 +1283,7 @@ def test_cli_describe_steps_env_survives_awkward_values(
 
     line = capsys.readouterr().out.splitlines()[0]
     fields = dict(pair.split("=", 1) for pair in shlex.split(line, posix=True))
-    assert fields["STEP_NAME"] == 'wri te,"x'
-    assert fields["STEP_MODEL"] == "a model/with space"
+    assert fields["STEP_MODEL"] == 'a model/with space,"x'
 
 
 def test_docs_env_sample_lists_the_real_keys(

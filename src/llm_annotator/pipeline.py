@@ -432,7 +432,7 @@ def _run_step(
     root = config.config_dir
     task_prefix = step.resolved_task_prefix()
     output_schema = step.resolved_output_schema(root)
-    options = client_config.build_options(output_schema)
+    options = client_config.build_options()
 
     dataset_name: str | None = None
     dataset_config: str | None = None

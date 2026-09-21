@@ -149,7 +149,7 @@ def test_runtime_options_with_json_schema(
     fake_vllm_runtime: dict[str, Any],
 ) -> None:
     # Verifies structured output params are attached when json_schema is provided.
-    opts = VLLMOfflineRuntimeOptions(json_schema={"type": "object"})
+    opts = VLLMOfflineRuntimeOptions(output_schema={"type": "object"})
     payload = opts.to_payload()
     assert "structured_outputs" in payload
 

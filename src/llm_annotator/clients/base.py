@@ -39,14 +39,15 @@ class ProviderRuntimeOptions:
     Attributes:
         max_completion_tokens: Optional maximum number of tokens to generate.
             This caps the completion only; it does not include the prompt.
-        json_schema: Optional JSON schema dict for structured output. When provided,
-            clients that support guided decoding (e.g. vLLM) will constrain generation
-            to valid JSON matching the schema. Other clients will use the schema for
-            post-processing / parsing only.
+        output_schema: Optional JSON schema for structured output. Every
+            client sends it to its provider, which constrains the response to
+            JSON that matches the schema. An ``Annotator`` sets it from its
+            own ``output_schema`` argument, which is the only place to give
+            it there.
     """
 
     max_completion_tokens: int | None = None
-    json_schema: dict[str, Any] | None = None
+    output_schema: dict[str, Any] | None = None
 
     def to_payload(self) -> dict[str, Any]:
         """Convert options to a provider-specific API request payload dict.

@@ -62,7 +62,7 @@ class DummyClient(Client[ProviderRuntimeOptions]):
     ) -> Response:
         _ = gen_kwargs
         text = messages[-1]["content"]
-        if options and options.json_schema is not None:
+        if options and options.output_schema is not None:
             text = json.dumps({"label": "ok", "echo": text})
         return Response(
             text=text,
@@ -425,7 +425,7 @@ def test_process_batch_validate_and_postprocess(
 
     res = annotator._process_batch(
         batch=batch,
-        options=ProviderRuntimeOptions(json_schema=schema),
+        options=ProviderRuntimeOptions(output_schema=schema),
         validate_fn=lambda x: x.get("label") == "ok",
         postprocess_fn=_post,
     )
@@ -1520,7 +1520,7 @@ def test_load_source_from_local_jsonl_data_files(tmp_path: Path) -> None:
 
 
 def test_run_annotation_output_schema_validation(tmp_path: Path) -> None:
-    # Verifies output_schema normalization and conflict checks with options.json_schema.
+    # Verifies output_schema decoding and that options cannot carry a schema.
     annotator = Annotator(client=DummyClient(), verbose=False)
     ds = Dataset.from_dict({"text": ["a"]})
     prepared_ds, _, _ = annotator.prepare_data(
@@ -1537,14 +1537,17 @@ def test_run_annotation_output_schema_validation(tmp_path: Path) -> None:
             output_schema="[]",
         )
 
-    with pytest.raises(ValueError, match="Provide 'output_schema' OR set"):
-        annotator.run_annotation(
-            output_dir=tmp_path / "b",
-            prompt_template="Q: {text}",
-            prepared_dataset=prepared_ds,
-            options=ProviderRuntimeOptions(json_schema={"type": "object"}),
-            output_schema={"type": "object"},
-        )
+    for output_schema in [None, {"type": "object"}]:
+        with pytest.raises(ValueError, match="not as 'options.output_schema'"):
+            annotator.run_annotation(
+                output_dir=tmp_path / "b",
+                prompt_template="Q: {text}",
+                prepared_dataset=prepared_ds,
+                options=ProviderRuntimeOptions(
+                    output_schema={"type": "object"}
+                ),
+                output_schema=output_schema,
+            )
 
 
 def test_run_annotation_keep_columns_type_error(tmp_path: Path) -> None:

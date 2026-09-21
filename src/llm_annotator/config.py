@@ -71,6 +71,8 @@ in a config.
 
 _URL_SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://")
 """What a ``data_files`` entry looks like when it is not a local path."""
+_STEP_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+"""What a step name looks like: safe as a path, a column and a job name."""
 
 
 def load_config_file(path: str | Path) -> dict[str, Any]:
@@ -744,8 +746,15 @@ class ClientConfig(_StrictBase):
                 " way."
             )
 
+        if "output_schema" in self.options:
+            raise ValueError(
+                "Set the schema as the step's 'output_schema' (or"
+                " 'output_schema_file'), not under the client 'options'."
+            )
         valid = {
-            f.name for f in dataclasses.fields(_options_class(self.provider))
+            f.name
+            for f in dataclasses.fields(_options_class(self.provider))
+            if f.name != "output_schema"
         }
         unknown = sorted(set(self.options) - valid)
         if unknown:
@@ -1066,28 +1075,12 @@ class ClientConfig(_StrictBase):
             raise ValueError("No vLLM server URLs found for the client pool.")
         return urls
 
-    def build_options(
-        self, output_schema: dict[str, Any] | None = None
-    ) -> ProviderRuntimeOptions:
+    def build_options(self) -> ProviderRuntimeOptions:
         """Instantiate the provider's runtime-options dataclass.
-
-        Args:
-            output_schema: Optional JSON schema for structured output. It is
-                passed through to the annotator rather than set here, so this
-                argument only guards against setting it twice.
 
         Returns:
             The populated options instance.
-
-        Raises:
-            ValueError: If ``json_schema`` is set in ``options`` while an
-                ``output_schema`` is also configured for the step.
         """
-        if output_schema is not None and "json_schema" in self.options:
-            raise ValueError(
-                "Set the schema either as the step's 'output_schema' or as"
-                " client options 'json_schema', not both."
-            )
         return _options_class(self.provider)(**self.options)
 
 
@@ -1100,7 +1093,9 @@ class StepConfig(_StrictBase):
 
     Attributes:
         name: Unique step name. Drives the step directory and, by default, the
-            ``task_prefix`` that namespaces this step's output columns.
+            ``task_prefix`` that namespaces this step's output columns. It
+            holds letters, digits, ``_``, ``-`` and ``.``, and starts with a
+            letter or a digit.
         type: ``"annotate"`` runs over the incoming dataset; ``"generate"``
             synthesises a dataset from ``prompts`` and must come first.
         prompt: Inline prompt template with ``{column}`` placeholders.
@@ -1172,10 +1167,26 @@ class StepConfig(_StrictBase):
 
     @field_validator("name")
     @classmethod
-    def _non_empty_name(cls, value: str) -> str:
-        """Reject blank step names, which would make artifact paths clash."""
-        if not value.strip():
-            raise ValueError("Step 'name' must not be empty.")
+    def _check_name(cls, value: str) -> str:
+        """Allow only names that are safe as a path, a column and a job name.
+
+        A step name becomes a directory, a column prefix and a value in
+        ``sbatch --export``, which splits on commas. So a name holds letters,
+        digits, ``_``, ``-`` and ``.``, and starts with a letter or a digit.
+
+        Examples:
+            >>> StepConfig._check_name("rate-qa_v1.2")
+            'rate-qa_v1.2'
+            >>> StepConfig._check_name("rate,qa")  # doctest: +ELLIPSIS
+            Traceback (most recent call last):
+                ...
+            ValueError: Step name 'rate,qa' may only hold letters, digits, ...
+        """
+        if not _STEP_NAME.fullmatch(value):
+            raise ValueError(
+                f"Step name {value!r} may only hold letters, digits, '_', '-'"
+                " and '.', and must start with a letter or a digit."
+            )
         return value
 
     @model_validator(mode="after")
