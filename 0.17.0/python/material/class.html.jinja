@@ -1,0 +1,25 @@
+{% extends "_base/class.html.jinja" %}
+
+{# Replace mkdocstrings' inline source dump with a link to GitHub.
+   With merge_init_into_class the class body shown is really __init__'s, so the
+   link points there; otherwise it points at the class itself. #}
+{% block source scoped %}
+  {% if config.show_source %}
+    {% if config.merge_init_into_class %}
+      {% if "__init__" in all_members and all_members["__init__"].source %}
+        {% set init = all_members["__init__"] %}
+        {% with filepath = init.relative_package_filepath if init.relative_filepath.is_absolute() else init.relative_filepath,
+                start = init.lineno or 1,
+                end = init.endlineno or init.lineno or 1 %}
+          {% include "_source_link.html.jinja" %}
+        {% endwith %}
+      {% endif %}
+    {% elif class.source %}
+      {% with filepath = class.relative_package_filepath if class.relative_filepath.is_absolute() else class.relative_filepath,
+              start = class.lineno or 1,
+              end = class.endlineno or class.lineno or 1 %}
+        {% include "_source_link.html.jinja" %}
+      {% endwith %}
+    {% endif %}
+  {% endif %}
+{% endblock source %}
