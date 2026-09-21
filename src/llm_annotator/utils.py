@@ -3,6 +3,7 @@ import json
 import re
 import sys
 from collections.abc import Callable
+from functools import lru_cache
 from importlib.metadata import version
 from os import PathLike
 from pathlib import Path
@@ -216,6 +217,26 @@ def remove_empty_jsonl_files(pdout: Path) -> list[Path]:
     return sorted(files_removed)
 
 
+@lru_cache(maxsize=None)
+def _idx_line_prefix(idx_column: str) -> bytes:
+    """Render the bytes that a progress line starts with.
+
+    The result is cached because ``read_jsonl_idx`` needs it once per line of
+    a resume scan, where rendering it again is a measurable share of the work.
+
+    Args:
+        idx_column: Column that holds the sample id.
+
+    Returns:
+        The opening brace, the JSON-encoded column name, a colon and a space.
+
+    Examples:
+        >>> _idx_line_prefix("idx")
+        b'{"idx": '
+    """
+    return b"{" + json.dumps(idx_column).encode("utf-8") + b": "
+
+
 def read_jsonl_idx(
     raw_line: bytes, idx_column: str, *, with_row: bool = False
 ) -> tuple[Any, dict[str, Any] | None]:
@@ -260,7 +281,7 @@ def read_jsonl_idx(
         json.decoder.JSONDecodeError: Unterminated string starting at: line 1 column 12 (char 11)
     """
     if not with_row and raw_line.endswith((b"}\n", b"}\r\n")):
-        prefix = b"{" + json.dumps(idx_column).encode("utf-8") + b": "
+        prefix = _idx_line_prefix(idx_column)
         if raw_line.startswith(prefix):
             end = raw_line.find(b",", len(prefix))
             if end != -1:

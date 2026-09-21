@@ -215,7 +215,7 @@ class _ProgressUploader:
         hub_id: str,
         task_prefix: str,
     ) -> None:
-        """Start the background thread that the uploads run on.
+        """Set up the single background thread that the uploads run on.
 
         Args:
             annotator: The annotator whose ``push_progress_to_hub`` is run.
@@ -2459,13 +2459,13 @@ class Annotator:
 
             write_rows(held_back_rows)
         finally:
-            # Closing the generator lets alternative execution strategies
-            # (e.g. the multi-server queue) shut their workers down when the
-            # writer stops early because of an error or interruption.
             # The uploader is joined first: its thread is not a daemon, and
             # closing the batch generator may raise.
             if uploader is not None:
                 uploader.close()
+            # Closing the generator lets alternative execution strategies
+            # (e.g. the multi-server queue) shut their workers down when the
+            # writer stops early because of an error or interruption.
             close_batches = getattr(annotated_batches, "close", None)
             if callable(close_batches):
                 close_batches()
