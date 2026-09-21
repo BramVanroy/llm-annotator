@@ -13,10 +13,10 @@ every mean comes with a 95% bootstrap percentile interval, following Koehn
 (2004).
 
 ```sh
-uv run examples/model-comparison/compare_models.py \
-    --judged examples/model-comparison/outputs/judge/final \
-    --generation-stats examples/model-comparison/outputs/combined-qa_generation_stats.json \
-    --out examples/model-comparison/outputs/leaderboard.csv
+uv run case-studies/model-comparison/compare_models.py \
+    --judged case-studies/model-comparison/outputs/judge/final \
+    --generation-stats case-studies/model-comparison/outputs/combined-qa_generation_stats.json \
+    --out case-studies/model-comparison/outputs/leaderboard.csv
 ```
 """
 

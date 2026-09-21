@@ -7,13 +7,13 @@ quality:
 	$(MAKE) style-check
 
 style-check:
-	uv run ruff check $(PACKAGE) tests/ examples/ scripts/
-	uv run ruff format --check $(PACKAGE) tests/ examples/ scripts/
+	uv run ruff check $(PACKAGE) tests/ examples/ case-studies/ scripts/
+	uv run ruff format --check $(PACKAGE) tests/ examples/ case-studies/ scripts/
 
 # Explicit manual repo-wide cleanup; not intended for normal commit hooks.
 style-fix:
-	uv run ruff check $(PACKAGE) tests/ examples/ scripts/ --fix
-	uv run ruff format $(PACKAGE) tests/ examples/ scripts/
+	uv run ruff check $(PACKAGE) tests/ examples/ case-studies/ scripts/ --fix
+	uv run ruff format $(PACKAGE) tests/ examples/ case-studies/ scripts/
 
 style: style-fix
 

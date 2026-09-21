@@ -1,9 +1,9 @@
 """Build a small, clean seed of Dutch Wikipedia articles for model comparison.
 
 ```sh
-uv run examples/model-comparison/prepare_seed.py \
+uv run case-studies/model-comparison/prepare_seed.py \
     --num-samples 500 --num-proc 16 \
-    --out examples/model-comparison/outputs/seed
+    --out case-studies/model-comparison/outputs/seed
 ```
 """
 

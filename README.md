@@ -289,6 +289,8 @@ See the documentation for more examples, including:
 - Generating datasets from scratch
 
 Or check out the [examples/](examples/) directory for complete working examples.
+Larger, complete research projects built on the library live in
+[case-studies/](case-studies/).
 
 
 ## Testing

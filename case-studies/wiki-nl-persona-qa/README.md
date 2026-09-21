@@ -174,28 +174,28 @@ uv sync --dev --extra spacy
 # network filesystem concurrently is what turns this into a multi-hour crawl
 # instead of a few minutes.
 export HF_HOME=/tmp/$USER/hf_home
-uv run --frozen examples/wiki-nl-persona-qa/prepare_seed.py \
+uv run --frozen case-studies/wiki-nl-persona-qa/prepare_seed.py \
   --num-proc "$(nproc)" \
-  --out examples/wiki-nl-persona-qa/outputs/seed
+  --out case-studies/wiki-nl-persona-qa/outputs/seed
 
 # 2. Question + answer, two chained steps on one model.
 # You may have to execute this command multiple commands to complete
 # it on your hardware but do not worry: rerunning the script just continues
 # where it left of
-CLIENT_TIME=04:00:00 SERVER_TIME=03:30:00 ANNOTATE_CONFIG=examples/wiki-nl-persona-qa/generate/pipeline-qa.yaml \
+CLIENT_TIME=04:00:00 SERVER_TIME=03:30:00 ANNOTATE_CONFIG=case-studies/wiki-nl-persona-qa/generate/pipeline-qa.yaml \
   ./slurm/submit_pipeline.sh
 
 # 3. Filter, once the generate jobs have finished.
-uv run --frozen examples/wiki-nl-persona-qa/filter_rows.py \
-  --out examples/wiki-nl-persona-qa/outputs/qa-split
+uv run --frozen case-studies/wiki-nl-persona-qa/filter_rows.py \
+  --out case-studies/wiki-nl-persona-qa/outputs/qa-split
 
 # 4. Judge.
-ANNOTATE_CONFIG=examples/wiki-nl-persona-qa/judge/pipeline.yaml \
+ANNOTATE_CONFIG=case-studies/wiki-nl-persona-qa/judge/pipeline.yaml \
   ./slurm/submit_pipeline.sh
 
 # 5. The two SFT configs.
-uv run --frozen examples/wiki-nl-persona-qa/build_sft.py \
-  --out examples/wiki-nl-persona-qa/outputs/sft
+uv run --frozen case-studies/wiki-nl-persona-qa/build_sft.py \
+  --out case-studies/wiki-nl-persona-qa/outputs/sft
 ```
 
 Nothing here submits the whole chain as one dependency graph: stages 3 and 5 run
@@ -210,7 +210,7 @@ the real ones from a speed benchmark for these models on your GPUs.
 
 ## Output
 
-Relative to `examples/wiki-nl-persona-qa/outputs/`:
+Relative to `case-studies/wiki-nl-persona-qa/outputs/`:
 
 - `seed`: `title`, `text`, `url`, `chunk_index`, `num_chunks`, `persona`,
   `question_type`, `question_length`, `answer_length`. `chunk_index` /
@@ -250,5 +250,5 @@ Relative to `examples/wiki-nl-persona-qa/outputs/`:
   ratings are, so the thresholds are a quality filter, not a calibrated
   measurement. Judging a sample twice would quantify that, at twice the cost.
 - **No model comparison.** `Qwen3.6-35B-A3B-FP8` is assumed fit for the job. To
-  establish that rather than assume it, run `examples/model-comparison/` over a
+  establish that rather than assume it, run `case-studies/model-comparison/` over a
   few hundred articles first.

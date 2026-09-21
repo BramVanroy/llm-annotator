@@ -6,9 +6,9 @@ arrives in its own `answer-question_reasoning` column and the answer alone is in
 judging, and writes the dataset the judge pipeline reads.
 
 ```sh
-uv run --frozen examples/wiki-nl-persona-qa/filter_rows.py \
-    --generated examples/wiki-nl-persona-qa/outputs/generate/final \
-    --out examples/wiki-nl-persona-qa/outputs/qa-split
+uv run --frozen case-studies/wiki-nl-persona-qa/filter_rows.py \
+    --generated case-studies/wiki-nl-persona-qa/outputs/generate/final \
+    --out case-studies/wiki-nl-persona-qa/outputs/qa-split
 ```
 """
 
@@ -186,7 +186,7 @@ def main(args: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--generated",
-        default="examples/wiki-nl-persona-qa/outputs/generate/final",
+        default="case-studies/wiki-nl-persona-qa/outputs/generate/final",
         help="The generate pipeline's <output_dir>/final directory.",
     )
     parser.add_argument(

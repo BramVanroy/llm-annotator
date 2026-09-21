@@ -92,37 +92,37 @@ need all three to have finished first.
 
 ```sh
 # 1. Seed: 500 clean articles, shared by all three generators.
-uv run examples/model-comparison/prepare_seed.py \
+uv run case-studies/model-comparison/prepare_seed.py \
   --num-samples 500 --num-proc 16 \
-  --out examples/model-comparison/outputs/seed
+  --out case-studies/model-comparison/outputs/seed
 
 # 2. Generate
 # Each pipeline carries its own serving profile in its `engine:` block, so the
 # submissions differ only by config.
-ANNOTATE_CONFIG=examples/model-comparison/generate/pipeline-granite-4.1-3b.yaml \
+ANNOTATE_CONFIG=case-studies/model-comparison/generate/pipeline-granite-4.1-3b.yaml \
   ./slurm/submit_pipeline.sh
 
-ANNOTATE_CONFIG=examples/model-comparison/generate/pipeline-granite-4.1-8b.yaml \
+ANNOTATE_CONFIG=case-studies/model-comparison/generate/pipeline-granite-4.1-8b.yaml \
   ./slurm/submit_pipeline.sh
 
-ANNOTATE_CONFIG=examples/model-comparison/generate/pipeline-gemma-4-26b-a4b.yaml \
+ANNOTATE_CONFIG=case-studies/model-comparison/generate/pipeline-gemma-4-26b-a4b.yaml \
   ./slurm/submit_pipeline.sh
 
 # 3. Combine + report generation-stage reliability. Run once all three jobs
 # above have finished.
-uv run --frozen examples/model-comparison/combine.py \
-  --out examples/model-comparison/outputs/combined-qa
+uv run --frozen case-studies/model-comparison/combine.py \
+  --out case-studies/model-comparison/outputs/combined-qa
 
 # 4. Judge all 1,500 pairs in one pass. Thinking is disabled on the client-side
 # by changing the chat template in the config file
-ANNOTATE_CONFIG=examples/model-comparison/judge/pipeline.yaml \
+ANNOTATE_CONFIG=case-studies/model-comparison/judge/pipeline.yaml \
   ./slurm/submit_pipeline.sh
 
 # 5. The leaderboard (bootstrap only, so no dependency beyond the project's).
-uv run --frozen examples/model-comparison/compare_models.py \
-  --judged examples/model-comparison/outputs/judge/final \
-  --generation-stats examples/model-comparison/outputs/combined-qa_generation_stats.json \
-  --out examples/model-comparison/outputs/leaderboard.csv
+uv run --frozen case-studies/model-comparison/compare_models.py \
+  --judged case-studies/model-comparison/outputs/judge/final \
+  --generation-stats case-studies/model-comparison/outputs/combined-qa_generation_stats.json \
+  --out case-studies/model-comparison/outputs/leaderboard.csv
 ```
 
 Stages 3-5 are plain CPU scripts, so nothing here submits the whole chain as
@@ -169,7 +169,7 @@ row per (article, model)" for the judge and the leaderboard.
 ## Output
 
 Everything below is relative to
-`examples/model-comparison/outputs/`.
+`case-studies/model-comparison/outputs/`.
 
 - `generate/<model>/final`: one row per seed article, per model: `title`,
   `text`, `url`, `question`, `answer`, plus the annotator's own

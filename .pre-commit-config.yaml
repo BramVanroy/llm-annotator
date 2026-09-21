@@ -15,9 +15,9 @@ repos:
         args: [--fix=lf]
       # Exlclude the prompts
       - id: end-of-file-fixer
-        exclude: ^(examples|src)/.*\.md$
+        exclude: ^(examples|case-studies|src)/.*\.md$
       - id: trailing-whitespace
-        exclude: ^(examples|src)/.*\.md$
+        exclude: ^(examples|case-studies|src)/.*\.md$
 
   - repo: local
     hooks:
@@ -28,7 +28,7 @@ repos:
         language: pygrep
         entry: ':(class|meth|func|mod|attr|obj|exc|data|ref):`'
         types: [python]
-        files: ^(src|examples)/
+        files: ^(src|examples|case-studies)/
       # Griffe only documents attributes that carry a real docstring, so "#:"
       # comments render as nothing at all. Put a """docstring""" underneath the
       # assignment instead.
