@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import types
 from pathlib import Path
 from typing import Any
 
@@ -1023,6 +1024,10 @@ def test_progress_files_are_chunked_and_uploaded(
         uploads.append(Path(dir_path))
 
     monkeypatch.setattr(Annotator, "push_progress_to_hub", _fake_push)
+    monkeypatch.setattr(
+        "llm_annotator.annotator.list_repo_refs",
+        lambda *a, **kw: types.SimpleNamespace(branches=[]),
+    )
     monkeypatch.setattr(
         Annotator,
         "_post_annotate",
