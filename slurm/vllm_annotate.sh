@@ -53,6 +53,11 @@ cd "$REPO_ROOT"
 echo "Starting on $(date)"
 echo "Host: $(hostname)"
 echo "Step: ${STEP_NAME} of ${ANNOTATE_CONFIG}"
+# One request in flight holds one thread, so a pool client runs thousands of
+# them. Printed here because a site limit below that count fails the run with
+# "RuntimeError: can't start new thread" and nothing else says what the limit
+# was; slurm/README.md lists the settings that lower the count.
+echo "Thread limit (ulimit -u): $(ulimit -u)"
 
 # shellcheck source=slurm/vllm_common.sh
 source "${REPO_ROOT}/slurm/vllm_common.sh"
