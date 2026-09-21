@@ -179,7 +179,7 @@ class VLLMOnlineRuntimeOptions(VLLMBaseRuntimeOptions):
     def to_payload(self) -> dict[str, Any]:
         """Build the flat JSON body for vLLM's chat-completions route.
 
-        A ``json_schema`` becomes a ``response_format`` of type
+        An ``output_schema`` becomes a ``response_format`` of type
         ``json_schema``, which is the form vLLM 0.29 reads on
         ``/v1/chat/completions``: ``structured_outputs_from_response_format``
         (``vllm/entrypoints/generate/base/protocol.py``) turns it into the
@@ -194,7 +194,7 @@ class VLLMOnlineRuntimeOptions(VLLMBaseRuntimeOptions):
 
         Examples:
             >>> fmt = VLLMOnlineRuntimeOptions(
-            ...     json_schema={"type": "object"}
+            ...     output_schema={"type": "object"}
             ... ).to_payload()["response_format"]
             >>> fmt["type"], fmt["json_schema"]["name"]
             ('json_schema', 'response')
@@ -209,12 +209,12 @@ class VLLMOnlineRuntimeOptions(VLLMBaseRuntimeOptions):
             payload["chat_template_kwargs"] = self.chat_template_kwargs
         if self.mm_processor_kwargs is not None:
             payload["mm_processor_kwargs"] = self.mm_processor_kwargs
-        if self.json_schema is not None:
+        if self.output_schema is not None:
             payload["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {
                     "name": "response",
-                    "schema": self.json_schema,
+                    "schema": self.output_schema,
                     "strict": True,
                 },
             }

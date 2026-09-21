@@ -137,7 +137,7 @@ def test_batch_generate_against_a_real_server(
             max_completion_tokens=64,
             temperature=0.0,
             seed=0,
-            json_schema=ANSWER_SCHEMA,
+            output_schema=ANSWER_SCHEMA,
         ),
     )
 

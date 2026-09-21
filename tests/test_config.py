@@ -239,14 +239,17 @@ def test_build_options_uses_provider_dataclass() -> None:
     assert options.max_completion_tokens == 32
 
 
-def test_build_options_rejects_double_schema() -> None:
-    client = ClientConfig(
-        provider="openai",
-        model="m",
-        options={"json_schema": {"type": "object"}},
-    )
-    with pytest.raises(ValueError, match="not both"):
-        client.build_options({"type": "object"})
+def test_schema_under_client_options_is_rejected() -> None:
+    # The step's output_schema is the only place for a schema, so that the
+    # selection record always holds it.
+    with pytest.raises(
+        ValidationError, match="not under the client 'options'"
+    ):
+        ClientConfig(
+            provider="openai",
+            model="m",
+            options={"output_schema": {"type": "object"}},
+        )
 
 
 # --- server pool -------------------------------------------------------------
@@ -1718,11 +1721,19 @@ def test_resolve_base_urls_reports_a_pool_source_with_no_urls(
 # --- step and generate-step edge cases ---------------------------------------
 
 
-@pytest.mark.parametrize("name", ["", "   "])
-def test_blank_step_name_is_rejected(name: str) -> None:
-    """A step name that is empty or only whitespace is rejected."""
-    with pytest.raises(ValueError, match="Step 'name' must not be empty."):
+@pytest.mark.parametrize(
+    "name", ["", "   ", "rate,qa", "rate qa", "a/b", "-rate", ".rate", "é"]
+)
+def test_unsafe_step_name_is_rejected(name: str) -> None:
+    """A name that is unsafe as a path, a column or a job name is rejected."""
+    with pytest.raises(ValueError, match="may only hold letters, digits"):
         StepConfig(name=name, prompt="x")
+
+
+@pytest.mark.parametrize("name", ["rate", "rate-qa", "rate_qa_v1.2", "01"])
+def test_safe_step_name_is_accepted(name: str) -> None:
+    """Letters, digits, '_', '-' and '.' are accepted."""
+    assert StepConfig(name=name, prompt="x").name == name
 
 
 def test_generate_step_with_an_empty_prompts_list_reports_when_resolved() -> (

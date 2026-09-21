@@ -255,7 +255,6 @@ def test_annotate_forwards_config_overrides(tmp_path: Path) -> None:
 def _write_pool_config(
     tmp_path: Path,
     pool: dict[str, int],
-    name: str = "write",
     model: str = "Qwen/Qwen3-8B",
 ) -> Path:
     """Write a one-step pooled-vLLM config and return its path.
@@ -263,7 +262,6 @@ def _write_pool_config(
     Args:
         tmp_path: Directory to write the config into.
         pool: The step's ``client.pool`` block.
-        name: Name of the single step.
         model: The step's ``client.model``.
 
     Returns:
@@ -277,7 +275,7 @@ def _write_pool_config(
                 "dataset": {"name": "stanfordnlp/imdb", "split": "test"},
                 "steps": [
                     {
-                        "name": name,
+                        "name": "write",
                         "prompt": "x {text}",
                         "client": {
                             "provider": "vllm_online",
@@ -653,23 +651,20 @@ def test_submit_pipeline_leaves_a_local_model_alone(tmp_path: Path) -> None:
 
 
 @REQUIRES_CLI
-def test_submit_pipeline_survives_an_awkward_step_name(
+def test_submit_pipeline_survives_an_awkward_model_name(
     tmp_path: Path,
 ) -> None:
-    """A step name with a space and a quote reaches sbatch unbroken."""
+    """A model id with a space, a comma and a quote reaches sbatch unbroken."""
     config_path = _write_pool_config(
         tmp_path,
         {"servers": 2, "min_servers": 1},
-        name='wri te"x',
-        model="org/a model",
+        model='org/a model,"x',
     )
 
     process = _run_submit(tmp_path, config_path)
 
     assert process.returncode == 0, process.stderr
-    assert "Step 1 'wri te\"x'" in process.stdout
-    assert "serving org/a model" in process.stdout
-    assert '--job-name=annotate-wri\\ te\\"x' in process.stderr
+    assert 'serving org/a model,"x' in process.stdout
 
 
 def test_annotate_logs_the_thread_limit(tmp_path: Path) -> None:

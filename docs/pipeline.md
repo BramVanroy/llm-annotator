@@ -128,7 +128,17 @@ stripped, rendered or reformatted, so a `.json` file used as a prompt reaches
 the model as the JSON text it holds. `output_schema_file` is the one file that
 is parsed, and it has to hold a JSON object.
 
+The schema belongs to the step and nowhere else: a client block that sets
+`output_schema` under `options` is refused when the config loads. The step's
+schema is part of its [selection record](#editing-a-step), so an edited schema
+is noticed on the next run.
+
 ## How steps see each other's output
+
+A step's `name` names its directory (`<NN>-<name>/`), its default
+`task_prefix` (`<name>_`) and its SLURM jobs. It may only hold letters,
+digits, `_`, `-` and `.`, and it starts with a letter or a digit, so
+`rate-qa` is accepted and `rate qa` or `rate,qa` are refused.
 
 Each step writes several kinds of column:
 
@@ -472,8 +482,8 @@ in-process) or `api` (a hosted provider, no accelerator at all).
 instead, so a submitter written in shell can `eval` a line rather than parse
 JSON. Every key is the JSON name in upper case behind a `STEP_` prefix (a name
 that already starts with `step_` does not get it twice, so `step_dir` is
-`STEP_DIR`), and every value is quoted with `shlex.quote`, so a step name or a
-model containing a space, a comma or a quote survives. A `null` becomes the
+`STEP_DIR`), and every value is quoted with `shlex.quote`, so a model or a path
+containing a space, a comma or a quote survives. A `null` becomes the
 empty string.
 
 ```console

@@ -226,7 +226,7 @@ An empty `url_glob` on a cluster means no server published its `.url` file. The
 ### Steps
 
 ```text
-Step 'name' must not be empty.
+Step name <name> may only hold letters, digits, '_', '-' and '.', and must start with a letter or a digit.
 ```
 
 ```text
@@ -270,7 +270,7 @@ Step '<name>' is a 'generate' step, which replaces the dataset instead of annota
 ```
 
 ```text
-Set the schema either as the step's 'output_schema' or as client options 'json_schema', not both.
+Set the schema as the step's 'output_schema' (or 'output_schema_file'), not under the client 'options'.
 ```
 
 ### Prompt and schema files

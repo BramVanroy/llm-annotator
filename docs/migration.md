@@ -170,6 +170,30 @@ Python API. A step that named a `hub_id` and no cadence uploaded nothing in
 0.16. Set `upload_every_n_samples: 0` to switch the backup off. Without a
 `hub_id` nothing is uploaded either way.
 
+### The schema is set on the step only
+
+A client block with `json_schema` (or `output_schema`) under `options` is
+refused when the config loads. Move the schema to the step:
+
+```yaml
+# before
+client:
+  options:
+    json_schema: {type: object, properties: {label: {type: string}}}
+# after
+output_schema: {type: object, properties: {label: {type: string}}}
+```
+
+In 0.16 a schema under `options` was sent to the model but left out of the
+step's selection record, so an edited schema was not noticed on a re-run.
+
+### Step names
+
+A step name may only hold letters, digits, `_`, `-` and `.`, and starts with a
+letter or a digit. A name such as `rate qa` or `rate,qa` is refused when the
+config loads; `sbatch --export` splits on the comma. Rename the step, and
+rename its directory `<NN>-<name>/` with it to keep its finished rows.
+
 ## Python API
 
 ### Renamed and removed arguments
@@ -181,6 +205,7 @@ Python API. A step that named a `hub_id` and no cadence uploaded nothing in
 | `VLLMOfflineClient(batch_size=..., min_batch_size=...)` | the annotator's own `batch_size`, at or above `max_num_seqs` |
 | `client.batch_generate(..., use_batch_api=True, poll_interval=30)` | `OpenAIClient(..., use_batch_api=True, batch_poll_interval=30)` |
 | `run_annotation(..., dataset_split=..., dataset_config=...)` | drop both; they are arguments of `prepare_data` and `annotate_dataset`, where they select what is loaded |
+| `ProviderRuntimeOptions(json_schema=schema)` (and the same field on every runtime-options class) | `output_schema=schema`; an `Annotator` refuses options that hold a schema, so pass it as `run_annotation(..., output_schema=schema)` (or to `annotate_dataset`, `generate_dataset`) |
 | `anno.push_progress_to_hub(progress_dir)` | `hub_id` is a required keyword: `anno.push_progress_to_hub(progress_dir, hub_id="me/my-dataset")` |
 
 ```python

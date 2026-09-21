@@ -218,12 +218,12 @@ class ClaudeClient(Client[ClaudeRuntimeOptions]):
         if system_instruction:
             request_payload["system"] = system_instruction
 
-        if options.json_schema is not None:
+        if options.output_schema is not None:
             if "output_config" not in request_payload:
                 request_payload["output_config"] = {}
 
             schema = _sanitize_schema(
-                add_schema_additional_properties_false(options.json_schema)
+                add_schema_additional_properties_false(options.output_schema)
             )
             request_payload["output_config"]["format"] = {
                 "type": "json_schema",

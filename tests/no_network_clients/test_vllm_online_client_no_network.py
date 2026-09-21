@@ -162,7 +162,7 @@ def test_vllm_online_runtime_options_render_the_json_schema() -> None:
         "properties": {"answer": {"type": "string"}},
         "required": ["answer"],
     }
-    payload = VLLMOnlineRuntimeOptions(json_schema=schema).to_payload()
+    payload = VLLMOnlineRuntimeOptions(output_schema=schema).to_payload()
 
     assert payload["response_format"] == {
         "type": "json_schema",
@@ -181,7 +181,7 @@ def test_vllm_online_generate_sends_the_json_schema(
     client = VLLMOnlineClient(model="served-vllm-model")
     client.generate(
         messages=[{"role": "user", "content": "one"}],
-        options=VLLMOnlineRuntimeOptions(json_schema={"type": "object"}),
+        options=VLLMOnlineRuntimeOptions(output_schema={"type": "object"}),
     )
 
     kwargs = cast(dict[str, Any], fake_openai_module["last_create_kwargs"])

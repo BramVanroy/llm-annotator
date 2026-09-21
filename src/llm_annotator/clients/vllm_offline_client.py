@@ -40,12 +40,12 @@ class VLLMOfflineRuntimeOptions(VLLMBaseRuntimeOptions):
         max_completion_tokens: Maximum number of output tokens. Inherited from
             [`ProviderRuntimeOptions`][llm_annotator.clients.base.ProviderRuntimeOptions].
             Forwarded to ``SamplingParams`` as ``max_tokens``.
-        json_schema: Optional JSON schema dict for structured output via guided
+        output_schema: Optional JSON schema dict for structured output via guided
             decoding. Inherited from ``ProviderRuntimeOptions``. When
             provided, vLLM constrains generation to valid JSON matching the
             schema.
         whitespace_pattern: Regex pattern inserted between JSON tokens during
-            guided decoding. Only used when ``json_schema`` is set.
+            guided decoding. Only used when ``output_schema`` is set.
     """
 
     whitespace_pattern: str | None = r"[ ]?"
@@ -66,11 +66,11 @@ class VLLMOfflineRuntimeOptions(VLLMBaseRuntimeOptions):
         payload = VLLMBaseRuntimeOptions.to_payload(self)
         if self.max_completion_tokens is not None:
             payload["max_tokens"] = self.max_completion_tokens
-        if self.json_schema is not None:
+        if self.output_schema is not None:
             from vllm.sampling_params import StructuredOutputsParams
 
             payload["structured_outputs"] = StructuredOutputsParams(
-                json=self.json_schema,
+                json=self.output_schema,
                 whitespace_pattern=self.whitespace_pattern,
             )
         if self.extra_body:
@@ -145,7 +145,7 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
         ...     "required": ["label"],
         ... }
         >>> opts = VLLMOfflineRuntimeOptions(
-        ...     max_completion_tokens=128, json_schema=schema
+        ...     max_completion_tokens=128, output_schema=schema
         ... )  # doctest: +SKIP
         >>> with VLLMOfflineClient(  # doctest: +SKIP
         ...     model="meta-llama/Llama-3.2-3B-Instruct"

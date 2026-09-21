@@ -65,7 +65,7 @@ def test_claude_generate_builds_payload_and_parses_response(
         ],
         options=ClaudeRuntimeOptions(
             max_completion_tokens=11,
-            json_schema={"type": "object"},
+            output_schema={"type": "object"},
             effort="low",
             thinking_type="adaptive",
             thinking_display="summarized",

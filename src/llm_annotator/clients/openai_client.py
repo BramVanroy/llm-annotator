@@ -322,9 +322,9 @@ class OpenAIClient(Client[T_OpenAIOptions]):
         body: dict[str, Any] = options.to_payload()
         body["model"] = self.model
         body["messages"] = messages
-        if options.json_schema is not None:
+        if options.output_schema is not None:
             body["response_format"] = _json_schema_response_format(
-                options.json_schema
+                options.output_schema
             )
         body.update(gen_kwargs or {})
         reject_multiple_responses(body)
@@ -539,9 +539,9 @@ class OpenAIClient(Client[T_OpenAIOptions]):
                 "messages": messages,
             }
         )
-        if resolved.json_schema is not None:
+        if resolved.output_schema is not None:
             request_payload["response_format"] = _json_schema_response_format(
-                resolved.json_schema
+                resolved.output_schema
             )
         request_payload.update(gen_kwargs or {})
         reject_multiple_responses(request_payload)
