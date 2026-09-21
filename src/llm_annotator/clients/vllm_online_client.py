@@ -38,6 +38,17 @@ can ask for more: a ``batch_size`` of 1024 times the default
 one client. Above the cap httpx queues the rest, which would keep part of a
 batch from reaching the server that is supposed to schedule it."""
 
+CONNECT_TIMEOUT = 5.0
+"""Seconds to wait for the TCP connection of one request, apart from the
+generation itself.
+
+A host that drops packets rather than refusing the connection (a node that
+crashed, say) answers neither, so without a short connect timeout every
+request of the batch would sit there for the full ``timeout`` before
+[`VLLMQueueAnnotator`][llm_annotator.annotator.VLLMQueueAnnotator] gets the
+errors it evicts the server on. This is the OpenAI SDK's own connect
+timeout."""
+
 
 def server_is_healthy(base_url: str, timeout: float) -> bool:
     """Check whether a vLLM server answers its ``/health`` endpoint.
@@ -287,11 +298,13 @@ class VLLMOnlineClient(OpenAIClient[VLLMOnlineRuntimeOptions]):
                 sends at once. ``None`` sends the whole batch, which is what
                 lets the server schedule it as one workload. Lower it only to
                 protect a server that is shared with other jobs.
-            timeout: Seconds one request may take, end to end. It covers the
-                wait in the server's queue as well as the generation itself,
-                so a value below the time a full batch needs turns a healthy
-                run into errors. The default of one hour fits a loaded server
-                that holds thousands of prompts.
+            timeout: Seconds one request may spend reading its answer. It
+                covers the wait in the server's queue as well as the
+                generation itself, so a value below the time a full batch
+                needs turns a healthy run into errors. The default of one hour
+                fits a loaded server that holds thousands of prompts. Making
+                the connection has its own, short limit
+                (``CONNECT_TIMEOUT``).
             max_retries: How often the OpenAI SDK retries a request. It
                 retries connection errors, request timeouts and the status
                 codes 408, 409, 429 and 5xx, with an exponential backoff of
@@ -312,12 +325,15 @@ class VLLMOnlineClient(OpenAIClient[VLLMOnlineRuntimeOptions]):
         self.base_url = base_url
         self.timeout = timeout
         self.max_retries = max_retries
-        # The SDK's own defaults are cut for a rate-limited hosted API: ten
-        # minutes per request and 1000 sockets. A pool needs both raised.
+        # Replaces the client the base constructor built on the SDK's
+        # hosted-API defaults (600 s per request, 1000 sockets), both of which
+        # a server that holds a full pool batch runs past. The timeout is a
+        # Timeout rather than the plain float, because httpx reads a float as
+        # all four of its limits, connect included.
         self._client = OpenAI(
             api_key="EMPTY",
             base_url=base_url,
-            timeout=timeout,
+            timeout=httpx.Timeout(timeout, connect=CONNECT_TIMEOUT),
             max_retries=max_retries,
             http_client=DefaultHttpxClient(
                 limits=httpx.Limits(

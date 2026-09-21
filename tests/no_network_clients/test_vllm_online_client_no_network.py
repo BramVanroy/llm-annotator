@@ -10,6 +10,7 @@ import pytest
 from llm_annotator.clients.base import Response
 from llm_annotator.clients.exceptions import ConfigurationError
 from llm_annotator.clients.vllm_online_client import (
+    CONNECT_TIMEOUT,
     MAX_CONNECTIONS,
     VLLMOnlineClient,
     VLLMOnlineRuntimeOptions,
@@ -61,9 +62,12 @@ def test_vllm_online_client_configures_the_sdk_client(
     assert client.timeout == 120.0
     assert client.max_retries == 1
     sdk_kwargs = cast(list[Any], fake_openai_module["openai_init_kwargs"])[-1]
-    assert sdk_kwargs["timeout"] == 120.0
     assert sdk_kwargs["max_retries"] == 1
     assert sdk_kwargs["api_key"] == "EMPTY"
+    # A plain float would make httpx wait `timeout` on the connection too,
+    # so a black-holed server would stall the batch instead of erroring.
+    assert sdk_kwargs["timeout"].read == 120.0
+    assert sdk_kwargs["timeout"].connect == CONNECT_TIMEOUT
     limits = sdk_kwargs["http_client"].kwargs["limits"]
     assert limits.max_connections == MAX_CONNECTIONS
     assert limits.max_keepalive_connections == MAX_CONNECTIONS
