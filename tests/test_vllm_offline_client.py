@@ -20,28 +20,27 @@ def smollm_model_id() -> str:
     return "HuggingFaceTB/SmolLM2-135M-Instruct"
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def vllm_offline_smollm_client(
     smollm_model_id: str,
 ) -> Generator[VLLMOfflineClient, None, None]:
-    """Create one offline vLLM client for the full test session.
+    """Create one offline vLLM client for the tests of this module.
 
-    Reusing a single client keeps these integration tests fast by avoiding
-    repeated model load and tokenizer initialization costs.
+    One client per module keeps the tests fast, and the module scope makes
+    the engine release the GPU before the next slow module starts its own.
     """
     try:
         import vllm  # noqa: F401
     except Exception as exc:  # pragma: no cover - environment dependent
         pytest.skip(f"vLLM is not available: {exc}")
 
-    extra_vllm_kwargs: dict[str, str] = {}
     try:
         import torch
 
-        if not torch.cuda.is_available():
-            extra_vllm_kwargs["device"] = "cpu"
+        has_gpu = torch.cuda.is_available()
     except Exception:
-        extra_vllm_kwargs["device"] = "cpu"
+        has_gpu = False
+    extra_vllm_kwargs: dict[str, str] = {} if has_gpu else {"device": "cpu"}
 
     try:
         client = VLLMOfflineClient(
@@ -57,6 +56,10 @@ def vllm_offline_smollm_client(
             options=VLLMOfflineRuntimeOptions(max_completion_tokens=8),
         )
     except Exception as exc:  # pragma: no cover - environment dependent
+        # With a GPU the engine has to start, so a failure is a finding and
+        # not a reason to skip.
+        if has_gpu:
+            raise
         pytest.skip(f"Could not initialize vLLM offline test client: {exc}")
 
     yield client
@@ -77,7 +80,7 @@ def test_generate_with_smollm(
             }
         ],
         options=VLLMOfflineRuntimeOptions(
-            max_completion_tokens=10, temperature=0.0, seed=0
+            max_completion_tokens=64, temperature=0.0, seed=0
         ),
     )
 
@@ -96,8 +99,10 @@ def test_batch_generate_with_smollm(
             [{"role": "user", "content": "Reply with one short greeting."}],
             [{"role": "user", "content": "Reply with one short farewell."}],
         ],
+        # Room for a whole answer: a response that hits the token limit is
+        # reported as an error.
         options=VLLMOfflineRuntimeOptions(
-            max_completion_tokens=12, temperature=0.0, seed=1
+            max_completion_tokens=64, temperature=0.0, seed=1
         ),
     )
 

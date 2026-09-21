@@ -19,24 +19,27 @@ def smollm_model_id() -> str:
     return "HuggingFaceTB/SmolLM2-135M-Instruct"
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def offline_vllm_client(
     smollm_model_id: str,
 ) -> Generator[VLLMOfflineClient, None, None]:
-    """Create one offline client for all slow Annotator integration tests."""
+    """Create one offline client for the slow Annotator tests of this module.
+
+    The module scope makes the engine release the GPU before the next slow
+    module starts its own.
+    """
     try:
         import vllm  # noqa: F401
     except Exception as exc:  # pragma: no cover - environment dependent
         pytest.skip(f"vLLM is not available: {exc}")
 
-    extra_vllm_kwargs: dict[str, str] = {}
     try:
         import torch
 
-        if not torch.cuda.is_available():
-            extra_vllm_kwargs["device"] = "cpu"
+        has_gpu = torch.cuda.is_available()
     except Exception:
-        extra_vllm_kwargs["device"] = "cpu"
+        has_gpu = False
+    extra_vllm_kwargs: dict[str, str] = {} if has_gpu else {"device": "cpu"}
 
     try:
         client = VLLMOfflineClient(
@@ -54,6 +57,10 @@ def offline_vllm_client(
             ),
         )
     except Exception as exc:  # pragma: no cover - environment dependent
+        # With a GPU the engine has to start, so a failure is a finding and
+        # not a reason to skip.
+        if has_gpu:
+            raise
         pytest.skip(f"Could not initialize vLLM offline client: {exc}")
 
     yield client
