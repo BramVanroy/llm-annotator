@@ -1,201 +1,240 @@
 # Contributing to llm-annotator
 
-Thank you for your interest in contributing to llm-annotator! This document provides guidelines and instructions for contributing.
+## Development setup
 
-## Development Setup
+Everything runs through [uv](https://docs.astral.sh/uv/). The project needs
+Python 3.12, 3.13 or 3.14.
 
-1. Clone the repository:
 ```bash
 git clone https://github.com/BramVanroy/llm-annotator.git
 cd llm-annotator
+uv sync --dev
+pre-commit install
+pre-commit install --hook-type pre-push
 ```
 
-2. Set up the development environment:
+`uv sync --dev` installs the package with every provider extra (`vllm`,
+`openai`, `anthropic`) plus the development and documentation tools. The two
+`pre-commit install` calls are separate because the checks run at two different
+stages, see [Pre-commit hooks](#pre-commit-hooks).
+
+## Make targets
+
+| Target | What it runs |
+| --- | --- |
+| `make style` | `ruff check --fix` and `ruff format` over `src/`, `tests/`, `examples/`, `case-studies/`, `scripts/` |
+| `make quality` | `interrogate` (docstring coverage) plus `ruff check` and `ruff format --check` |
+| `make typecheck` | `mypy` over `src/`, `tests/` and `scripts/` |
+| `make test` | the fast suite, `pytest -m "not slow"`, with coverage |
+| `make test-slow` | `pytest -m "slow"`: loads real models through vLLM |
+| `make test-integration` | `pytest -m "integration"`: network and Hugging Face Hub |
+| `make test-all` | every marker |
+| `make test-matrix` | the fast suite once per CI Python version |
+| `make serve-docs` | `mkdocs serve` with live reload |
+| `make build-docs` | `mkdocs build --strict`, what the CI docs job runs |
+
+`make test-fast` is an alias of `make test` that CI calls by that name.
+
+## Tests
+
+Markers are strict (`--strict-markers` in `pyproject.toml`), and there are two:
+
+- `slow`: loads a real model. Seven tests carry it.
+- `integration`: talks to the network or the Hugging Face Hub, and needs an
+  authenticated account.
+
+A single test or file:
+
 ```bash
-make setup
+uv run pytest tests/test_annotator.py::test_prepare_data_writes_a_record
+uv run pytest tests/no_network_clients/ -m "not slow"
 ```
 
-This will:
-- Install all development dependencies
-- Set up pre-commit hooks
+`pyproject.toml` puts `--doctest-modules` in `addopts` and lists both `tests`
+and `src` in `testpaths`, so every docstring example in `src/` is executed as a
+doctest. An example that needs a GPU, a model or the network has to carry
+`# doctest: +SKIP`.
 
-## Making Changes
+Provider SDKs are faked in `tests/no_network_clients/` by injecting modules
+into `sys.modules` (the `fake_openai_module` and `fake_anthropic_module`
+fixtures in `conftest.py`). The `block_network` fixture makes
+`socket.socket.connect` fail, so a test that reaches the network fails rather
+than hangs. Hub cleanup in `conftest.py` is opt-in through
+`LLM_ANNOTATOR_ALLOW_NETWORK_TESTS=1`; a default run stays offline.
 
-### Code Changes
+### The Python version matrix
 
-1. Create a new branch for your changes:
+`make test` only exercises the interpreter in `.venv`. Some breakage is
+version-specific and therefore invisible there: `@dataclass(slots=True)` plus a
+zero-argument `super()` raises `TypeError` on 3.12 and works from 3.13 on.
+`make test-matrix` runs the fast suite against every interpreter the CI matrix
+covers. It reads the version list out of `.github/workflows/ci.yml`, so adding a
+version to CI adds it here, and it creates one venv per version under
+`.venvs/py<X.Y>` (gitignored, hardlinked from uv's cache).
+
+To run pytest in one of those venvs afterwards without uv rebuilding the
+environment:
+
 ```bash
-git checkout -b feature/your-feature-name
+UV_PROJECT_ENVIRONMENT=.venvs/py3.12 uv run --no-sync --python 3.12 pytest -m "not slow and not integration"
 ```
 
-2. Make your changes to the code
+`--no-sync` is what keeps uv from re-resolving, and `UV_PROJECT_ENVIRONMENT`
+belongs on that one command line rather than exported into the shell, where it
+would also redirect `make quality`, `make typecheck` and `make build-docs`.
 
-3. Ensure code quality:
-```bash
-make quality  # Check code quality
-make style    # Auto-format code
-```
+### The slow suite
 
-4. Run tests:
-```bash
-make test
-```
-
-The default `make test` target runs the fast suite (`-m "not slow"`).
-
-Run specific test tiers when needed:
+The seven `slow` tests load `HuggingFaceTB/SmolLM2-135M-Instruct` through vLLM
+and need one GPU. They pass in a single process on an H100 with vLLM 0.29.0.
+The vLLM engine fixtures are module-scoped rather than session-scoped, so an
+engine is released before the next module builds its own.
 
 ```bash
-# Fast tests (default)
-make test-fast
-
-# Slow tests only
 make test-slow
-
-# Integration tests only
-make test-integration
-
-# Entire suite
-make test-all
 ```
 
-`make test` only ever exercises the one interpreter in `.venv`. Some breakage is
-version-specific and therefore invisible there — `@dataclass(slots=True)` plus a
-zero-argument `super()`, for instance, raises `TypeError` on 3.12 but works from
-3.13 on. To run the fast suite against every interpreter the CI matrix covers:
+A machine without a GPU skips them. A machine with a GPU on which the engine
+fails to start reports a failure rather than a skip, so a broken engine is not
+mistaken for a missing one.
+
+Serving needs the prebuilt FlashInfer kernels from the `vllm-kernels`
+dependency group:
 
 ```bash
-make test-matrix
+uv sync --extra vllm --group vllm-kernels
 ```
 
-It creates one venv per version under `.venvs/py<X.Y>` (gitignored, hardlinked
-from uv's cache) and reads the version list straight out of
-`.github/workflows/ci.yml`, so adding a version to CI adds it here too. This is
-also wired up as a pre-push hook — see [Pre-commit Hooks](#pre-commit-hooks).
+Without them vLLM JIT-compiles its kernels at start-up, which needs `nvcc` on
+the node and races between servers that share `~/.cache/flashinfer`. The wheels
+are about 2.5 GB, which is why they sit in a group rather than in the `vllm`
+extra that CI installs. `docs/provider-info.md` has the details.
 
-Markers:
-- `slow`: tests that may load models or run substantially longer.
-- `integration`: tests that interact with external systems or real-model runtimes.
+## Code style
 
-CI runs fast tests on pull requests and pushes. Slow tests run in a dedicated CI job on pushes to `main`.
+- Ruff's `line-length` is 79. The formatter wraps code at that width, so
+  `make style` reflows anything longer that it can reflow.
+- `E501` is in `[tool.ruff.lint] ignore`, so a long line is not a lint error.
+  A string, a URL or a comment that the formatter cannot break is therefore
+  accepted as it is. Do not reformat such a line by hand to chase the number.
+- isort has `lines-after-imports = 2` and `known-first-party = ["llm_annotator"]`.
+  Imports are top level; a provider SDK is the exception and is imported inside
+  `__init__` or inside the method that uses it, so the package imports without
+  the optional extras installed.
+- Google-style docstrings everywhere in `src/`. `interrogate` fails
+  `make quality` if a public object has none. Tests, examples and docs are
+  excluded from that check.
+- mypy runs with `check_untyped_defs`, `warn_return_any`, `warn_unused_ignores`
+  and `no_implicit_optional`.
+- Logging goes through `llm_annotator.logging_utils.get_logger(...)`, never
+  `print`.
 
-### Documentation Changes
+### Docstrings
 
-When you modify docstrings in the source code or documentation files, the documentation will be automatically validated before you can push your changes.
+mkdocstrings renders docstrings as Markdown, so a Sphinx role survives as
+literal `:class:` text on the site. Cross-reference with the mkdocstrings form
+``[`Name`][full.dotted.path]`` instead. Two pre-commit hooks enforce that and
+the related rule that an attribute needs a real docstring rather than a `#:`
+comment.
 
-#### Writing Docstrings
-
-- Use Google-style docstrings
-- Include comprehensive examples in docstrings for public methods
-- Examples should be realistic and runnable (even if they require resources)
-- Document all parameters, return values, and exceptions
-
-Example:
 ```python
 def my_function(param1: str, param2: int = 10) -> bool:
-    """Short description of the function.
-
-    Longer description with more details about what the function does,
-    how it works, and any important notes.
+    """Return whether param1 is longer than param2.
 
     Args:
-        param1: Description of param1.
-        param2: Description of param2. Defaults to 10.
+        param1: The text to measure.
+        param2: The length to compare against.
 
     Returns:
-        Description of return value.
+        True when param1 is longer than param2.
 
     Examples:
-        Basic usage:
-
-        >>> result = my_function("test", 5)
-        >>> print(result)
-        True
-
-        Advanced usage:
-
-        >>> result = my_function("test")
-        >>> print(result)
+        >>> my_function("test", 5)
         False
     """
     return len(param1) > param2
 ```
 
-#### Building Documentation Locally
+## Documentation
 
-Build the documentation:
-```bash
-make docs
-```
+The site is built with [MkDocs](https://www.mkdocs.org/) and the Material
+theme. `mkdocs.yml` holds the theme, the extensions and the `nav` tree.
 
-The output will be in `docs/_build/html/`.
+| Path | Holds |
+| --- | --- |
+| `docs/index.md` | home page: what the library is, install, quickstart, where to go next |
+| `docs/choosing-a-provider.md`, `docs/pipeline.md`, `docs/python-api.md`, `docs/growing-a-run.md`, `docs/troubleshooting.md`, `docs/provider-info.md`, `docs/migration.md` | the prose guides |
+| `docs/slurm.md` | one line that includes `slurm/README.md` verbatim |
+| `docs/api/*.md` | one stub per module, each holding only `::: llm_annotator.<module>` |
+| `docs/hooks.py` | build hook: renders doctest examples as plain Python and points API source links at the release tag |
+| `docs/overrides/` | mkdocstrings template overrides |
 
-Serve the documentation locally:
-```bash
-make docs-serve
-```
+Two rules when a page is added or a public symbol appears:
 
-Then open http://localhost:8000 in your browser.
+- A new page has to be listed in `mkdocs.yml`'s `nav`, or
+  `mkdocs build --strict` fails on the omitted file.
+- A new public symbol belongs in `src/llm_annotator/__init__.py` (with an
+  explicit `as` alias and an `__all__` entry) and on the matching `docs/api/`
+  stub page.
 
-#### Documentation Structure
+The install section and the quickstart examples live in `README.md` only.
+`docs/index.md` includes them with `pymdownx.snippets` section markers
+(`<!-- --8<-- [start:name] -->`), the same mechanism `docs/slurm.md` uses for
+`slurm/README.md`. A file that is rendered in both places carries no relative
+Markdown links, since no relative path resolves correctly from the repository
+root and from inside `docs/` at the same time. Put those links in the page that
+includes the snippet.
 
-- `docs/index.md` - Main landing page
-- `docs/getting-started.md` - Tutorial for new users
-- `docs/api-reference.md` - Auto-generated API documentation from docstrings
-- `docs/examples.md` - Practical examples and use cases
-- `docs/conf.py` - Sphinx configuration
-
-## Pre-commit Hooks
-
-Pre-commit hooks will automatically run before you push:
-
-1. **Code Quality** (`make quality`) - Checks code style and linting
-2. **Documentation Build** - Validates that documentation builds successfully if you've modified docstrings or docs files
-
-There is also a **pre-push** hook that runs `make test-matrix` (the fast suite on
-every CI Python version) whenever the push touches a `.py` file. Because it runs
-at a different stage, it needs to be installed explicitly, once per clone:
+Build and preview:
 
 ```bash
-pre-commit install --hook-type pre-push
+make build-docs   # mkdocs build --strict
+make serve-docs   # http://127.0.0.1:8000
 ```
 
-Without that, `pre-commit install` only wires up the commit-stage hooks and the
-matrix never runs locally. It is skipped by `pre-commit run --all-files`, which
-is what CI uses.
+`make serve-docs-versioned` is only needed to exercise the mike version
+selector; it writes to a throwaway local branch.
 
-If the pre-commit hooks fail:
-- Fix the reported issues
-- Stage your fixes: `git add .`
-- Try committing/pushing again
+Two test modules keep the documentation honest, and both run in the fast suite:
 
-To bypass hooks (not recommended):
-```bash
-git push --no-verify
-```
+- `tests/test_docs_configs.py` loads every fenced `yaml` block of `README.md`,
+  `docs/**/*.md` and `slurm/README.md` that looks like a whole pipeline config.
+- `tests/test_docs.py` parses every fenced `python` block, resolves the names
+  each one imports from `llm_annotator`, and checks that every error text
+  quoted in `docs/troubleshooting.md` still occurs in `src/`.
 
-## Pull Request Process
+## Pre-commit hooks
 
-1. Update documentation if you've changed functionality
-2. Add examples to docstrings for new public methods
-3. Ensure all tests pass
-4. Ensure documentation builds successfully
-5. Update the README.md if needed
-6. Create a pull request with a clear description of changes
+The commit-stage hooks run ruff lint, ruff format, mypy, a set of file hygiene
+checks and two pygrep rules about docstrings.
 
-## Documentation Deployment
+The pre-push hook runs `make test-matrix` when the push touches a `.py` file.
+It runs at a different stage, so it needs its own install line
+(`pre-commit install --hook-type pre-push`) once per clone. `pre-commit run
+--all-files`, which CI uses, skips it.
 
-Documentation is automatically deployed to GitHub Pages when changes are merged to `main`:
+If a hook fails, fix what it reports, `git add` the fixes and commit again.
 
-1. GitHub Actions builds the documentation
-2. Deploys to https://bramvanroy.github.io/llm-annotator/
-3. Usually available within a few minutes
+## Pull requests
 
-## Questions?
+1. Branch from `main`.
+2. Keep the documentation in step with the change.
+3. Run `make style`, `make quality`, `make typecheck` and `make test`.
+4. Run `make build-docs` when a page or a docstring changed.
+5. Open the pull request with a description of what changed and why.
 
-If you have questions, please:
-- Check existing issues and discussions
-- Open a new issue for bugs or feature requests
-- Start a discussion for questions
+CI runs pre-commit and `make typecheck`, `mkdocs build --strict`, and the fast
+suite on 3.12, 3.13 and 3.14. The slow suite runs on pushes to `main` only.
+A separate workflow checks the links in the Markdown files with
+[lychee](https://lychee.cli.rs/).
 
-Thank you for contributing!
+## Releases
+
+Documentation is published with [mike](https://github.com/jimporter/mike) from
+`.github/workflows/docs.yml` when a release tag is pushed, and lands on
+<https://bramvanroy.github.io/llm-annotator/>.
+
+## Questions
+
+Open an issue for a bug or a feature request, or start a discussion for
+anything else.
