@@ -467,6 +467,29 @@ resumes every step, without `--overwrite`: only the new rows are sent to the
 model, in every step. See [Growing a run](growing-a-run.md) for the full
 workflow, what is allowed to change, and what is rejected.
 
+Editing a step's `prompt`, `system_prompt`, `sort_by_length` or output schema and re-running the
+same config does not silently mix old and new answers. The step whose setting changed is treated
+as unfinished, and so is every later step, since it reads what that step produced:
+
+* With no progress files for that step yet, it is rebuilt with the new setting.
+* With finished rows already on disk, the run stops with a `ValueError` naming what changed,
+  before anything is deleted. Select the affected step (and, if it is not the last one, the steps
+  after it, since a selection has to be contiguous) and pass `--overwrite` to redo only those:
+
+  ```bash
+  llm-annotate cfg.yaml --steps judge --overwrite
+  llm-annotate cfg.yaml --steps judge summarise --overwrite
+  ```
+
+  Steps outside the selection keep their finished results. See [Editing a prompt
+  mid-run](growing-a-run.md#editing-a-prompt-mid-run) for the full error message and a worked
+  example.
+
+A step outside the selection that no longer matches its own record raises a different error: `Step
+'x' has finished with other settings than the ones that are requested now, so there is no input for
+'y'. Run it first, or select it too.` That step has to be selected (or reverted to its old
+settings) before `y` can run.
+
 The layout under `output_dir` is:
 
 ```text
