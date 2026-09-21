@@ -1590,7 +1590,7 @@ def test_pipeline_growth_recovers_from_a_crash_during_extension(
     assert len(created[0].seen_prompts) == 10
 
 
-def test_legacy_run_without_a_selection_record_blocks_growth(
+def test_pipeline_refuses_a_step_record_without_components(
     tmp_path: Path, built_clients: list[EchoClient]
 ) -> None:
     config = two_step_config(tmp_path)
@@ -1600,39 +1600,13 @@ def test_legacy_run_without_a_selection_record_blocks_growth(
         config.step_dir(0) / STEP_ANNOTATE_SUBDIR,
         config.steps[0].resolved_task_prefix(),
     )
-    assert record_path.is_file()
-    record_path.unlink()
-
-    grown = two_step_config(
-        tmp_path,
-        dataset={"path": tmp_path / "source", "max_num_samples": 2},
+    record_path.write_text(
+        json.dumps({"max_num_samples": None, "selected_rows": 4}),
+        encoding="utf-8",
     )
-    with pytest.raises(
-        ValueError, match="did not record its sample selection"
-    ):
-        run_pipeline(grown)
 
-    # A second attempt raises again: the failed run must not have rewritten
-    # pipeline.json with the new, unrecorded cap.
-    with pytest.raises(
-        ValueError, match="did not record its sample selection"
-    ):
-        run_pipeline(grown)
-
-    # Restoring the original settings still works: nothing changed relative
-    # to what pipeline.json remembers.
-    restored = run_pipeline(two_step_config(tmp_path))
-    assert len(restored) == 4
-
-    # overwrite=True on a selection that includes step 1 skips the guard.
-    overwritten = run_pipeline(
-        two_step_config(
-            tmp_path,
-            overwrite=True,
-            dataset={"path": tmp_path / "source", "max_num_samples": 2},
-        )
-    )
-    assert len(overwritten) == 2
+    with pytest.raises(ValueError, match="does not describe the settings"):
+        run_pipeline(two_step_config(tmp_path))
 
 
 def test_generate_step_growth_sends_only_new_prompts(

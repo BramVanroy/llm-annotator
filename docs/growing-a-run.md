@@ -168,32 +168,48 @@ of one submission:
 `dataset.shuffle_seed` and any other config key work the same way. Set the cap on the submission
 rather than per job, so that all steps of one run agree about how many rows they select.
 
-## Runs made by an older version
+## Migrating an output directory
 
-A run whose first step finished under llm-annotator 0.16 or older has no selection record. Its
-later steps identified a row by its position in their input, and that position changes when the
-input grows. Such a run cannot grow. `run_pipeline` compares `dataset.max_num_samples` and
-`dataset.shuffle_seed` in the config against the values recorded in `<output_dir>/pipeline.json`
-from the first run, and raises when they differ and the first step has no selection record. An
-unchanged config keeps working as before.
+An `output_dir` from a release whose `selection.json` recorded only the sample selection cannot be
+resumed by this version. Such a record says nothing about the prompt, so a resume could not tell
+whether the finished rows answer the prompt that is asked for now. Reading it raises:
 
-A run whose selection record exists but predates the settings above (`shuffle_seed`,
-`reuse_idx_column` and the source dataset only) is read into the settings it does hold, so the cap,
-the seed and the source of such a run are still compared exactly as described above. For every
-setting the record cannot answer for, a WARNING names it and says that an edit to it since the
-finished rows were annotated is not detected; the current run's value is recorded then, so a later
-edit to it is caught.
+```text
+The record in 'outputs/imdb-sentiment/selection.json' does not describe the settings that its run
+was annotated with, so a resume cannot tell whether the prompt still matches. Finish the run with
+the release that wrote it, annotate it into a new 'output_dir', or overwrite it. See 'Migrating an
+output directory' in docs/growing-a-run.md.
+```
+
+Three ways forward:
+
+- Finish the run with the release that wrote it, and let the next run start under this one.
+- Point `output_dir` at a new directory, which annotates every row again and leaves the old result
+  on disk.
+- Pass `--overwrite` (`overwrite: true`, or `overwrite=True` from Python) to discard the finished
+  rows in place and annotate every row again.
+
+A fourth way keeps the finished rows, at your own risk: delete the `selection.json` files under
+`output_dir` (inside a pipeline, `<NN>-<name>/annotate/<name>_selection.json`). Only the rows that
+never ran are then sent to the model. Nothing is compared, and the settings of that run are
+recorded as the ones the whole directory was annotated with. If the prompt changed since the
+finished rows were written, the output holds answers to both prompts and no later run can tell.
+Use it only when you know the settings did not change.
+
+```bash
+rm outputs/imdb-sentiment/*selection.json
+llm-annotate pilot.yaml
+```
 
 ## Limits
 
 - A source loaded by Hub id (`dataset.name`) is compared only when the prepared data is rebuilt; a
   plain re-run that reuses the local or Hub cache does not download the source to check it.
 - The source signature probes 64 rows. An edit to a row outside that probe is not detected.
-- Prepared data reused with no record at all, whether a local cache from a much older version or a
-  backup restored from the Hub branch with no local record on the current machine, is taken at
-  face value: a WARNING says it is reused as it is, and the current run's settings are recorded
-  then, so a later edit to them is caught. The record itself is local only; it is not stored on the
-  Hub.
+- Prepared data reused with no record at all, which is a backup restored from the Hub branch on a
+  machine that never ran the preparation, is taken at face value: a WARNING says it is reused as it
+  is, and the current run's settings are recorded then, so a later edit to them is caught. The
+  record itself is local only; it is not stored on the Hub.
 - `batch_size` and the client settings may change between runs freely; they do not affect what the
   prepared data holds.
 - A cap given with `--max-num-samples` is compared exactly like one written in the config: the run

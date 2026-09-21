@@ -2331,77 +2331,66 @@ def test_run_annotation_records_the_output_schema_once(
     assert record.components["output_schema"] == "None"
 
 
-def test_an_old_record_keeps_comparing_what_it_holds(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    annotator, ds, out_dir = _finished_run(tmp_path, shuffle_seed=1)
-    record_path = SelectionRecord.path(out_dir)
-    stored = json.loads(record_path.read_text(encoding="utf-8"))
-    # What a release that only recorded the selection wrote.
-    record_path.write_text(
-        json.dumps(
-            {
-                "max_num_samples": None,
-                "shuffle_seed": 1,
-                "source_signature": stored["components"]["dataset"],
-                "source_rows": 4,
-                "selected_rows": 4,
-                "reuse_idx_column": False,
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(ValueError, match="'shuffle_seed' changed"):
-        annotator.annotate_dataset(
-            output_dir=out_dir,
-            prompt_template="Q: {text}",
-            dataset=ds,
-            shuffle_seed=2,
-            upload_every_n_samples=0,
-        )
-
-
-def test_an_old_record_warns_about_what_it_cannot_compare(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_a_record_without_components_is_refused(tmp_path: Path) -> None:
     annotator, ds, out_dir = _finished_run(tmp_path)
-    record_path = SelectionRecord.path(out_dir)
-    stored = json.loads(record_path.read_text(encoding="utf-8"))
-    record_path.write_text(
+    # What a release that only recorded the sample selection wrote.
+    SelectionRecord.path(out_dir).write_text(
         json.dumps(
             {
                 "max_num_samples": None,
                 "shuffle_seed": None,
-                "source_signature": stored["components"]["dataset"],
+                "source_signature": "abc",
                 "source_rows": 4,
                 "selected_rows": 4,
-                "reuse_idx_column": False,
             }
         ),
         encoding="utf-8",
     )
 
-    # An edit that the old record cannot answer for is named in a warning and
-    # the finished rows are kept.
-    with caplog.at_level(logging.WARNING):
-        result = annotator.annotate_dataset(
-            output_dir=out_dir,
-            prompt_template="A: {text}",
-            dataset=ds,
-            upload_every_n_samples=0,
-        )
-    assert "prompt_template" in caplog.text
-    assert result["response"] == [f"Q: row {i}" for i in range(4)]
-
-    # The current settings are recorded now, so the next edit is refused.
-    with pytest.raises(ValueError, match="the prompt template changed"):
+    with pytest.raises(ValueError, match="does not describe the settings"):
         annotator.annotate_dataset(
             output_dir=out_dir,
-            prompt_template="B: {text}",
+            prompt_template="Q: {text}",
             dataset=ds,
             upload_every_n_samples=0,
         )
+
+
+def test_removing_the_record_keeps_the_finished_rows(tmp_path: Path) -> None:
+    # The documented way out of a record that cannot be compared: the
+    # finished rows stay, and the settings of this run are recorded without
+    # a comparison.
+    annotator = Annotator(client=TrackingClient(), batch_size=2)
+    ds = Dataset.from_dict({"text": [f"row {i}" for i in range(4)]})
+    out_dir = tmp_path / "out"
+    annotator.annotate_dataset(
+        output_dir=out_dir,
+        prompt_template="Q: {text}",
+        dataset=ds,
+        max_num_samples=2,
+        upload_every_n_samples=0,
+    )
+    SelectionRecord.path(out_dir).unlink()
+
+    client = TrackingClient()
+    result = Annotator(client=client, batch_size=2).annotate_dataset(
+        output_dir=out_dir,
+        prompt_template="A: {text}",
+        dataset=ds,
+        max_num_samples=4,
+        upload_every_n_samples=0,
+    )
+
+    assert client.seen_prompts == ["A: row 2", "A: row 3"]
+    assert sorted(result["response"]) == [
+        "A: row 2",
+        "A: row 3",
+        "Q: row 0",
+        "Q: row 1",
+    ]
+    record = SelectionRecord.read(out_dir)
+    assert record is not None
+    assert record.components["prompt_template"] == get_hash("A: {text}")
 
 
 # --- growing an annotate_dataset run --------------------------------------------

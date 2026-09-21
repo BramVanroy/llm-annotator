@@ -134,9 +134,9 @@ def _step_components(
     components["output_schema"] = _schema_component(
         step.resolved_output_schema(root)
     )
-    # A step whose own run is not recorded (the first step, or one that
-    # finished under a version that kept no record) leaves the key out, so
-    # that an unknown token is not read as a changed one.
+    # The first step reads no other step, and a step whose record was removed
+    # by hand has no token, so an unknown token leaves the key out instead of
+    # reading as a changed one.
     if upstream_token is not None:
         components["upstream"] = upstream_token
     return components
@@ -458,62 +458,6 @@ def _run_step(
     return annotator.annotate_dataset(**kwargs)
 
 
-def _check_unrecorded_run(
-    config: PipelineConfig, will_overwrite: bool
-) -> None:
-    """Refuse to grow a run whose finished steps carry no sample ids.
-
-    A first step that finished under a version without selection records
-    numbered its rows by position and dropped the ids afterwards. The later
-    steps of such a run cannot be resumed on a larger input, because their
-    progress files would name other rows than before. The previous cap and
-    seed come from ``pipeline.json``, so this check has to run before that
-    file is replaced.
-
-    Args:
-        config: The pipeline configuration.
-        will_overwrite: Whether this run deletes the first step's directory.
-
-    Raises:
-        ValueError: If the first step finished without a record and the
-            config now asks for another cap or seed.
-    """
-    first_dir = config.step_dir(0)
-    record = SelectionRecord.read(
-        first_dir / STEP_ANNOTATE_SUBDIR,
-        config.steps[0].resolved_task_prefix(),
-    )
-    if (
-        will_overwrite
-        or record is not None
-        or not _is_complete(first_dir / STEP_OUTPUT_SUBDIR)
-    ):
-        return
-
-    try:
-        previous = json.loads(
-            (config.output_dir / "pipeline.json").read_text(encoding="utf-8")
-        )
-    except (OSError, json.JSONDecodeError):
-        return
-
-    before = previous.get("dataset") or {}
-    now = config.dataset.model_dump() if config.dataset else {}
-    changed = [
-        key
-        for key in ("max_num_samples", "shuffle_seed")
-        if before.get(key) != now.get(key)
-    ]
-    if changed:
-        raise ValueError(
-            f"Step '{config.steps[0].name}' finished under a version of"
-            " llm-annotator that did not record its sample selection, and"
-            f" {changed} changed since. Such a run cannot grow, because its"
-            " later steps did not keep a stable sample id. Restore the old"
-            " value(s), use a new 'output_dir', or pass --overwrite."
-        )
-
-
 def _resolve_selection(
     config: PipelineConfig, selected: Sequence[str] | None
 ) -> range:
@@ -599,7 +543,6 @@ def run_pipeline(
     chosen = _resolve_selection(config, selected)
 
     config.output_dir.mkdir(parents=True, exist_ok=True)
-    _check_unrecorded_run(config, config.overwrite and 0 in chosen)
     snapshot = config.output_dir / "pipeline.json"
     snapshot.write_text(
         json.dumps(config.model_dump(mode="json"), indent=2, default=str),

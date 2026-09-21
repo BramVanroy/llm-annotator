@@ -357,9 +357,8 @@ class SelectionRecord:
         source_rows: Number of rows in the source dataset.
         selected_rows: Number of rows that the cap left in the selection.
         components: One short string per setting that decides what the
-            prepared dataset holds, keyed by the setting's name. A record
-            written by an older version holds only the settings that version
-            knew.
+            prepared dataset holds, keyed by the setting's name. A setting
+            that the layer which owns it has not recorded yet is absent.
 
     Examples:
         >>> record = SelectionRecord(
@@ -395,27 +394,15 @@ class SelectionRecord:
 
         Returns:
             The names of the settings that the record holds under another
-            value, sorted. A setting the record does not hold is left out,
-            because a record written by an older version cannot answer for it.
+            value, sorted. A setting the record does not hold is left out:
+            the layer that owns it writes it only once it ran, so the output
+            schema is absent until ``run_annotation`` recorded it, and a
+            step's input version until the pipeline recorded it.
         """
         return sorted(
             name
             for name, value in components.items()
             if name in self.components and self.components[name] != value
-        )
-
-    def unknown_components(self, components: dict[str, str]) -> list[str]:
-        """Name the requested settings that the record cannot answer for.
-
-        Args:
-            components: The settings of the request, as
-                ``_preparation_components`` builds them.
-
-        Returns:
-            The names of the settings that the record does not hold, sorted.
-        """
-        return sorted(
-            name for name in components if name not in self.components
         )
 
     @classmethod
@@ -437,17 +424,18 @@ class SelectionRecord:
     ) -> "SelectionRecord | None":
         """Read the record of an output directory.
 
-        A file written before the settings were recorded as components is
-        read into the components that it does hold, so the cap, the seed and
-        the source of such a run are still compared.
-
         Args:
             output_dir: The annotator's output directory.
             task_prefix: The task prefix of the run.
 
         Returns:
-            The record, or ``None`` when the directory has none (a run of a
-            version that did not write one, or a run that never prepared data).
+            The record, or ``None`` when the directory has none, which is a
+            run that never prepared data.
+
+        Raises:
+            ValueError: If the file holds no ``components``, which is a
+                record from a release that did not describe the settings of
+                its run.
         """
         record_path = cls.path(output_dir, task_prefix)
         if not record_path.is_file():
@@ -455,14 +443,14 @@ class SelectionRecord:
         stored = json.loads(record_path.read_text(encoding="utf-8"))
         components = stored.get("components")
         if not isinstance(components, dict):
-            components = {
-                "shuffle_seed": repr(stored.get("shuffle_seed")),
-                "reuse_idx_column": repr(
-                    stored.get("reuse_idx_column", False)
-                ),
-            }
-            if stored.get("source_signature"):
-                components["dataset"] = stored["source_signature"]
+            raise ValueError(
+                f"The record in '{record_path}' does not describe the"
+                " settings that its run was annotated with, so a resume"
+                " cannot tell whether the prompt still matches. Finish the"
+                " run with the release that wrote it, annotate it into a new"
+                " 'output_dir', or overwrite it. See 'Migrating an output"
+                " directory' in docs/growing-a-run.md."
+            )
         return cls(
             max_num_samples=stored.get("max_num_samples"),
             source_rows=stored.get("source_rows", 0),
@@ -1415,7 +1403,6 @@ class Annotator:
                 },
                 **components,
             }
-            self._warn_unknown_components(previous, components, pdout)
             changed = previous.changed_components(components)
             causes = [_COMPONENT_CHANGES[name] for name in changed]
             if previous.max_num_samples != max_num_samples:
@@ -1582,29 +1569,6 @@ class Annotator:
 
         return prepared_dataset, prepared_data_path, hub_id
 
-    def _warn_unknown_components(
-        self,
-        previous: SelectionRecord,
-        components: dict[str, str],
-        pdout: Path,
-    ) -> None:
-        """Warn about the settings that an older record cannot answer for.
-
-        Args:
-            previous: The record of the finished work.
-            components: The settings of the request.
-            pdout: The annotator's output directory, named in the warning.
-        """
-        unknown = previous.unknown_components(components)
-        if not unknown:
-            return
-        self._logger.warning(
-            f"The record in '{pdout}' was written by a version that did not"
-            f" record {unknown}, so an edit to those since the finished rows"
-            " were annotated is not detected. Their current values are"
-            " recorded now, so a later edit is."
-        )
-
     def _adopt_record(
         self,
         *,
@@ -1616,10 +1580,11 @@ class Annotator:
         task_prefix: str,
         origin: str,
     ) -> None:
-        """Record the current settings for prepared data that is reused as is.
+        """Record the current settings for prepared data that has no record.
 
-        Prepared data without a complete record is taken at face value: there
-        is nothing to compare it against. Recording the settings of the
+        A backup restored from the Hub arrives on a machine that never ran
+        the preparation, so there is nothing to compare the prepared data
+        against and it is taken at face value. Recording the settings of the
         request makes a later edit to them detectable.
 
         Args:
@@ -1632,27 +1597,19 @@ class Annotator:
             origin: Where the reused prepared data comes from, for the
                 warning.
         """
-        if previous is None:
-            self._logger.warning(
-                f"The prepared data in {origin} has no record of the settings"
-                " it was built with, so it is reused as it is. The settings"
-                " of this run are recorded now, so a later edit to them is"
-                " detected."
-            )
-            record = SelectionRecord(
-                max_num_samples=max_num_samples,
-                source_rows=cached_rows,
-                selected_rows=cached_rows,
-                components=components,
-            )
-        elif previous.unknown_components(components):
-            record = dataclasses.replace(
-                previous,
-                components={**previous.components, **components},
-            )
-        else:
+        if previous is not None:
             return
-        record.write(pdout, task_prefix)
+        self._logger.warning(
+            f"The prepared data in {origin} has no record of the settings it"
+            " was built with, so it is reused as it is. The settings of this"
+            " run are recorded now, so a later edit to them is detected."
+        )
+        SelectionRecord(
+            max_num_samples=max_num_samples,
+            source_rows=cached_rows,
+            selected_rows=cached_rows,
+            components=components,
+        ).write(pdout, task_prefix)
 
     def _record_output_schema(
         self,
