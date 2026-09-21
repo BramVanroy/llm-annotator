@@ -12,7 +12,7 @@ from __future__ import annotations
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from llm_annotator.clients.base import (
     OnError,
@@ -21,9 +21,12 @@ from llm_annotator.clients.base import (
     Response,
     reject_multiple_responses,
 )
-from llm_annotator.clients.exceptions import ConfigurationError
-from llm_annotator.clients.openai_client import OpenAIClient
+from llm_annotator.clients.openai_client import CONNECT_TIMEOUT, OpenAIClient
 from llm_annotator.logging_utils import get_logger
+
+
+if TYPE_CHECKING:
+    from openai import OpenAI
 
 
 LOGGER = get_logger("clients.vllm_online")
@@ -37,17 +40,6 @@ can ask for more: a ``batch_size`` of 1024 times the default
 ``max_concurrent_batches_per_client`` of 4 is 4096 requests in flight through
 one client. Above the cap httpx queues the rest, which would keep part of a
 batch from reaching the server that is supposed to schedule it."""
-
-CONNECT_TIMEOUT = 5.0
-"""Seconds to wait for the TCP connection of one request, apart from the
-generation itself.
-
-A host that drops packets rather than refusing the connection (a node that
-crashed, say) answers neither, so without a short connect timeout every
-request of the batch would sit there for the full ``timeout`` before
-[`VLLMQueueAnnotator`][llm_annotator.annotator.VLLMQueueAnnotator] gets the
-errors it evicts the server on. This is the OpenAI SDK's own connect
-timeout."""
 
 
 def server_is_healthy(base_url: str, timeout: float) -> bool:
@@ -303,8 +295,10 @@ class VLLMOnlineClient(OpenAIClient[VLLMOnlineRuntimeOptions]):
                 generation itself, so a value below the time a full batch
                 needs turns a healthy run into errors. The default of one hour
                 fits a loaded server that holds thousands of prompts. Making
-                the connection has its own, short limit
-                (``CONNECT_TIMEOUT``).
+                the connection has its own, short limit, so a host that drops
+                packets rather than refusing the connection gives
+                [`VLLMQueueAnnotator`][llm_annotator.annotator.VLLMQueueAnnotator]
+                the errors it evicts the server on within seconds.
             max_retries: How often the OpenAI SDK retries a request. It
                 retries connection errors, request timeouts and the status
                 codes 408, 409, 429 and 5xx, with an exponential backoff of
@@ -312,29 +306,39 @@ class VLLMOnlineClient(OpenAIClient[VLLMOnlineRuntimeOptions]):
                 without letting a broken pool member stall a batch for long.
             on_error: Error behavior when generation fails.
         """
-        import httpx
-        from openai import DefaultHttpxClient, OpenAI
-
         super().__init__(
             model=model or "",
             max_workers=max_workers,
             api_key="EMPTY",
             base_url=base_url,
+            timeout=timeout,
+            max_retries=max_retries,
             on_error=on_error,
         )
         self.base_url = base_url
-        self.timeout = timeout
-        self.max_retries = max_retries
-        # Replaces the client the base constructor built on the SDK's
-        # hosted-API defaults (600 s per request, 1000 sockets), both of which
-        # a server that holds a full pool batch runs past. The timeout is a
-        # Timeout rather than the plain float, because httpx reads a float as
-        # all four of its limits, connect included.
-        self._client = OpenAI(
-            api_key="EMPTY",
-            base_url=base_url,
-            timeout=httpx.Timeout(timeout, connect=CONNECT_TIMEOUT),
-            max_retries=max_retries,
+
+        if model is None:
+            models = self._client.models.list()
+            self.model = models.data[0].id
+
+    def _build_sdk_client(self) -> OpenAI:
+        """Build an SDK client whose connection pool fits a full batch.
+
+        The SDK caps its HTTP client at 1000 sockets, which is below what a
+        pooled run sends at once, so the limits are raised to
+        ``MAX_CONNECTIONS``.
+
+        Returns:
+            The SDK client.
+        """
+        import httpx
+        from openai import DefaultHttpxClient, OpenAI
+
+        return OpenAI(
+            api_key=self._api_key,
+            base_url=self._base_url,
+            timeout=httpx.Timeout(self.timeout, connect=CONNECT_TIMEOUT),
+            max_retries=self.max_retries,
             http_client=DefaultHttpxClient(
                 limits=httpx.Limits(
                     max_connections=MAX_CONNECTIONS,
@@ -342,10 +346,6 @@ class VLLMOnlineClient(OpenAIClient[VLLMOnlineRuntimeOptions]):
                 )
             ),
         )
-
-        if model is None:
-            models = self._client.models.list()
-            self.model = models.data[0].id
 
     def is_healthy(self, timeout: float = 5.0) -> bool:
         """Check whether the server answers its ``/health`` endpoint.
@@ -414,8 +414,6 @@ class VLLMOnlineClient(OpenAIClient[VLLMOnlineRuntimeOptions]):
         messages: list[list[dict[str, str]]],
         options: VLLMOnlineRuntimeOptions | None = None,
         gen_kwargs: dict[str, Any] | None = None,
-        use_batch_api: bool = False,
-        poll_interval: float = 10.0,
     ) -> list[Response]:
         """Generate one response per conversation, all in flight at once.
 
@@ -423,9 +421,7 @@ class VLLMOnlineClient(OpenAIClient[VLLMOnlineRuntimeOptions]):
         schedules whatever requests it holds as one continuous batch, so the
         GPU sees the same workload as a single combined request would give it,
         while the result stays per sample: response, ``usage`` and error
-        belong to one conversation and cannot be mixed up. The OpenAI Batch
-        API is not supported; ``use_batch_api=True`` raises a
-        [`ConfigurationError`][llm_annotator.clients.exceptions.ConfigurationError].
+        belong to one conversation and cannot be mixed up.
 
         Args:
             messages: List of message lists, where each list is a conversation.
@@ -433,29 +429,15 @@ class VLLMOnlineClient(OpenAIClient[VLLMOnlineRuntimeOptions]):
             gen_kwargs: Additional provider-specific generation kwargs that are
                 not covered by the standard options. Has precedence over
                 ``options``.
-            use_batch_api: Must be ``False``. The OpenAI Batch API is not
-                supported by the vLLM server client.
-            poll_interval: Accepted for interface compatibility with
-                [`OpenAIClient`][llm_annotator.clients.openai_client.OpenAIClient].
-                Ignored.
 
         Returns:
             A list of Response objects, one per input conversation,
             indexed in the same order as input.
 
         Raises:
-            ConfigurationError: If ``use_batch_api=True``.
             ProviderError: If a request fails and ``on_error`` is ``"raise"``.
             ValueError: If the request asks for more than one response.
         """
-        if use_batch_api:
-            raise ConfigurationError(
-                "The vLLM server client does not support the OpenAI Batch"
-                " API. Leave use_batch_api at False: a batch is sent as one"
-                " chat-completions request per conversation, which the server"
-                " schedules together."
-            )
-        _ = poll_interval
         return self._generate_in_threads(
             messages=messages,
             options=options,

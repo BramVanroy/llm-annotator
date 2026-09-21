@@ -337,12 +337,12 @@ def test_batch_api_happy_path(
         ),
     ]
 
-    client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(model="gpt-test")
+    client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(
+        model="gpt-test", use_batch_api=True, batch_poll_interval=0.0
+    )
     responses = client.batch_generate(
         messages=[[{"role": "user", "content": "ping"}]],
         options=OpenAIRuntimeOptions(max_completion_tokens=16),
-        use_batch_api=True,
-        poll_interval=0.0,
     )
 
     assert len(responses) == 1
@@ -369,15 +369,16 @@ def test_batch_api_missing_result_and_blank_lines(
     )
 
     client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(
-        model="gpt-test", on_error="ignore"
+        model="gpt-test",
+        on_error="ignore",
+        use_batch_api=True,
+        batch_poll_interval=0.0,
     )
     responses = client.batch_generate(
         messages=[
             [{"role": "user", "content": "msg0"}],
             [{"role": "user", "content": "msg1"}],
         ],
-        use_batch_api=True,
-        poll_interval=0.0,
     )
 
     assert len(responses) == 2
@@ -430,7 +431,10 @@ def test_batch_api_bad_status_and_processing_error(
     )
 
     client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(
-        model="gpt-test", on_error="ignore"
+        model="gpt-test",
+        on_error="ignore",
+        use_batch_api=True,
+        batch_poll_interval=0.0,
     )
     monkeypatch.setattr(
         client,
@@ -443,8 +447,6 @@ def test_batch_api_bad_status_and_processing_error(
             [{"role": "user", "content": "hi"}],
             [{"role": "user", "content": "there"}],
         ],
-        use_batch_api=True,
-        poll_interval=0.0,
     )
 
     assert len(responses) == 2
@@ -461,14 +463,14 @@ def test_batch_api_preserves_order(
         ("request-0", "first"),  # deliberately out of order in output
     )
 
-    client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(model="gpt-test")
+    client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(
+        model="gpt-test", use_batch_api=True, batch_poll_interval=0.0
+    )
     responses = client.batch_generate(
         messages=[
             [{"role": "user", "content": "msg0"}],
             [{"role": "user", "content": "msg1"}],
         ],
-        use_batch_api=True,
-        poll_interval=0.0,
     )
 
     assert len(responses) == 2
@@ -490,12 +492,13 @@ def test_batch_api_item_error_returns_error_response(
     )
 
     client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(
-        model="gpt-test", on_error="ignore"
+        model="gpt-test",
+        on_error="ignore",
+        use_batch_api=True,
+        batch_poll_interval=0.0,
     )
     responses = client.batch_generate(
         messages=[[{"role": "user", "content": "hi"}]],
-        use_batch_api=True,
-        poll_interval=0.0,
     )
 
     assert len(responses) == 1
@@ -517,15 +520,16 @@ def test_batch_api_batch_failure_returns_all_error_responses(
     ]
 
     client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(
-        model="gpt-test", on_error="ignore"
+        model="gpt-test",
+        on_error="ignore",
+        use_batch_api=True,
+        batch_poll_interval=0.0,
     )
     responses = client.batch_generate(
         messages=[
             [{"role": "user", "content": "a"}],
             [{"role": "user", "content": "b"}],
         ],
-        use_batch_api=True,
-        poll_interval=0.0,
     )
 
     assert len(responses) == 2
@@ -613,12 +617,12 @@ def test_batch_api_deletes_files_and_stops_tracking(
     fake_openai_module: dict[str, Any],
 ) -> None:
     # Verifies the input and output files are deleted once results are read.
-    client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(model="gpt-test")
+    client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(
+        model="gpt-test", use_batch_api=True, batch_poll_interval=0.0
+    )
 
     client.batch_generate(
         messages=[[{"role": "user", "content": "hi"}]],
-        use_batch_api=True,
-        poll_interval=0.0,
     )
 
     assert client._active_batches == {}
@@ -636,14 +640,15 @@ def test_batch_api_deletes_files_when_reading_fails(
         raise RuntimeError("download failed")
 
     client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(
-        model="gpt-test", on_error="ignore"
+        model="gpt-test",
+        on_error="ignore",
+        use_batch_api=True,
+        batch_poll_interval=0.0,
     )
     client._client.files.content = _raising_content  # type: ignore[assignment]
 
     responses = client.batch_generate(
         messages=[[{"role": "user", "content": "hi"}]],
-        use_batch_api=True,
-        poll_interval=0.0,
     )
 
     assert responses[0].error is not None
@@ -673,15 +678,16 @@ def test_batch_api_expired_keeps_finished_requests(
     )
 
     client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(
-        model="gpt-test", on_error="ignore"
+        model="gpt-test",
+        on_error="ignore",
+        use_batch_api=True,
+        batch_poll_interval=0.0,
     )
     responses = client.batch_generate(
         messages=[
             [{"role": "user", "content": "msg0"}],
             [{"role": "user", "content": "msg1"}],
         ],
-        use_batch_api=True,
-        poll_interval=0.0,
     )
 
     assert responses[0].text == "first"
@@ -715,15 +721,16 @@ def test_batch_api_reads_the_error_file(
     }
 
     client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(
-        model="gpt-test", on_error="ignore"
+        model="gpt-test",
+        on_error="ignore",
+        use_batch_api=True,
+        batch_poll_interval=0.0,
     )
     responses = client.batch_generate(
         messages=[
             [{"role": "user", "content": "msg0"}],
             [{"role": "user", "content": "msg1"}],
         ],
-        use_batch_api=True,
-        poll_interval=0.0,
     )
 
     assert responses[0].error is not None
@@ -745,14 +752,14 @@ def test_batch_api_keeps_tracking_an_interrupted_batch(
         raise KeyboardInterrupt
 
     fake_openai_module["batch_initial_status"] = "in_progress"
-    client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(model="gpt-test")
+    client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(
+        model="gpt-test", use_batch_api=True, batch_poll_interval=0.0
+    )
     client._client.batches.retrieve = _raising_retrieve  # type: ignore[assignment]
 
     with pytest.raises(KeyboardInterrupt):
         client.batch_generate(
             messages=[[{"role": "user", "content": "hi"}]],
-            use_batch_api=True,
-            poll_interval=0.0,
         )
 
     assert client._active_batches == {"batch-fake": ["file-fake"]}

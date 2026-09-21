@@ -118,14 +118,15 @@ def test_drop_jsonl_rows_drops_matches_and_keeps_untouched_files(
 
 def test_ensure_returns_bool_and_dict() -> None:
     # Verifies return-type guard helpers for bool and dict outputs.
-    assert utils.ensure_returns_bool(lambda: True) is True
-    assert utils.ensure_returns_dict(lambda: {"k": "v"}) == {"k": "v"}
+    sample = {"k": "v"}
+    assert utils.ensure_returns_bool(lambda s: bool(s), sample) is True
+    assert utils.ensure_returns_dict(lambda s: s, sample) == {"k": "v"}
 
     with pytest.raises(TypeError, match="should return a bool"):
-        utils.ensure_returns_bool(lambda: "yes")
+        utils.ensure_returns_bool(lambda s: "yes", sample)
 
     with pytest.raises(TypeError, match="should return a dict"):
-        utils.ensure_returns_dict(lambda: [1, 2])
+        utils.ensure_returns_dict(lambda s: [1, 2], sample)
 
 
 def test_get_lib_versions(monkeypatch: pytest.MonkeyPatch) -> None:

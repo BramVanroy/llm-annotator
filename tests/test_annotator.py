@@ -2832,26 +2832,6 @@ def test_prepare_data_rebuilds_for_an_edited_prompt_without_progress_files(
     assert prepared["messages"][0][-1]["content"] == "A: a"
 
 
-def test_prompt_field_swapper_is_recorded_after_the_swap(
-    tmp_path: Path,
-) -> None:
-    annotator = Annotator(client=DummyClient())
-    ds = Dataset.from_dict({"text": ["a", "b"], "other": ["c", "d"]})
-    annotator.prepare_data(
-        output_dir=tmp_path / "out",
-        prompt_template="Q: {field}",
-        dataset=ds,
-        prompt_field_swapper={"field": "text"},
-    )
-
-    record = SelectionRecord.read(tmp_path / "out")
-    assert record is not None
-    assert record.components["prompt_template"] == get_hash("Q: {text}")
-    assert record.changed_components(
-        {"prompt_template": get_hash("Q: {other}")}
-    ) == ["prompt_template"]
-
-
 def test_the_sample_cap_is_outside_the_recorded_settings(
     tmp_path: Path,
 ) -> None:

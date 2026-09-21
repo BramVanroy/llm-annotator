@@ -384,6 +384,7 @@ def fake_anthropic_module(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     state: dict[str, Any] = {
         "last_create_kwargs": None,
         "create_raises": None,
+        "anthropic_init_kwargs": [],
     }
 
     class FakeMessagesAPI:
@@ -402,8 +403,11 @@ def fake_anthropic_module(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             )
 
     class FakeAnthropic:
-        def __init__(self, api_key: str | None = None):
-            self.api_key = api_key
+        def __init__(self, **kwargs: Any):
+            cast(list[Any], state["anthropic_init_kwargs"]).append(kwargs)
+            self.api_key = kwargs.get("api_key")
+            self.timeout = kwargs.get("timeout")
+            self.max_retries = kwargs.get("max_retries")
             self.messages = FakeMessagesAPI()
 
     fake_anthropic = types.ModuleType("anthropic")

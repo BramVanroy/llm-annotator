@@ -8,9 +8,8 @@ from typing import Any, cast
 import pytest
 
 from llm_annotator.clients.base import Response
-from llm_annotator.clients.exceptions import ConfigurationError
+from llm_annotator.clients.openai_client import CONNECT_TIMEOUT
 from llm_annotator.clients.vllm_online_client import (
-    CONNECT_TIMEOUT,
     MAX_CONNECTIONS,
     VLLMOnlineClient,
     VLLMOnlineRuntimeOptions,
@@ -190,20 +189,6 @@ def test_vllm_online_generate_sends_the_json_schema(
         "type": "object"
     }
     assert "response_format" not in kwargs.get("extra_body", {})
-
-
-def test_vllm_online_batch_generate_rejects_openai_batch_api(
-    fake_openai_module: dict[str, Any],
-) -> None:
-    # Verifies the OpenAI Batch API guard raises a configuration error.
-    _ = fake_openai_module
-    client = VLLMOnlineClient(model="served-vllm-model")
-
-    with pytest.raises(ConfigurationError, match="does not support"):
-        client.batch_generate(
-            messages=conversations("one"),
-            use_batch_api=True,
-        )
 
 
 def test_vllm_online_batch_generate_answers_each_conversation_on_its_own(

@@ -17,6 +17,24 @@ from llm_annotator.clients.exceptions import ProviderError
 from llm_annotator.utils import add_schema_additional_properties_false
 
 
+DEFAULT_TIMEOUT = 600.0
+"""Seconds one request may take, the Anthropic SDK's own default.
+
+``DEFAULT_TIMEOUT`` in ``anthropic/_constants.py`` is
+``httpx.Timeout(timeout=10 * 60, connect=5.0)``."""
+
+DEFAULT_MAX_RETRIES = 2
+"""How often the Anthropic SDK retries a failed request, its own default
+(``DEFAULT_MAX_RETRIES`` in ``anthropic/_constants.py``)."""
+
+CONNECT_TIMEOUT = 5.0
+"""Seconds to wait for the TCP connection of one request.
+
+httpx reads a plain float timeout as all four of its limits, so the connect
+limit is named separately to keep the SDK's own value
+(``DEFAULT_TIMEOUT.connect`` in ``anthropic/_constants.py``)."""
+
+
 @dataclass(slots=True, frozen=True)
 class ClaudeRuntimeOptions(ProviderRuntimeOptions):
     """Runtime options specific to the Claude provider."""
@@ -78,6 +96,8 @@ class ClaudeClient(Client[ClaudeRuntimeOptions]):
         model: str,
         max_workers: int | None = 4,
         api_key: str | None = None,
+        timeout: float = DEFAULT_TIMEOUT,
+        max_retries: int = DEFAULT_MAX_RETRIES,
         on_error: OnError = "warn",
     ) -> None:
         """Initialize the Claude client.
@@ -88,8 +108,15 @@ class ClaudeClient(Client[ClaudeRuntimeOptions]):
                 ``batch_generate``. ``None``, ``0`` and ``1`` send the requests
                 of a batch one after another.
             api_key: Anthropic API key. If not provided, the client will attempt to read from the environment variable `ANTHROPIC_API_KEY`.
+            timeout: Seconds one request may take. The default is the SDK's
+                own (``DEFAULT_TIMEOUT`` in ``anthropic/_constants.py``).
+            max_retries: How often the SDK retries a request it can retry
+                (connection errors, timeouts, and the status codes 408, 409,
+                429 and 5xx). The default is the SDK's own
+                (``DEFAULT_MAX_RETRIES`` in ``anthropic/_constants.py``).
             on_error: Error behavior when generation fails.
         """
+        import httpx
         from anthropic import Anthropic
 
         super().__init__(
@@ -97,7 +124,13 @@ class ClaudeClient(Client[ClaudeRuntimeOptions]):
         )
 
         self._api_key = api_key
-        self._client = Anthropic(api_key=self._api_key)
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self._client = Anthropic(
+            api_key=self._api_key,
+            timeout=httpx.Timeout(timeout, connect=CONNECT_TIMEOUT),
+            max_retries=max_retries,
+        )
 
     def _process_response(self, response: ClaudeMessage) -> Response:
         num_output_tokens = getattr(response.usage, "output_tokens", None)
