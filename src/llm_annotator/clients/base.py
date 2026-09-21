@@ -276,8 +276,8 @@ class Client(ABC, Generic[T_Options]):
             options: Provider-specific generation options for every request.
             gen_kwargs: Extra generation kwargs for every request.
             max_workers: Threads to dispatch with. ``None``, ``0`` and ``1``
-                run the requests one after another; a higher value is capped
-                at the number of requests.
+                give one thread, which runs the requests one after another; a
+                higher value is capped at the number of requests.
             context: Start of the error context, completed with the index of
                 the request that failed.
 
@@ -289,46 +289,29 @@ class Client(ABC, Generic[T_Options]):
         Raises:
             ProviderError: If a request fails and ``on_error`` is ``"raise"``.
         """
-        workers = min(max_workers or 1, len(messages))
+        # A pool needs at least one thread, also for an empty batch.
+        workers = max(1, min(max_workers or 1, len(messages)))
         responses: list[Response] = []
 
-        if workers > 1:
-            with ThreadPoolExecutor(max_workers=workers) as executor:
-                futures = [
-                    executor.submit(
-                        self.generate,
-                        messages=msgs,
-                        options=options,
-                        gen_kwargs=gen_kwargs,
-                    )
-                    for msgs in messages
-                ]
-                for idx, future in enumerate(futures):
-                    try:
-                        responses.append(future.result())
-                    except Exception as exc:
-                        responses.append(
-                            self._handle_error(
-                                exc, context=f"{context} at index {idx}"
-                            )
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [
+                executor.submit(
+                    self.generate,
+                    messages=msgs,
+                    options=options,
+                    gen_kwargs=gen_kwargs,
+                )
+                for msgs in messages
+            ]
+            for idx, future in enumerate(futures):
+                try:
+                    responses.append(future.result())
+                except Exception as exc:
+                    responses.append(
+                        self._handle_error(
+                            exc, context=f"{context} at index {idx}"
                         )
-            return responses
-
-        for idx, msgs in enumerate(messages):
-            try:
-                responses.append(
-                    self.generate(
-                        messages=msgs,
-                        options=options,
-                        gen_kwargs=gen_kwargs,
                     )
-                )
-            except Exception as exc:
-                responses.append(
-                    self._handle_error(
-                        exc, context=f"{context} at index {idx}"
-                    )
-                )
         return responses
 
     def batch_generate(

@@ -162,14 +162,20 @@ start-up and reserves the KV cache from `gpu_memory_utilization` (vLLM's own def
 0.92; this client's default is 0.90) before any request runs. Once requests are queued,
 the scheduler decides how many run in one iteration, bounded by `max_num_seqs` (maximum
 sequences per iteration) and `max_num_batched_tokens` (maximum tokens per iteration).
-`max_model_len` is the model's context length (prompt plus output). Raise `max_num_seqs`,
-`max_num_batched_tokens` or `gpu_memory_utilization` for more throughput, and lower
-`max_model_len` to fit a longer run in memory. In a config file these settings live under
-the step's `engine` block.
+`max_model_len` is the longest sequence (prompt plus output) that the engine accepts. In
+a config file these settings live under the step's `engine` block.
 
-The annotator's own `batch_size` only decides how many samples go to one `LLM.chat`
-call, and therefore how often results reach the progress files; it does not decide how
-much work runs on the GPU at once.
+The defaults are a good start, because the scheduler fills the reserved memory by
+itself. What is left to set:
+
+- The annotator's `batch_size` only decides how many samples go to one `LLM.chat` call,
+  and therefore how often results reach the progress files. It does not decide how much
+  work runs on the GPU at once, but a call cannot run more sequences than it holds, so
+  keep `batch_size` at or above `max_num_seqs` (256 by default in this client).
+- vLLM refuses to start when the KV cache cannot hold one sequence of `max_model_len`
+  tokens. Lower `max_model_len` to what your prompts and outputs need.
+- An out-of-memory error means that too little memory is left next to the KV cache.
+  Lower `gpu_memory_utilization`.
 
 #### Migration
 
