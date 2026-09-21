@@ -1135,6 +1135,10 @@ class Annotator:
     ) -> list[dict[str, Any]]:
         """Annotate one batch, retrying the samples that come back invalid.
 
+        Every attempt applies ``postprocess_fn`` before ``validate_fn``, so a
+        sample that is answered on a retry has the same columns as one that
+        was valid on the first attempt.
+
         Args:
             batch: Dictionary containing batch data with messages samples.
             options: Runtime options passed to the client.
@@ -1181,6 +1185,7 @@ class Annotator:
                 gen_kwargs=gen_kwargs,
                 task_prefix=task_prefix,
                 validate_fn=validate_fn,
+                postprocess_fn=postprocess_fn,
                 client=client,
             )
 

@@ -6,7 +6,7 @@ import logging
 import types
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Callable, cast
 
 import pytest
 from datasets import Dataset, load_dataset
@@ -106,6 +106,44 @@ class TrackingClient(DummyClient):
         return super().batch_generate(
             messages=messages, options=options, gen_kwargs=gen_kwargs
         )
+
+
+class ScriptedClient(DummyClient):
+    """A DummyClient whose answer text comes from a script.
+
+    The script is called as ``script(call_number, messages)`` for every sample
+    of a batch, which makes it easy to answer differently on a retry.
+    """
+
+    def __init__(
+        self,
+        script: Callable[[int, list[dict[str, str]]], str],
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.script = script
+        self.calls = 0
+
+    def batch_generate(
+        self,
+        *,
+        messages: list[list[dict[str, str]]],
+        options: ProviderRuntimeOptions | None = None,
+        gen_kwargs: dict[str, Any] | None = None,
+    ) -> list[Response]:
+        _ = options
+        _ = gen_kwargs
+        self.calls += 1
+        return [
+            Response(
+                text=self.script(self.calls, msg),
+                stop_reason="stop",
+                provider=self.provider_type,
+                model=self.model,
+                num_output_tokens=1,
+            )
+            for msg in messages
+        ]
 
 
 @pytest.fixture
@@ -263,6 +301,65 @@ def test_process_batch_validate_and_postprocess(
     assert all(item["valid"] is True for item in res)
 
     _ = capsys.readouterr()
+
+
+def test_retried_samples_are_postprocessed(tmp_path: Path) -> None:
+    # Verifies postprocess_fn runs on a retry as well as on the first attempt.
+    def script(call: int, messages: list[dict[str, str]]) -> str:
+        if call == 1 and messages[-1]["content"].endswith("b"):
+            return "BAD"
+        return "ok"
+
+    annotator = Annotator(client=ScriptedClient(script))
+    ds = Dataset.from_dict({"text": ["a", "b", "c"]})
+
+    out = annotator.annotate_dataset(
+        output_dir=tmp_path / "out",
+        prompt_template="x {text}",
+        dataset=ds,
+        upload_every_n_samples=0,
+        postprocess_fn=lambda sample: {
+            **sample,
+            "upper": sample["response"].upper(),
+        },
+        validate_fn=lambda sample: sample["response"] == "ok",
+    )
+
+    assert [(row["response"], row["upper"]) for row in out] == [
+        ("ok", "OK"),
+        ("ok", "OK"),
+        ("ok", "OK"),
+    ]
+
+
+def test_validate_fn_sees_postprocessed_columns_on_a_retry(
+    tmp_path: Path,
+) -> None:
+    # Verifies a validate_fn that reads a postprocessed column works on a
+    # retry, where the first attempt was invalid.
+    def script(call: int, messages: list[dict[str, str]]) -> str:
+        _ = messages
+        return "ok" if call > 1 else "bad"
+
+    client = ScriptedClient(script)
+    annotator = Annotator(client=client)
+    ds = Dataset.from_dict({"text": ["a", "b"]})
+
+    out = annotator.annotate_dataset(
+        output_dir=tmp_path / "out",
+        prompt_template="x {text}",
+        dataset=ds,
+        upload_every_n_samples=0,
+        postprocess_fn=lambda sample: {
+            **sample,
+            "upper": sample["response"].upper(),
+        },
+        validate_fn=lambda sample: sample["upper"] == "OK",
+    )
+
+    assert client.calls == 2
+    assert out["valid"] == [True, True]
+    assert out["upper"] == ["OK", "OK"]
 
 
 def test_run_annotation_retries_invalid(
