@@ -277,6 +277,31 @@ class _ProgressUploader:
         self._executor.shutdown(wait=True)
 
 
+def _prompt_fields(prompt_template: str) -> tuple[str, ...]:
+    """Name the dataset columns that a prompt template fills in.
+
+    A placeholder with a conversion or a format spec is left out, so that
+    only a plain ``{column}`` counts as a column of the dataset.
+
+    Args:
+        prompt_template: The prompt template.
+
+    Returns:
+        The field names, in the order they appear.
+
+    Examples:
+        >>> _prompt_fields("Q: {question} A: {answer}")
+        ('question', 'answer')
+        >>> _prompt_fields("No placeholders here")
+        ()
+    """
+    return tuple(
+        field
+        for _, field, spec, _ in string.Formatter().parse(prompt_template)
+        if field is not None and not spec
+    )
+
+
 def _bookkeeping_columns(
     *, task_prefix: str, idx_column: str | None = None
 ) -> set[str]:
@@ -1568,45 +1593,20 @@ class Annotator:
         has_local_cache = prepared_data_path.is_dir() and any(
             prepared_data_path.glob("*")
         )
-        if has_local_cache and not force_data_preparation:
-            cached_ds = Dataset.load_from_disk(prepared_data_path)
-            self._adopt_record(
+        if not force_data_preparation:
+            cached_ds = self._reuse_prepared_data(
                 previous=previous,
                 components=components,
-                cached_rows=len(cached_ds),
                 max_num_samples=max_num_samples,
                 pdout=pdout,
                 task_prefix=task_prefix,
-                origin=f"the cache at '{prepared_data_path}'",
+                prepared_data_path=prepared_data_path,
+                has_local_cache=has_local_cache,
+                hub_id=hub_id,
             )
-            return cached_ds, prepared_data_path, hub_id
-
-        if hub_id and not force_data_preparation:
-            try:
-                cached_ds = load_dataset(
-                    hub_id,
-                    revision=f"{task_prefix}{PREPARED_DS_BRANCH_SUFF}",
-                    split="train",
-                )
-            except Exception:
-                pass
-            else:
-                self._logger.info(
-                    f"Restoring prepared data from Hub to local cache at '{prepared_data_path}'..."
-                )
-                cached_ds.save_to_disk(prepared_data_path)
-                self._adopt_record(
-                    previous=previous,
-                    components=components,
-                    cached_rows=len(cached_ds),
-                    max_num_samples=max_num_samples,
-                    pdout=pdout,
-                    task_prefix=task_prefix,
-                    origin=f"the Hub backup in '{hub_id}'",
-                )
+            if cached_ds is not None:
                 return cached_ds, prepared_data_path, hub_id
 
-        # ... and if all of that fails, prepare the dataset from the source
         source = self._load_source(
             dataset_name=dataset_name,
             dataset=dataset,
@@ -1654,22 +1654,13 @@ class Annotator:
             except Exception:
                 pass
 
-        _str_formatter = string.Formatter()
-        prompt_fields = tuple(
-            [
-                fld[1]
-                for fld in _str_formatter.parse(prompt_template)
-                if fld[1] is not None and not fld[2]
-            ]
-        )
-
         prepared_dataset: Dataset = self._load_dataset(
             prompt_template=prompt_template,
             idx_column=idx_column,
             dataset=source,
             max_num_samples=max_num_samples,
             shuffle_seed=shuffle_seed,
-            prompt_fields=prompt_fields,
+            prompt_fields=_prompt_fields(prompt_template),
             task_prefix=task_prefix,
             sort_by_length=sort_by_length,
             system_message=system_message,
@@ -1714,6 +1705,72 @@ class Annotator:
             )
 
         return prepared_dataset, prepared_data_path, hub_id
+
+    def _reuse_prepared_data(
+        self,
+        *,
+        previous: SelectionRecord | None,
+        components: dict[str, str],
+        max_num_samples: int | None,
+        pdout: Path,
+        task_prefix: str,
+        prepared_data_path: Path,
+        has_local_cache: bool,
+        hub_id: str | None,
+    ) -> Dataset | None:
+        """Read prepared data back from the local cache or the Hub backup.
+
+        Args:
+            previous: The record of the prepared data, or ``None``.
+            components: The settings of the request.
+            max_num_samples: The requested sample cap.
+            pdout: The annotator's output directory.
+            task_prefix: The task prefix of the run.
+            prepared_data_path: Local prepared-data cache of this task.
+            has_local_cache: Whether that cache holds files.
+            hub_id: Hugging Face dataset ID that may hold a backup.
+
+        Returns:
+            The prepared data, or ``None`` when neither source has it.
+        """
+        if has_local_cache:
+            cached_ds = Dataset.load_from_disk(prepared_data_path)
+            self._adopt_record(
+                previous=previous,
+                components=components,
+                cached_rows=len(cached_ds),
+                max_num_samples=max_num_samples,
+                pdout=pdout,
+                task_prefix=task_prefix,
+                origin=f"the cache at '{prepared_data_path}'",
+            )
+            return cached_ds
+
+        if hub_id:
+            try:
+                cached_ds = load_dataset(
+                    hub_id,
+                    revision=f"{task_prefix}{PREPARED_DS_BRANCH_SUFF}",
+                    split="train",
+                )
+            except Exception:
+                return None
+            self._logger.info(
+                f"Restoring prepared data from Hub to local cache at '{prepared_data_path}'..."
+            )
+            cached_ds.save_to_disk(prepared_data_path)
+            self._adopt_record(
+                previous=previous,
+                components=components,
+                cached_rows=len(cached_ds),
+                max_num_samples=max_num_samples,
+                pdout=pdout,
+                task_prefix=task_prefix,
+                origin=f"the Hub backup in '{hub_id}'",
+            )
+            return cached_ds
+
+        return None
 
     def _adopt_record(
         self,
