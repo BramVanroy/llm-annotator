@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+from propella_schema import (
+    ANNOTATOR_USER_PROMPT,
+    annotator_system_prompt,
+    get_annotation_response_schema,
+)
+
 from llm_annotator import (
     Annotator,
     VLLMOfflineClient,
     VLLMOfflineRuntimeOptions,
-)
-from llm_annotator.external.propella.propella import (
-    ANNOTATOR_USER_PROMPT,
-    annotator_system_prompt,
-    get_annotation_response_schema,
 )
 from llm_annotator.logging_utils import get_logger
 

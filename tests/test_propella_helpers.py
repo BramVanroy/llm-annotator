@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from typing import Any, cast
 
-from llm_annotator.external.propella import propella
+
+# propella_schema.py is a plain example module under examples/propella/, not
+# part of the installed package, so it is only reachable via sys.path.
+sys.path.insert(0, str(Path(__file__).parent.parent / "examples" / "propella"))
+
+import propella_schema as propella  # type: ignore[import-not-found]
 
 
 def test_flatten_model_json_schema_inlines_local_defs() -> None:
