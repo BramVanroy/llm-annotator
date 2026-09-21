@@ -421,14 +421,34 @@ file stays the source of truth. `--describe-steps` is the machine-readable half:
 it prints one JSON object per step and annotates nothing.
 
 ```console
-$ llm-annotate cfg.yaml --describe-steps
-{"index": 1, "name": "write-qa", "kind": "vllm_pool", "model": "Qwen/Qwen3-8B", "servers": 4, "min_servers": 1, "gpus_per_vllm_server": 2, "batch_size": 64, "max_concurrent_batches_per_client": 4, "queue_size": 32, "max_requests_per_server": 256, "max_requests_in_flight": 1024, ...}
-{"index": 2, "name": "rate-qa", "kind": "api", "model": "claude-haiku-4-5", "batch_size": 256, "max_concurrent_batches_per_client": null, "queue_size": null, "max_requests_per_server": null, "max_requests_in_flight": null, ...}
+$ llm-annotate examples/vllm-server-pool/pipeline.yaml --describe-steps
+{"index": 1, "name": "write-qa", "kind": "vllm_pool", "provider": "vllm_online", "model": "Qwen/Qwen3-8B", "servers": 4, "min_servers": 2, "gpus_per_vllm_server": 2, "step_dir": "outputs/vllm-server-pool/01-write-qa", "batch_size": 64, "max_concurrent_batches_per_client": 4, "queue_size": 32, "max_requests_per_server": 256, "max_requests_in_flight": 1024}
+{"index": 2, "name": "rate-qa", "kind": "api", "provider": "claude", "model": "claude-haiku-4-5", "servers": 1, "min_servers": 1, "gpus_per_vllm_server": 1, "step_dir": "outputs/vllm-server-pool/02-rate-qa", "batch_size": 256, "max_concurrent_batches_per_client": null, "queue_size": null, "max_requests_per_server": null, "max_requests_in_flight": null}
 ```
+
+`step_dir` is printed absolute; it is shortened here to keep the line readable.
 
 `kind` says what the step needs to run: `vllm_pool` (servers must be started for
 it), `vllm_online` (they already exist), `vllm_offline` (loads the model
 in-process) or `api` (a hosted provider, no accelerator at all).
+
+`--format env` prints the same fields as one line of shell assignments per step
+instead, so a submitter written in shell can `eval` a line rather than parse
+JSON. Every key is the JSON name in upper case behind a `STEP_` prefix (a name
+that already starts with `step_` does not get it twice, so `step_dir` is
+`STEP_DIR`), and every value is quoted with `shlex.quote`, so a step name or a
+model containing a space, a comma or a quote survives. A `null` becomes the
+empty string.
+
+```console
+$ llm-annotate examples/vllm-server-pool/pipeline.yaml --describe-steps --format env
+STEP_INDEX=1 STEP_NAME=write-qa STEP_KIND=vllm_pool STEP_PROVIDER=vllm_online STEP_MODEL=Qwen/Qwen3-8B STEP_SERVERS=4 STEP_MIN_SERVERS=2 STEP_GPUS_PER_VLLM_SERVER=2 STEP_DIR=outputs/vllm-server-pool/01-write-qa STEP_BATCH_SIZE=64 STEP_MAX_CONCURRENT_BATCHES_PER_CLIENT=4 STEP_QUEUE_SIZE=32 STEP_MAX_REQUESTS_PER_SERVER=256 STEP_MAX_REQUESTS_IN_FLIGHT=1024
+STEP_INDEX=2 STEP_NAME=rate-qa STEP_KIND=api STEP_PROVIDER=claude STEP_MODEL=claude-haiku-4-5 STEP_SERVERS=1 STEP_MIN_SERVERS=1 STEP_GPUS_PER_VLLM_SERVER=1 STEP_DIR=outputs/vllm-server-pool/02-rate-qa STEP_BATCH_SIZE=256 STEP_MAX_CONCURRENT_BATCHES_PER_CLIENT='' STEP_QUEUE_SIZE='' STEP_MAX_REQUESTS_PER_SERVER='' STEP_MAX_REQUESTS_IN_FLIGHT=''
+```
+
+The prefix is what makes `eval` safe to use on a line: no key can collide with a
+variable of the calling script or of a cluster file. `slurm/submit_pipeline.sh`
+reads its steps this way.
 
 The last five keys are the step's concurrency, and they are what a pool is sized
 against:
@@ -710,7 +730,7 @@ llm-annotate [-h] [--output-dir OUTPUT_DIR] [--hub-id HUB_ID]
              [--set KEY=VALUE] [--steps STEPS]
              [--retry-errors [ERROR_TYPE ...]] [--hosts-file HOSTS_FILE]
              [--url-glob URL_GLOB] [--serve-args STEP] [--debug]
-             [--describe-steps]
+             [--describe-steps] [--format {json,env}]
              config
 ```
 

@@ -21,6 +21,9 @@
 #   vllm_ensure_nvcc             make nvcc available for JIT-compiled kernels
 #   vllm_serve_args <cfg> <step> the step's `vllm serve` args, one per line
 #   vllm_pick_port <start>       first free TCP port at or above <start>
+#   vllm_port_bind_failed <log>  whether a server log shows a taken port
+#   vllm_server_host             the address other nodes reach this one at
+#   vllm_download_model <model>  fetch a model into the Hugging Face cache
 #   vllm_wait_until_ready <urls> block until every URL answers /health
 
 # Scalars a cluster file may set. Anything already in the environment wins over
@@ -32,6 +35,8 @@ CLUSTER_ENV_KEYS=(
   SERVER_TIME CLIENT_TIME
   CPUS_PER_GPU CLIENT_CPUS MAX_GPUS_PER_NODE
   GPU_REQUEST GPU_TYPE
+  MAX_CONCURRENT_SERVERS SERVER_HOST_CMD
+  MODEL_DOWNLOAD DOWNLOAD_PARTITION DOWNLOAD_TIME
   CLUSTER_MODULES CUDA_MODULE
   VENV_PATH UV_SYNC
   LOG_DIR
@@ -76,6 +81,11 @@ cluster_env_load() {
   : "${MAX_GPUS_PER_NODE:=8}"
   : "${GPU_REQUEST:=gres}"
   : "${GPU_TYPE:=}"
+  : "${MAX_CONCURRENT_SERVERS:=}"
+  : "${SERVER_HOST_CMD:=hostname}"
+  : "${MODEL_DOWNLOAD:=0}"
+  : "${DOWNLOAD_PARTITION:=${CPU_PARTITION}}"
+  : "${DOWNLOAD_TIME:=02:00:00}"
   : "${CLUSTER_MODULES:=}"
   : "${CUDA_MODULE:=}"
   : "${VENV_PATH:=${REPO_ROOT}/.venv}"
@@ -211,6 +221,38 @@ vllm_pick_port() {
 
   echo "No free port found between $1 and ${limit}" >&2
   return 1
+}
+
+# Whether a server log shows that `vllm serve` could not bind its port. vLLM
+# binds the socket itself (vllm/entrypoints/launchers/launcher.py), so the log
+# ends in an unhandled "OSError: [Errno 98] Address already in use"; the wider
+# pattern also matches the phrasing uvicorn uses when it binds instead.
+vllm_port_bind_failed() {
+  local log="$1"
+  [[ -f "$log" ]] || return 1
+  grep -Eqi 'address (already )?in use|attempting to bind' "$log"
+}
+
+# The address other nodes reach this one at. A site whose short `hostname` does
+# not resolve on the compute network sets SERVER_HOST_CMD to `hostname -f` or
+# to a command that prints the address of a specific interface.
+vllm_server_host() {
+  local parts
+  read -r -a parts <<< "$SERVER_HOST_CMD"
+  "${parts[@]}"
+}
+
+# Fetch a model into the Hugging Face cache before the servers that need it
+# start, so a cold cache is paid for once instead of once per server.
+vllm_download_model() {
+  local model="${1:?vllm_download_model needs a model id}"
+  if ! command -v hf > /dev/null 2>&1; then
+    echo "hf is not on PATH; it comes with huggingface_hub, which this" \
+      "package depends on. Check the environment this job prepares." >&2
+    return 1
+  fi
+  echo "Downloading ${model} into ${HF_HOME:-${HOME}/.cache/huggingface}"
+  hf download "$model"
 }
 
 # Block until every URL answers /health. Fails if the watched server exits

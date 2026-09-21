@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import shlex
 import shutil
 import sys
 from pathlib import Path
@@ -925,6 +926,39 @@ def _serve_args(config: PipelineConfig, step_name: str) -> list[str]:
     ]
 
 
+def _describe_step_env(described: dict[str, Any]) -> str:
+    """Render one described step as shell-quoted ``KEY=VALUE`` pairs.
+
+    A key is the field name in upper case behind a ``STEP_`` prefix, which a
+    field that already starts with ``step_`` does not get twice, so a shell
+    can ``eval`` the line without overwriting a variable of its own. A value
+    of ``None`` becomes the empty string, and every value is quoted with
+    ``shlex.quote``, so a step name or a model containing a space, a comma or
+    a quote survives.
+
+    Args:
+        described: One mapping from
+            [`PipelineConfig.describe_steps`][llm_annotator.config.PipelineConfig.describe_steps].
+
+    Returns:
+        One line of ``KEY=VALUE`` pairs separated by single spaces.
+
+    Examples:
+        >>> _describe_step_env({"name": "rate qa", "servers": 4})
+        "STEP_NAME='rate qa' STEP_SERVERS=4"
+        >>> _describe_step_env({"step_dir": "/o", "queue_size": None})
+        "STEP_DIR=/o STEP_QUEUE_SIZE=''"
+    """
+    pairs = []
+    for key, value in described.items():
+        name = key.upper()
+        if not name.startswith("STEP_"):
+            name = f"STEP_{name}"
+        text = "" if value is None else str(value)
+        pairs.append(f"{name}={shlex.quote(text)}")
+    return " ".join(pairs)
+
+
 _DATASET_FLAG_KEYS = ("dataset.max_num_samples", "dataset.shuffle_seed")
 
 
@@ -1210,6 +1244,15 @@ def main(args: list[str] | None = None) -> None:
         " server's --max-num-seqs has to cover), then exit without"
         " annotating anything.",
     )
+    parser.add_argument(
+        "--format",
+        dest="describe_format",
+        choices=["json", "env"],
+        default="json",
+        help="How --describe-steps prints a step. 'json' is one JSON object"
+        " per step; 'env' is one line of shell-quoted STEP_KEY=VALUE pairs"
+        " per step, which a job submitter can eval instead of parsing JSON.",
+    )
     parsed = parser.parse_args(args)
 
     selected = (
@@ -1249,7 +1292,10 @@ def main(args: list[str] | None = None) -> None:
 
     if parsed.describe_steps:
         for described in config.describe_steps():
-            print(json.dumps(described))
+            if parsed.describe_format == "env":
+                print(_describe_step_env(described))
+            else:
+                print(json.dumps(described))
         return
 
     if parsed.serve_args:

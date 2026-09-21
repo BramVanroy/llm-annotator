@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import shutil
 from pathlib import Path
 from typing import Any
@@ -1230,6 +1231,83 @@ def test_cli_describe_steps_emits_json_lines(
     assert rows[0]["max_requests_per_server"] == 1024
     assert rows[0]["max_requests_in_flight"] == 4096
     assert rows[1]["max_requests_in_flight"] is None
+
+
+def test_cli_describe_steps_emits_env_lines(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    main(
+        [
+            str(_write_mixed_config(tmp_path)),
+            "--describe-steps",
+            "--format",
+            "env",
+        ]
+    )
+
+    lines = [
+        line for line in capsys.readouterr().out.splitlines() if line.strip()
+    ]
+    assert len(lines) == 2
+    fields = dict(
+        pair.split("=", 1) for pair in shlex.split(lines[0], posix=True)
+    )
+    assert fields["STEP_NAME"] == "write"
+    assert fields["STEP_KIND"] == "vllm_pool"
+    assert fields["STEP_MODEL"] == "Qwen/Qwen3-8B"
+    assert fields["STEP_SERVERS"] == "4"
+    assert fields["STEP_DIR"].endswith("01-write")
+    # A provider with no pool has no concurrency to report, and an empty value
+    # is what a shell reads as "unset" after it evaluates the line.
+    judge = dict(
+        pair.split("=", 1) for pair in shlex.split(lines[1], posix=True)
+    )
+    assert judge["STEP_QUEUE_SIZE"] == ""
+
+
+def test_cli_describe_steps_env_survives_awkward_values(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = _write_mixed_config(tmp_path)
+    main(
+        [
+            str(config_path),
+            "--set",
+            'steps.0.name=wri te,"x',
+            "--set",
+            "steps.0.client.model=a model/with space",
+            "--describe-steps",
+            "--format",
+            "env",
+        ]
+    )
+
+    line = capsys.readouterr().out.splitlines()[0]
+    fields = dict(pair.split("=", 1) for pair in shlex.split(line, posix=True))
+    assert fields["STEP_NAME"] == 'wri te,"x'
+    assert fields["STEP_MODEL"] == "a model/with space"
+
+
+def test_docs_env_sample_lists_the_real_keys(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo_root = Path(__file__).resolve().parent.parent
+    config_path = repo_root / "examples/vllm-server-pool/pipeline.yaml"
+
+    main([str(config_path), "--describe-steps", "--format", "env"])
+    real = [
+        [pair.split("=", 1)[0] for pair in shlex.split(line)]
+        for line in capsys.readouterr().out.splitlines()
+        if line.strip()
+    ]
+
+    docs = (repo_root / "docs/pipeline.md").read_text(encoding="utf-8")
+    documented = [
+        re.findall(r"\bSTEP_[A-Z_]+(?==)", line)
+        for line in docs.splitlines()
+        if line.startswith("STEP_INDEX=")
+    ]
+    assert documented == real
 
 
 def test_cli_url_glob_reaches_the_step_config(

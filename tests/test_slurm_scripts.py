@@ -39,7 +39,7 @@ def _fake_bin(tmp_path: Path) -> Path:
         The directory to prepend to ``PATH``.
     """
     bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
+    bin_dir.mkdir(exist_ok=True)
 
     annotate = bin_dir / "llm-annotate"
     annotate.write_text(
@@ -181,8 +181,14 @@ def test_annotate_waits_for_the_whole_pool_by_default(
     assert "--url-glob" in recorded
 
 
-def test_annotate_fails_when_no_server_registers(tmp_path: Path) -> None:
-    """An empty pool directory after the timeout is an error, not a run."""
+def test_annotate_runs_the_step_when_no_server_registers(
+    tmp_path: Path,
+) -> None:
+    """An empty pool leaves the verdict to the library.
+
+    A finished step needs no server, which is how a surplus resubmit attempt
+    ends with status 0.
+    """
     pool_dir = tmp_path / "pool"
     pool_dir.mkdir()
 
@@ -190,9 +196,9 @@ def test_annotate_fails_when_no_server_registers(tmp_path: Path) -> None:
         tmp_path, pool_dir, MIN_SERVERS="1", POOL_WAIT="0"
     )
 
-    assert process.returncode == 1
+    assert process.returncode == 0, process.stderr
     assert "No server registered" in process.stderr
-    assert recorded == []
+    assert "--url-glob" in recorded
 
 
 def test_annotate_stops_waiting_when_the_server_array_is_gone(
@@ -246,9 +252,50 @@ def test_annotate_forwards_config_overrides(tmp_path: Path) -> None:
     ]
 
 
-def _write_pool_config(tmp_path: Path, pool: dict[str, int]) -> Path:
-    """Write a one-step pooled-vLLM config and return its path."""
+def _write_pool_config(
+    tmp_path: Path,
+    pool: dict[str, int],
+    name: str = "write",
+    model: str = "Qwen/Qwen3-8B",
+) -> Path:
+    """Write a one-step pooled-vLLM config and return its path.
+
+    Args:
+        tmp_path: Directory to write the config into.
+        pool: The step's ``client.pool`` block.
+        name: Name of the single step.
+        model: The step's ``client.model``.
+
+    Returns:
+        Path of the config file.
+    """
     config_path = tmp_path / "pipeline.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "output_dir": str(tmp_path / "out"),
+                "dataset": {"name": "stanfordnlp/imdb", "split": "test"},
+                "steps": [
+                    {
+                        "name": name,
+                        "prompt": "x {text}",
+                        "client": {
+                            "provider": "vllm_online",
+                            "model": model,
+                            "pool": pool,
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return config_path
+
+
+def _write_two_step_config(tmp_path: Path) -> Path:
+    """Write a pooled-vLLM step followed by a hosted step."""
+    config_path = tmp_path / "two-step.yaml"
     config_path.write_text(
         yaml.safe_dump(
             {
@@ -261,9 +308,17 @@ def _write_pool_config(tmp_path: Path, pool: dict[str, int]) -> Path:
                         "client": {
                             "provider": "vllm_online",
                             "model": "Qwen/Qwen3-8B",
-                            "pool": pool,
+                            "pool": {"servers": 2, "min_servers": 1},
                         },
-                    }
+                    },
+                    {
+                        "name": "rate",
+                        "prompt": "y {write_response}",
+                        "client": {
+                            "provider": "claude",
+                            "model": "claude-haiku-4-5",
+                        },
+                    },
                 ],
             }
         ),
@@ -277,6 +332,7 @@ def _run_submit(
     config_path: Path,
     dry_run: bool = True,
     extra: list[str] | None = None,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run `slurm/submit_pipeline.sh` over one config without a scheduler.
 
@@ -290,6 +346,7 @@ def _run_submit(
         config_path: Pipeline config to submit.
         dry_run: Whether to pass ``--dry-run``.
         extra: Further arguments for the submitter.
+        env: Environment variables set on top of the defaults.
 
     Returns:
         The finished process.
@@ -301,17 +358,20 @@ def _run_submit(
     command.extend(extra or [])
     command.append(str(config_path))
 
+    environment = {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "SBATCH_CMD": str(bin_dir / "sbatch"),
+        "REPO_ROOT": str(REPO_ROOT),
+        "CLUSTER_ENV": str(tmp_path / "absent.env"),
+        "LOG_DIR": str(tmp_path / "logs"),
+        "VENV_PATH": str(VENV_PATH),
+        "HOME": os.environ.get("HOME", str(tmp_path)),
+    }
+    environment.update(env or {})
+
     return subprocess.run(
         command,
-        env={
-            "PATH": f"{bin_dir}:{os.environ['PATH']}",
-            "SBATCH_CMD": str(bin_dir / "sbatch"),
-            "REPO_ROOT": str(REPO_ROOT),
-            "CLUSTER_ENV": str(tmp_path / "absent.env"),
-            "LOG_DIR": str(tmp_path / "logs"),
-            "VENV_PATH": str(VENV_PATH),
-            "HOME": os.environ.get("HOME", str(tmp_path)),
-        },
+        env=environment,
         capture_output=True,
         text=True,
         timeout=300,
@@ -370,8 +430,8 @@ def test_submit_pipeline_pool_dependency_is_or_joined(
 
     assert process.returncode == 0, process.stderr
     assert (
-        "--dependency=after:<job-id>_1?after:<job-id>_2?"
-        "after:<job-id>_3?after:<job-id>_4" in process.stderr
+        "--dependency=after:<job-1>_1?after:<job-1>_2?"
+        "after:<job-1>_3?after:<job-1>_4" in process.stderr
     )
     assert "--kill-on-invalid-dep=yes" in process.stderr
 
@@ -435,3 +495,303 @@ def test_submit_pipeline_reports_its_config_overrides(
 
     assert process.returncode == 0, process.stderr
     assert "dataset.max_num_samples=50000" in process.stdout
+
+
+REQUIRES_CLI = pytest.mark.skipif(
+    not (VENV_PATH / "bin" / "llm-annotate").exists(),
+    reason="the submitter reads the config through the installed CLI",
+)
+
+
+@REQUIRES_CLI
+def test_submit_pipeline_queues_a_cleanup_job(tmp_path: Path) -> None:
+    """A pool step gets a job that cancels its array however it ended."""
+    config_path = _write_pool_config(
+        tmp_path, {"servers": 4, "min_servers": 2}
+    )
+
+    process = _run_submit(tmp_path, config_path)
+
+    assert process.returncode == 0, process.stderr
+    cleanup = [
+        line
+        for line in process.stderr.splitlines()
+        if "--job-name=cancel-write" in line
+    ]
+    assert len(cleanup) == 1
+    assert "--dependency=afterany:<job-2>" in cleanup[0]
+    assert "--kill-on-invalid-dep=yes" in cleanup[0]
+    assert "scancel" in cleanup[0] and "job-1" in cleanup[0]
+    assert "cleanup: <job-3> cancels <job-1>" in process.stdout
+
+
+@REQUIRES_CLI
+def test_submit_pipeline_skips_the_cleanup_job_when_asked(
+    tmp_path: Path,
+) -> None:
+    """CANCEL_SERVERS_ON_EXIT=0 keeps the servers, so nothing cancels them."""
+    config_path = _write_pool_config(
+        tmp_path, {"servers": 4, "min_servers": 2}
+    )
+
+    process = _run_submit(
+        tmp_path, config_path, env={"CANCEL_SERVERS_ON_EXIT": "0"}
+    )
+
+    assert process.returncode == 0, process.stderr
+    assert "cancel-write" not in process.stderr
+
+
+@REQUIRES_CLI
+def test_submit_pipeline_chains_resubmits(tmp_path: Path) -> None:
+    """Each further attempt waits for the previous one to have failed."""
+    config_path = _write_two_step_config(tmp_path)
+
+    process = _run_submit(
+        tmp_path, config_path, extra=["--max-resubmits", "1"]
+    )
+
+    assert process.returncode == 0, process.stderr
+    arrays = [
+        line
+        for line in process.stderr.splitlines()
+        if "--job-name=vllm-write" in line
+    ]
+    assert len(arrays) == 2
+    assert "afternotok" not in arrays[0]
+    assert "--dependency=afternotok:<job-2>" in arrays[1]
+    assert "--kill-on-invalid-dep=yes" in arrays[1]
+    assert "attempt 2 of 2" in process.stdout
+
+    # The next step needs any one attempt of the previous one to have
+    # succeeded, which Slurm writes with '?' between the alternatives.
+    rate = [
+        line
+        for line in process.stderr.splitlines()
+        if "--job-name=annotate-rate" in line
+    ]
+    assert "--dependency=afterok:<job-2>?afterok:<job-5>" in rate[0]
+    assert "--dependency=afternotok:<job-7>" in rate[1]
+
+
+@REQUIRES_CLI
+def test_submit_pipeline_throttles_the_server_array(tmp_path: Path) -> None:
+    """MAX_CONCURRENT_SERVERS becomes the %N of the array specification."""
+    config_path = _write_pool_config(
+        tmp_path, {"servers": 4, "min_servers": 2}
+    )
+
+    plain = _run_submit(tmp_path, config_path)
+    throttled = _run_submit(
+        tmp_path, config_path, env={"MAX_CONCURRENT_SERVERS": "2"}
+    )
+
+    assert plain.returncode == 0, plain.stderr
+    assert "--array=1-4 " in plain.stderr
+    assert throttled.returncode == 0, throttled.stderr
+    assert "--array=1-4%2 " in throttled.stderr
+
+
+@REQUIRES_CLI
+def test_submit_pipeline_rejects_a_throttle_below_min_servers(
+    tmp_path: Path,
+) -> None:
+    """A throttle the client's threshold cannot survive fails at submit."""
+    config_path = _write_pool_config(
+        tmp_path, {"servers": 4, "min_servers": 2}
+    )
+
+    process = _run_submit(
+        tmp_path, config_path, env={"MAX_CONCURRENT_SERVERS": "1"}
+    )
+
+    assert process.returncode == 1
+    assert "MAX_CONCURRENT_SERVERS=1" in process.stderr
+    assert "never reached" in process.stderr
+
+
+@REQUIRES_CLI
+def test_submit_pipeline_downloads_the_model_first(tmp_path: Path) -> None:
+    """MODEL_DOWNLOAD=1 puts one fetch job in front of the whole chain."""
+    config_path = _write_pool_config(
+        tmp_path, {"servers": 4, "min_servers": 2}
+    )
+
+    process = _run_submit(tmp_path, config_path, env={"MODEL_DOWNLOAD": "1"})
+
+    assert process.returncode == 0, process.stderr
+    download = [
+        line
+        for line in process.stderr.splitlines()
+        if "--job-name=download-Qwen3-8B" in line
+    ]
+    assert len(download) == 1
+    assert "vllm_download_model" in download[0]
+    assert "Qwen/Qwen3-8B" in download[0]
+    array = next(
+        line
+        for line in process.stderr.splitlines()
+        if "--job-name=vllm-write" in line
+    )
+    assert "--dependency=afterok:<job-1>" in array
+
+
+@REQUIRES_CLI
+def test_submit_pipeline_leaves_a_local_model_alone(tmp_path: Path) -> None:
+    """A model that is a directory on this machine is not downloaded."""
+    local_model = tmp_path / "my-model"
+    local_model.mkdir()
+    config_path = _write_pool_config(
+        tmp_path, {"servers": 2, "min_servers": 1}, model=str(local_model)
+    )
+
+    process = _run_submit(tmp_path, config_path, env={"MODEL_DOWNLOAD": "1"})
+
+    assert process.returncode == 0, process.stderr
+    assert "--job-name=download-" not in process.stderr
+    assert "is a local directory" in process.stdout
+
+
+@REQUIRES_CLI
+def test_submit_pipeline_survives_an_awkward_step_name(
+    tmp_path: Path,
+) -> None:
+    """A step name with a space and a quote reaches sbatch unbroken."""
+    config_path = _write_pool_config(
+        tmp_path,
+        {"servers": 2, "min_servers": 1},
+        name='wri te"x',
+        model="org/a model",
+    )
+
+    process = _run_submit(tmp_path, config_path)
+
+    assert process.returncode == 0, process.stderr
+    assert "Step 1 'wri te\"x'" in process.stdout
+    assert "serving org/a model" in process.stdout
+    assert '--job-name=annotate-wri\\ te\\"x' in process.stderr
+
+
+def test_annotate_logs_the_thread_limit(tmp_path: Path) -> None:
+    """The client names the process limit its threads are drawn from."""
+    pool_dir = tmp_path / "pool"
+    _publish(pool_dir, 1)
+
+    process, _ = _run_annotate(tmp_path, pool_dir, MIN_SERVERS="1")
+
+    assert process.returncode == 0, process.stderr
+    assert "Thread limit (ulimit -u):" in process.stdout
+
+
+def _run_server(
+    tmp_path: Path, **overrides: str
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    """Run `slurm/vllm_server.sh` against a stubbed `vllm`.
+
+    The stub records every invocation in a file and exits with the message the
+    test gave it, so the script's retry decision can be driven without a GPU.
+
+    Args:
+        tmp_path: Directory for the fake binaries, the pool and the record.
+        **overrides: Environment variables set on top of the defaults.
+
+    Returns:
+        The finished process and one entry per `vllm` invocation.
+    """
+    bin_dir = _fake_bin(tmp_path)
+    calls_file = tmp_path / "vllm_calls.txt"
+
+    annotate = bin_dir / "llm-annotate"
+    annotate.write_text(
+        "#!/bin/bash\n"
+        'if [[ -n "${ANNOTATE_FAILS:-}" ]]; then\n'
+        '  echo "error: cfg.yaml: boom" >&2\n'
+        "  exit 2\n"
+        "fi\n"
+        'printf "%s\\n" Qwen/Qwen3-8B\n',
+        encoding="utf-8",
+    )
+    annotate.chmod(0o755)
+
+    vllm = bin_dir / "vllm"
+    vllm.write_text(
+        "#!/bin/bash\n"
+        'printf "%s\\n" "$*" >> "$VLLM_CALLS"\n'
+        'printf "%s\\n" "$VLLM_MESSAGE"\n'
+        "exit 1\n",
+        encoding="utf-8",
+    )
+    vllm.chmod(0o755)
+
+    env = {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "REPO_ROOT": str(REPO_ROOT),
+        "CLUSTER_ENV": str(tmp_path / "absent.env"),
+        "LOG_DIR": str(tmp_path / "logs"),
+        "VENV_PATH": str(tmp_path / "absent-venv"),
+        "ANNOTATE_CONFIG": str(tmp_path / "pipeline.yaml"),
+        "STEP_NAME": "write",
+        "POOL_DIR": str(tmp_path / "pool"),
+        "VLLM_PORT": "39117",
+        "READY_TIMEOUT": "1",
+        "PORT_RETRIES": "2",
+        "VLLM_CALLS": str(calls_file),
+        "VLLM_MESSAGE": "OSError: [Errno 98] Address already in use",
+        "HOME": os.environ.get("HOME", str(tmp_path)),
+    }
+    env.update(overrides)
+
+    process = subprocess.run(
+        ["/bin/bash", str(SLURM_DIR / "vllm_server.sh")],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    calls = (
+        calls_file.read_text(encoding="utf-8").splitlines()
+        if calls_file.exists()
+        else []
+    )
+    return process, calls
+
+
+def test_server_retries_on_a_taken_port(tmp_path: Path) -> None:
+    """A bind error before /health moves the server to the next port."""
+    process, calls = _run_server(tmp_path)
+
+    assert process.returncode == 1
+    assert "Server never became ready" in process.stderr
+    assert "retrying on the next free port" in process.stdout
+    # PORT_RETRIES retries on top of the first try.
+    assert len(calls) == 3
+    ports = [call.split("--port ")[1] for call in calls]
+    assert len(set(ports)) == 3
+
+
+def test_server_does_not_retry_on_another_failure(tmp_path: Path) -> None:
+    """An early exit that is not a bind error fails the task at once."""
+    process, calls = _run_server(
+        tmp_path, VLLM_MESSAGE="ValueError: unsupported quantization"
+    )
+
+    assert process.returncode == 1
+    assert "retrying on the next free port" not in process.stdout
+    assert len(calls) == 1
+
+
+def test_server_stops_when_the_serve_args_fail(tmp_path: Path) -> None:
+    """A config that does not load ends the job before vLLM is started."""
+    process, calls = _run_server(tmp_path, ANNOTATE_FAILS="1")
+
+    assert process.returncode != 0
+    assert "error: cfg.yaml: boom" in process.stderr
+    assert "Could not read serving arguments" in process.stderr
+    assert calls == []
+
+
+def test_server_publishes_the_configured_host(tmp_path: Path) -> None:
+    """SERVER_HOST_CMD decides the address the pool file would carry."""
+    process, _ = _run_server(tmp_path, SERVER_HOST_CMD="echo node42")
+
+    assert "Serving on http://node42:" in process.stdout

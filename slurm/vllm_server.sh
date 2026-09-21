@@ -52,33 +52,72 @@ fi
 
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 
-PORT=$(vllm_pick_port $(( VLLM_PORT + TASK_ID )))
-URL="http://$(hostname):${PORT}/v1"
 URL_FILE="${POOL_DIR}/${TASK_ID}.url"
-
-# One argument per line, read into an array, so a value may contain spaces --
-# --speculative-config takes a JSON object that word-splitting would destroy.
-mapfile -t SERVE_ARGS < <(vllm_serve_args "$ANNOTATE_CONFIG" "$STEP_NAME")
-
-echo "Serving on ${URL} with: vllm serve ${SERVE_ARGS[*]}"
-
-# --host and --port are the only two the config cannot give: the port is probed
-# here because two servers of one pool can land on the same node.
-vllm serve "${SERVE_ARGS[@]}" \
-  --host 0.0.0.0 \
-  --port "$PORT" &
-SERVER_PID=$!
+SERVE_LOG=$(mktemp)
+SERVER_PID=""
 
 cleanup() {
-  rm -f "$URL_FILE" "${POOL_DIR}/.${TASK_ID}.tmp"
-  kill "$SERVER_PID" 2> /dev/null || true
+  rm -f "$URL_FILE" "${POOL_DIR}/.${TASK_ID}.tmp" "$SERVE_LOG"
+  if [[ -n "$SERVER_PID" ]]; then
+    kill "$SERVER_PID" 2> /dev/null || true
+  fi
 }
 trap cleanup EXIT INT TERM
 
-if ! READY_WATCH_PID="$SERVER_PID" vllm_wait_until_ready "$URL"; then
+# One argument per line, read into an array, so a value may contain spaces --
+# --speculative-config takes a JSON object that word-splitting would destroy.
+# Collected into a variable first: `set -e` does not see a command that fails
+# inside the process substitution `mapfile` would otherwise read from, so a
+# config that does not load would leave an empty argument list behind.
+SERVE_ARGS_TEXT=$(vllm_serve_args "$ANNOTATE_CONFIG" "$STEP_NAME") || exit 1
+mapfile -t SERVE_ARGS <<< "$SERVE_ARGS_TEXT"
+
+HOST=$(vllm_server_host)
+PORT_FROM=$(( VLLM_PORT + TASK_ID ))
+
+# The port is probed here and handed to `vllm serve` afterwards, so a process
+# on the same node can take it in between. That costs a port rather than the
+# job: vLLM then dies with "Address already in use" before /health ever
+# answers, and this retries on the next free port. Any other early exit fails
+# the task.
+: "${PORT_RETRIES:=5}"
+
+for (( attempt = 0; ; attempt += 1 )); do
+  PORT=$(vllm_pick_port "$PORT_FROM")
+  URL="http://${HOST}:${PORT}/v1"
+  : > "$SERVE_LOG"
+
+  echo "Serving on ${URL} with: vllm serve ${SERVE_ARGS[*]}"
+
+  # --host and --port are the only two the config cannot give. The output is
+  # teed so the retry decision has something to read; tee runs beside the
+  # server, so $! is still the server's own pid.
+  vllm serve "${SERVE_ARGS[@]}" \
+    --host 0.0.0.0 \
+    --port "$PORT" > >(tee -a "$SERVE_LOG") 2>&1 &
+  SERVER_PID=$!
+
+  if READY_WATCH_PID="$SERVER_PID" vllm_wait_until_ready "$URL"; then
+    break
+  fi
+
+  kill "$SERVER_PID" 2> /dev/null || true
+  wait "$SERVER_PID" 2> /dev/null || true
+  # `tee` is a child of this shell rather than of the server, so the bare wait
+  # is what makes sure everything the server wrote is in the file before the
+  # retry decision reads it.
+  wait 2> /dev/null || true
+
+  if (( attempt < PORT_RETRIES )) && vllm_port_bind_failed "$SERVE_LOG"; then
+    echo "Port ${PORT} was taken before vLLM could bind it;" \
+      "retrying on the next free port."
+    PORT_FROM=$(( PORT + 1 ))
+    continue
+  fi
+
   echo "Server never became ready; giving up." >&2
   exit 1
-fi
+done
 
 # Publish only now, and atomically: a URL in the pool directory is therefore
 # always a server the client can talk to right away.

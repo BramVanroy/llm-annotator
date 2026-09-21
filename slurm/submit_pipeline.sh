@@ -41,6 +41,11 @@ Options:
   --dry-run          Print the jobs that would be submitted, submit nothing.
   --steps a,b        Submit only these steps instead of the whole pipeline.
                      Everything before them must already have finished.
+  --max-resubmits N  Chain N further attempts per step (default 0). An attempt
+                     runs the same command and starts only when the attempt
+                     before it did not end well, so it resumes the step where
+                     that one stopped. A step counts as done when any of its
+                     attempts succeeds.
   --set KEY=VALUE    Override one config key for every step of this
                      submission; repeat for more than one. Passed straight to
                      `llm-annotate --set`, so a dotted key reaches a nested
@@ -58,14 +63,24 @@ EOF
 }
 
 DRY_RUN=0
-STEP_FILTER=""
+WANTED_STEPS=""
+MAX_RESUBMITS=0
 ANNOTATE_SET="${ANNOTATE_SET:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --steps)
-      STEP_FILTER="${2:?--steps needs a comma-separated list of step names}"
+      WANTED_STEPS="${2:?--steps needs a comma-separated list of step names}"
+      shift
+      ;;
+    --max-resubmits)
+      MAX_RESUBMITS="${2:?--max-resubmits needs a number}"
+      if [[ ! "$MAX_RESUBMITS" =~ ^[0-9]+$ ]]; then
+        echo "--max-resubmits needs a number of 0 or more, got" \
+          "'${MAX_RESUBMITS}'" >&2
+        exit 1
+      fi
       shift
       ;;
     --set)
@@ -111,6 +126,9 @@ cluster_env_load
 # The command that queues a job. A site whose sbatch is wrapped points this at
 # the wrapper; the tests point it at a stub, so they never reach a scheduler.
 : "${SBATCH_CMD:=sbatch}"
+# A clean-up job only runs `scancel`, so this is a ceiling on the queue wait
+# rather than on any work.
+CLEANUP_TIME="00:05:00"
 
 if [[ ! -f "$ANNOTATE_CONFIG" ]]; then
   echo "Config '${ANNOTATE_CONFIG}' does not exist" >&2
@@ -121,7 +139,12 @@ fi
 # jobs through --export=ALL; each job derives its own.
 unset POOL_DIR STEP_NAME SERVER_JOB_ID NUM_SERVERS MIN_SERVERS MODEL
 
-if [[ -x "${VENV_PATH}/bin/llm-annotate" ]]; then
+# A cluster file may define `llm-annotate` as a shell function, which is how a
+# container site wraps it. That wins over a venv, which a stale checkout in the
+# repo would otherwise provide.
+if [[ "$(type -t llm-annotate)" == "function" ]]; then
+  ANNOTATE_CMD=(llm-annotate)
+elif [[ -x "${VENV_PATH}/bin/llm-annotate" ]]; then
   ANNOTATE_CMD=("${VENV_PATH}/bin/llm-annotate")
 elif command -v llm-annotate > /dev/null 2>&1; then
   ANNOTATE_CMD=(llm-annotate)
@@ -129,23 +152,36 @@ else
   ANNOTATE_CMD=(uv run --frozen llm-annotate)
 fi
 
-# One JSON object per step: what it needs to run, derived from the config so the
-# submitter cannot disagree with the run about it.
-if ! STEPS_JSON=$("${ANNOTATE_CMD[@]}" "$ANNOTATE_CONFIG" --describe-steps); then
+# One line of shell-quoted STEP_* assignments per step: what it needs to run,
+# derived from the config so the submitter cannot disagree with the run about
+# it. Every key carries the STEP_ prefix, so evaluating a line cannot overwrite
+# a variable of this script or of the cluster file.
+if ! STEPS_ENV=$("${ANNOTATE_CMD[@]}" "$ANNOTATE_CONFIG" \
+  --describe-steps --format env); then
   echo "Could not read '${ANNOTATE_CONFIG}'; see the error above." >&2
   exit 1
 fi
 
-if [[ -z "$STEPS_JSON" ]]; then
+if [[ -z "$STEPS_ENV" ]]; then
   echo "'${ANNOTATE_CONFIG}' describes no steps" >&2
   exit 1
 fi
+mapfile -t STEP_LINES <<< "$STEPS_ENV"
+
+DRY_JOB_COUNTER=""
+if (( DRY_RUN )); then
+  DRY_JOB_COUNTER=$(mktemp)
+  trap 'rm -f "$DRY_JOB_COUNTER"' EXIT
+  echo 0 > "$DRY_JOB_COUNTER"
+fi
 
 # Submit and echo the job id. --dry-run prints the command instead and hands
-# back a placeholder, so the chain still reads as one plan.
+# back a numbered placeholder, so a chain of jobs that wait on each other still
+# reads as one plan. The counter lives in a file because every call happens
+# inside a command substitution, which is a subshell of its own.
 submit() {
   if (( DRY_RUN )); then
-    local arg
+    local arg count
     printf '%s' "$SBATCH_CMD" >&2
     for arg in "$@"; do
       # Quote only what a shell would misread, so the line stays copy-pastable.
@@ -156,7 +192,10 @@ submit() {
       fi
     done
     printf '\n' >&2
-    echo "<job-id>"
+    count=$(< "$DRY_JOB_COUNTER")
+    count=$(( count + 1 ))
+    echo "$count" > "$DRY_JOB_COUNTER"
+    echo "<job-${count}>"
     return
   fi
   local out
@@ -173,18 +212,9 @@ die() {
   exit 1
 }
 
-# Pull one value out of a flat JSON object. Naive, but --describe-steps emits
-# exactly that: one line per step, scalars only.
-field() {
-  local value
-  value=$(sed -n 's/.*[{,] *"'"$2"'": *"\{0,1\}\([^,"}]*\)"\{0,1\}.*/\1/p' <<< "$1")
-  [[ "$value" == "null" ]] && value=""
-  printf '%s' "$value"
-}
-
 wants_step() {
-  [[ -z "$STEP_FILTER" ]] && return 0
-  [[ ",${STEP_FILTER}," == *",$1,"* ]]
+  [[ -z "$WANTED_STEPS" ]] && return 0
+  [[ ",${WANTED_STEPS}," == *",$1,"* ]]
 }
 
 export ANNOTATE_SET
@@ -197,207 +227,334 @@ if [[ -n "$ANNOTATE_SET" ]]; then
   echo "Set:     $(tr '\n' ' ' <<< "$ANNOTATE_SET")"
 fi
 
-PREV_CLIENT=""
-STEP_COUNT=0
+ACCOUNT_FLAGS=()
+[[ -n "$SLURM_ACCOUNT" ]] && ACCOUNT_FLAGS=(--account="$SLURM_ACCOUNT")
+
+CPU_PARTITION_FLAGS=()
+[[ -n "$CPU_PARTITION" ]] && CPU_PARTITION_FLAGS=(--partition="$CPU_PARTITION")
+
+# Every model this submission has to serve itself, fetched once before anything
+# is allocated so that a pool on a cold cache does not download the same weights
+# once per server. The download jobs gate the first step and therefore, through
+# the chain, every step after it. Off unless the cluster file turns it on: a
+# site whose compute nodes have no route to the Hub would otherwise fail the
+# submission at the first job.
+DOWNLOAD_DEP=""
+if [[ "$MODEL_DOWNLOAD" == "1" ]]; then
+  declare -A DOWNLOAD_SEEN=()
+  for step_line in "${STEP_LINES[@]}"; do
+    [[ -n "$step_line" ]] || continue
+    eval "$step_line"
+    wants_step "$STEP_NAME" || continue
+    if [[ "$STEP_KIND" != "vllm_pool" && "$STEP_KIND" != "vllm_offline" ]]; then
+      continue
+    fi
+    [[ -n "$STEP_MODEL" ]] || continue
+    # A model that is a directory on this machine is already here.
+    if [[ -d "$STEP_MODEL" ]]; then
+      echo "Model:   ${STEP_MODEL} is a local directory, nothing to download"
+      continue
+    fi
+    [[ -z "${DOWNLOAD_SEEN[$STEP_MODEL]:-}" ]] || continue
+    DOWNLOAD_SEEN["$STEP_MODEL"]=1
+
+    DOWNLOAD_PARTITION_FLAGS=()
+    if [[ -n "$DOWNLOAD_PARTITION" ]]; then
+      DOWNLOAD_PARTITION_FLAGS=(--partition="$DOWNLOAD_PARTITION")
+    fi
+    printf -v MODEL_QUOTED '%q' "$STEP_MODEL"
+    DOWNLOAD_JOB=$(submit \
+      "${ACCOUNT_FLAGS[@]}" \
+      --time="$DOWNLOAD_TIME" \
+      --job-name="download-${STEP_MODEL##*/}" \
+      --output="${LOG_DIR}/%x_%j.out" \
+      --error="${LOG_DIR}/%x_%j.err" \
+      --cpus-per-task=2 \
+      "${DOWNLOAD_PARTITION_FLAGS[@]}" \
+      --export="ALL,REPO_ROOT=${REPO_ROOT},CLUSTER_ENV=${CLUSTER_ENV}" \
+      --wrap="cd ${REPO_ROOT} && source slurm/vllm_common.sh && cluster_env_load && vllm_setup_env && vllm_download_model ${MODEL_QUOTED}") \
+      || die "Could not queue the download of '${STEP_MODEL}'."
+    echo "Model:   ${STEP_MODEL} downloaded first by job ${DOWNLOAD_JOB}"
+    DOWNLOAD_DEP="${DOWNLOAD_DEP:+${DOWNLOAD_DEP},}afterok:${DOWNLOAD_JOB}"
+  done
+fi
+
+# What the next step waits for: an or-joined list of "this attempt of the
+# previous step succeeded".
+PREV_DEP=""
+SEEN_STEPS=0
 SUBMITTED=0
 ALL_JOBS=()
 
-while IFS= read -r step_json; do
-  [[ -n "$step_json" ]] || continue
-  STEP_COUNT=$(( STEP_COUNT + 1 ))
+for step_line in "${STEP_LINES[@]}"; do
+  [[ -n "$step_line" ]] || continue
+  SEEN_STEPS=$(( SEEN_STEPS + 1 ))
+  eval "$step_line"
+  STEP_MIN_SERVERS="${STEP_MIN_SERVERS:-1}"
+  STEP_GPUS_PER_VLLM_SERVER="${STEP_GPUS_PER_VLLM_SERVER:-1}"
 
-  NAME=$(field "$step_json" name)
-  KIND=$(field "$step_json" kind)
-  MODEL=$(field "$step_json" model)
-  SERVERS=$(field "$step_json" servers)
-  MIN_SERVERS=$(field "$step_json" min_servers)
-  MIN_SERVERS="${MIN_SERVERS:-1}"
-  GPUS_PER_VLLM_SERVER=$(field "$step_json" gpus_per_vllm_server)
-  GPUS_PER_VLLM_SERVER="${GPUS_PER_VLLM_SERVER:-1}"
-
-  wants_step "$NAME" || continue
+  wants_step "$STEP_NAME" || continue
   SUBMITTED=$(( SUBMITTED + 1 ))
 
   echo
-  echo "Step ${STEP_COUNT} '${NAME}' (${KIND})"
+  echo "Step ${SEEN_STEPS} '${STEP_NAME}' (${STEP_KIND})"
 
   # A pool's real concurrency, printed before any GPU is allocated: this is
   # what a server's --max-num-seqs has to cover.
-  if [[ "$KIND" == "vllm_pool" || "$KIND" == "vllm_online" ]]; then
-    PER_SERVER=$(field "$step_json" max_requests_per_server)
-    IN_FLIGHT=$(field "$step_json" max_requests_in_flight)
-    QUEUE_SIZE=$(field "$step_json" queue_size)
-    if [[ -n "$PER_SERVER" ]]; then
-      echo "  up to ${PER_SERVER} requests per server, ${IN_FLIGHT} over the" \
-        "pool, queue of ${QUEUE_SIZE} batches"
+  if [[ "$STEP_KIND" == "vllm_pool" || "$STEP_KIND" == "vllm_online" ]]; then
+    if [[ -n "$STEP_MAX_REQUESTS_PER_SERVER" ]]; then
+      echo "  up to ${STEP_MAX_REQUESTS_PER_SERVER} requests per server," \
+        "${STEP_MAX_REQUESTS_IN_FLIGHT} over the pool, queue of" \
+        "${STEP_QUEUE_SIZE} batches"
     fi
   fi
 
+  GPU_FLAGS=()
+  ARRAY_SPEC=""
   # A server's GPUs all sit in one job on one node: vLLM's tensor parallelism
   # does not span nodes here, so a model too large for one node is out of scope.
-  if [[ "$KIND" == "vllm_pool" || "$KIND" == "vllm_offline" ]]; then
-    if (( GPUS_PER_VLLM_SERVER < 1 || GPUS_PER_VLLM_SERVER > MAX_GPUS_PER_NODE )); then
-      echo "  step '${NAME}' asks for ${GPUS_PER_VLLM_SERVER} GPUs per server;" \
-        "must be between 1 and ${MAX_GPUS_PER_NODE} (MAX_GPUS_PER_NODE in" \
-        "'${CLUSTER_ENV}'), because one server runs inside a single job on a" \
-        "single node." >&2
+  if [[ "$STEP_KIND" == "vllm_pool" || "$STEP_KIND" == "vllm_offline" ]]; then
+    if (( STEP_GPUS_PER_VLLM_SERVER < 1 \
+      || STEP_GPUS_PER_VLLM_SERVER > MAX_GPUS_PER_NODE )); then
+      echo "  step '${STEP_NAME}' asks for ${STEP_GPUS_PER_VLLM_SERVER} GPUs" \
+        "per server; must be between 1 and ${MAX_GPUS_PER_NODE}" \
+        "(MAX_GPUS_PER_NODE in '${CLUSTER_ENV}'), because one server runs" \
+        "inside a single job on a single node." >&2
       exit 1
     fi
+    # Assigned on its own line: a command substitution inside an array literal
+    # keeps its failure to itself, so a rejected GPU_REQUEST would reach sbatch
+    # as an empty argument.
+    GPU_FLAG=$(sbatch_gpu_flag "$STEP_GPUS_PER_VLLM_SERVER") || exit 1
+    GPU_FLAGS=(
+      "$GPU_FLAG"
+      --cpus-per-task="$(( CPUS_PER_GPU * STEP_GPUS_PER_VLLM_SERVER ))"
+    )
+    [[ -n "$GPU_PARTITION" ]] && GPU_FLAGS+=(--partition="$GPU_PARTITION")
   fi
 
-  # Steps run in sequence: each one consumes the dataset the previous one
-  # saved, so nothing may start until its predecessor has succeeded.
-  DEP=()
-  DEP_SPEC=""
-  if [[ -n "$PREV_CLIENT" ]]; then
-    DEP_SPEC="afterok:${PREV_CLIENT}"
-  fi
-  # A caller-supplied dependency gates the chain, so only the first submitted
-  # step has to carry it; the rest inherit it transitively. Comma-joined, which
-  # Slurm reads as "all of these must be satisfied".
-  if [[ -n "$EXTRA_DEPENDENCY" && "$SUBMITTED" -eq 1 ]]; then
-    DEP_SPEC="${DEP_SPEC:+${DEP_SPEC},}${EXTRA_DEPENDENCY}"
-  fi
-  if [[ -n "$DEP_SPEC" ]]; then
-    DEP=(--dependency="$DEP_SPEC")
-  fi
+  if [[ "$STEP_KIND" == "vllm_pool" ]]; then
+    # This script starts the servers, so it has to know what they serve, and
+    # the config is the only place that can come from. `model` is optional for
+    # provider `vllm_online` because a client can ask a running server what it
+    # serves -- but nothing can ask a server that does not exist yet. Catch it
+    # here rather than after the GPUs have been allocated.
+    if [[ -z "$STEP_MODEL" ]]; then
+      echo "  step '${STEP_NAME}' needs vLLM servers to be started for it," \
+        "but its config names no 'model'. Set 'client.model' on the step, or" \
+        "point it at servers that already exist with 'base_urls'," \
+        "'hosts_file' or 'url_glob'." >&2
+      exit 1
+    fi
 
-  ACCOUNT_FLAGS=()
-  [[ -n "$SLURM_ACCOUNT" ]] && ACCOUNT_FLAGS=(--account="$SLURM_ACCOUNT")
+    ARRAY_SPEC="1-${STEP_SERVERS}"
+    if [[ -n "$MAX_CONCURRENT_SERVERS" ]]; then
+      if [[ ! "$MAX_CONCURRENT_SERVERS" =~ ^[1-9][0-9]*$ ]]; then
+        echo "  MAX_CONCURRENT_SERVERS in '${CLUSTER_ENV}' must be 1 or more," \
+          "got '${MAX_CONCURRENT_SERVERS}'." >&2
+        exit 1
+      fi
+      # The client waits for min_servers of the array to publish a URL, so a
+      # throttle below that threshold holds the step for its whole POOL_WAIT
+      # and then annotates on fewer servers than it asked for.
+      if (( MAX_CONCURRENT_SERVERS < STEP_MIN_SERVERS )); then
+        echo "  step '${STEP_NAME}' starts at ${STEP_MIN_SERVERS} ready" \
+          "server(s), but MAX_CONCURRENT_SERVERS=${MAX_CONCURRENT_SERVERS} in" \
+          "'${CLUSTER_ENV}' lets at most ${MAX_CONCURRENT_SERVERS} of its" \
+          "array run at a time, so that threshold is never reached. Raise" \
+          "MAX_CONCURRENT_SERVERS, or lower the step's pool.min_servers." >&2
+        exit 1
+      fi
+      ARRAY_SPEC="${ARRAY_SPEC}%${MAX_CONCURRENT_SERVERS}"
+    fi
+  fi
 
   CLIENT_FLAGS=(
     "${ACCOUNT_FLAGS[@]}"
     --time="$CLIENT_TIME"
-    --job-name="annotate-${NAME}"
+    --job-name="annotate-${STEP_NAME}"
     --output="${LOG_DIR}/%x_%j.out"
     --error="${LOG_DIR}/%x_%j.err"
   )
 
-  CPU_FLAGS=(--cpus-per-task="$CLIENT_CPUS")
-  [[ -n "$CPU_PARTITION" ]] && CPU_FLAGS+=(--partition="$CPU_PARTITION")
+  CPU_FLAGS=(--cpus-per-task="$CLIENT_CPUS" "${CPU_PARTITION_FLAGS[@]}")
 
-  GPU_FLAGS=(
-    "$(sbatch_gpu_flag "$GPUS_PER_VLLM_SERVER")"
-    --cpus-per-task="$(( CPUS_PER_GPU * GPUS_PER_VLLM_SERVER ))"
-  )
-  [[ -n "$GPU_PARTITION" ]] && GPU_FLAGS+=(--partition="$GPU_PARTITION")
+  EXPORT_VARS="ALL,REPO_ROOT=${REPO_ROOT},CLUSTER_ENV=${CLUSTER_ENV},ANNOTATE_CONFIG=${ANNOTATE_CONFIG},STEP_NAME=${STEP_NAME}"
 
-  STEP_EXPORT="ALL,REPO_ROOT=${REPO_ROOT},CLUSTER_ENV=${CLUSTER_ENV},ANNOTATE_CONFIG=${ANNOTATE_CONFIG},STEP_NAME=${NAME}"
-
-  case "$KIND" in
-    vllm_pool)
-      # This script starts the servers, so it has to know what they serve, and
-      # the config is the only place that can come from. `model` is optional for
-      # provider `vllm_online` because a client can ask a running server what it
-      # serves -- but nothing can ask a server that does not exist yet. Catch it
-      # here rather than after the GPUs have been allocated.
-      if [[ -z "$MODEL" ]]; then
-        echo "  step '${NAME}' needs vLLM servers to be started for it, but" \
-          "its config names no 'model'. Set 'client.model' on the step, or" \
-          "point it at servers that already exist with 'base_urls'," \
-          "'hosts_file' or 'url_glob'." >&2
-        exit 1
-      fi
-
-      # An array job, so the whole pool is one id to cancel and one pool
-      # directory for the client to watch.
-      SERVER_JOB=$(submit \
-        "${ACCOUNT_FLAGS[@]}" \
-        --time="$SERVER_TIME" \
-        --job-name="vllm-${NAME}" \
-        --output="${LOG_DIR}/%x_%A_%a.out" \
-        --error="${LOG_DIR}/%x_%A_%a.err" \
-        --array="1-${SERVERS}" \
-        "${GPU_FLAGS[@]}" \
-        "${SERVER_SBATCH_ARGS[@]}" \
-        "${DEP[@]}" \
-        --export="$STEP_EXPORT" \
-        slurm/vllm_server.sh) || die "  could not queue the servers of step '${NAME}'."
-
-      # Naming the pool after the array job id keeps concurrent steps and runs
-      # apart; the server jobs derive the same name from SLURM_ARRAY_JOB_ID, so
-      # nothing has to be told about it twice.
-      POOL_DIR="${LOG_DIR}/pool_${SERVER_JOB}"
-      (( DRY_RUN )) || mkdir -p "$POOL_DIR"
-      echo "  servers: array ${SERVER_JOB}, ${SERVERS} x ${GPUS_PER_VLLM_SERVER} GPU(s) serving ${MODEL}"
-      if (( MIN_SERVERS < SERVERS )); then
-        echo "  client starts at ${MIN_SERVERS} ready server(s); the rest join the run as they arrive"
-      fi
-
-      # One `after:` per array element, or-joined, so the client is released
-      # as soon as the *first* server has begun. `after:<array-id>` as a whole
-      # is only satisfied once every element has started, which leaves a ready
-      # server idle behind pool-mates that are still queued (a per-user GPU
-      # quota is enough to do that), burning that server's own SERVER_TIME.
-      # Waiting in the queue rather than on the compute node also means
-      # CLIENT_TIME starts counting when there is something to annotate
-      # against: a CPU partition schedules in minutes and a GPU partition can
-      # take days. What is left after the dependency is the model load and the
-      # rest of the pool arriving, which is the client's own POOL_WAIT.
-      CLIENT_DEP=""
-      for (( element = 1; element <= SERVERS; element++ )); do
-        CLIENT_DEP="${CLIENT_DEP:+${CLIENT_DEP}?}after:${SERVER_JOB}_${element}"
-      done
-
-      # This replaces the step's own dependency instead of adding to it, since
-      # Slurm reads one separator per expression (`,` for and, `?` for or) and
-      # the two cannot be mixed. Nothing is lost: a server cannot start before
-      # the previous step has succeeded, so the client inherits that through
-      # the array it waits on. A cancelled job also satisfies `after:`, so an
-      # array that Slurm kills off releases the client instead of stranding
-      # it, and the client recognises that case rather than sitting out its
-      # POOL_WAIT; --kill-on-invalid-dep covers what Slurm flags as
-      # unsatisfiable outright.
-      CLIENT_JOB=$(submit \
-        "${CLIENT_FLAGS[@]}" \
-        "${CPU_FLAGS[@]}" \
-        "${CLIENT_SBATCH_ARGS[@]}" \
-        --dependency="$CLIENT_DEP" \
-        --kill-on-invalid-dep=yes \
-        --export="${STEP_EXPORT},POOL_DIR=${POOL_DIR},NUM_SERVERS=${SERVERS},MIN_SERVERS=${MIN_SERVERS},SERVER_JOB_ID=${SERVER_JOB}" \
-        slurm/vllm_annotate.sh) || die "  could not queue the client of step '${NAME}'."
-      ;;
-
-    vllm_offline)
-      # The model is loaded in-process, so the annotation job is the GPU job.
-      CLIENT_JOB=$(submit \
-        "${CLIENT_FLAGS[@]}" \
-        "${GPU_FLAGS[@]}" \
-        "${SERVER_SBATCH_ARGS[@]}" \
-        "${DEP[@]}" \
-        --export="${STEP_EXPORT}" \
-        slurm/vllm_annotate.sh) || die "  could not queue step '${NAME}'."
-      echo "  in-process on ${GPUS_PER_VLLM_SERVER} GPU(s): ${MODEL}"
-      ;;
-
-    api | vllm_online)
-      # A hosted provider, or servers that were started somewhere else.
-      CLIENT_JOB=$(submit \
-        "${CLIENT_FLAGS[@]}" \
-        "${CPU_FLAGS[@]}" \
-        "${CLIENT_SBATCH_ARGS[@]}" \
-        "${DEP[@]}" \
-        --export="${STEP_EXPORT}" \
-        slurm/vllm_annotate.sh) || die "  could not queue step '${NAME}'."
-      echo "  CPU only: ${MODEL:-served-default}"
-      ;;
-
-    *)
-      echo "  unknown step kind '${KIND}'" >&2
-      exit 1
-      ;;
-  esac
-
-  echo "  client:  ${CLIENT_JOB}"
-  ALL_JOBS+=("$CLIENT_JOB")
-  if [[ "$KIND" == "vllm_pool" ]]; then
-    ALL_JOBS+=("$SERVER_JOB")
+  # Steps run in sequence: each one consumes the dataset the previous one
+  # saved, so nothing may start until its predecessor has succeeded. A
+  # caller-supplied dependency and the model downloads gate the chain, so only
+  # the first submitted step carries them; the rest inherit them transitively.
+  # Comma-joined, which Slurm reads as "all of these must be satisfied".
+  FIRST_DEP="$PREV_DEP"
+  if (( SUBMITTED == 1 )); then
+    FIRST_DEP="$DOWNLOAD_DEP"
+    if [[ -n "$EXTRA_DEPENDENCY" ]]; then
+      FIRST_DEP="${FIRST_DEP:+${FIRST_DEP},}${EXTRA_DEPENDENCY}"
+    fi
   fi
-  PREV_CLIENT="$CLIENT_JOB"
-done <<< "$STEPS_JSON"
+
+  STEP_CLIENT_JOBS=()
+  for (( attempt = 0; attempt <= MAX_RESUBMITS; attempt += 1 )); do
+    ATTEMPT_FLAGS=()
+    if (( attempt == 0 )); then
+      ATTEMPT_DEP="$FIRST_DEP"
+    else
+      # An attempt whose predecessor succeeded can never run. Slurm removes it
+      # then instead of leaving it queued forever, which unwinds the rest of
+      # this step's chain with it.
+      ATTEMPT_DEP="afternotok:${STEP_CLIENT_JOBS[attempt - 1]}"
+      ATTEMPT_FLAGS=(--kill-on-invalid-dep=yes)
+      echo "  attempt $(( attempt + 1 )) of $(( MAX_RESUBMITS + 1 )):"
+    fi
+    DEP_FLAGS=()
+    [[ -n "$ATTEMPT_DEP" ]] && DEP_FLAGS=(--dependency="$ATTEMPT_DEP")
+
+    case "$STEP_KIND" in
+      vllm_pool)
+        # An array job, so the whole pool is one id to cancel and one pool
+        # directory for the client to watch.
+        SERVER_JOB=$(submit \
+          "${ACCOUNT_FLAGS[@]}" \
+          --time="$SERVER_TIME" \
+          --job-name="vllm-${STEP_NAME}" \
+          --output="${LOG_DIR}/%x_%A_%a.out" \
+          --error="${LOG_DIR}/%x_%A_%a.err" \
+          --array="$ARRAY_SPEC" \
+          "${GPU_FLAGS[@]}" \
+          "${SERVER_SBATCH_ARGS[@]}" \
+          "${DEP_FLAGS[@]}" \
+          "${ATTEMPT_FLAGS[@]}" \
+          --export="$EXPORT_VARS" \
+          slurm/vllm_server.sh) \
+          || die "  could not queue the servers of step '${STEP_NAME}'."
+
+        # Naming the pool after the array job id keeps concurrent steps, runs
+        # and attempts apart; the server jobs derive the same name from
+        # SLURM_ARRAY_JOB_ID, so nothing has to be told about it twice.
+        POOL_DIR="${LOG_DIR}/pool_${SERVER_JOB}"
+        (( DRY_RUN )) || mkdir -p "$POOL_DIR"
+        echo "  servers: array ${SERVER_JOB}, ${STEP_SERVERS} x" \
+          "${STEP_GPUS_PER_VLLM_SERVER} GPU(s) serving ${STEP_MODEL}"
+        if (( STEP_MIN_SERVERS < STEP_SERVERS )); then
+          echo "  client starts at ${STEP_MIN_SERVERS} ready server(s);" \
+            "the rest join the run as they arrive"
+        fi
+
+        # One `after:` per array element, or-joined, so the client is released
+        # as soon as the *first* server has begun. `after:<array-id>` as a whole
+        # is only satisfied once every element has started, which leaves a ready
+        # server idle behind pool-mates that are still queued (a per-user GPU
+        # quota is enough to do that), burning that server's own SERVER_TIME.
+        # Waiting in the queue rather than on the compute node also means
+        # CLIENT_TIME starts counting when there is something to annotate
+        # against: a CPU partition schedules in minutes and a GPU partition can
+        # take days. What is left after the dependency is the model load and the
+        # rest of the pool arriving, which is the client's own POOL_WAIT.
+        #
+        # This replaces the step's own dependency instead of adding to it, since
+        # Slurm reads one separator per expression (`,` for and, `?` for or) and
+        # the two cannot be mixed. Nothing is lost: a server cannot start before
+        # the previous step has succeeded, so the client inherits that through
+        # the array it waits on. A cancelled job also satisfies `after:`, so an
+        # array that Slurm kills off releases the client instead of stranding
+        # it, and the client recognises that case rather than sitting out its
+        # POOL_WAIT; --kill-on-invalid-dep covers what Slurm flags as
+        # unsatisfiable outright.
+        CLIENT_DEP=""
+        for (( element = 1; element <= STEP_SERVERS; element += 1 )); do
+          CLIENT_DEP="${CLIENT_DEP:+${CLIENT_DEP}?}after:${SERVER_JOB}_${element}"
+        done
+
+        CLIENT_JOB=$(submit \
+          "${CLIENT_FLAGS[@]}" \
+          "${CPU_FLAGS[@]}" \
+          "${CLIENT_SBATCH_ARGS[@]}" \
+          --dependency="$CLIENT_DEP" \
+          --kill-on-invalid-dep=yes \
+          --export="${EXPORT_VARS},POOL_DIR=${POOL_DIR},NUM_SERVERS=${STEP_SERVERS},MIN_SERVERS=${STEP_MIN_SERVERS},SERVER_JOB_ID=${SERVER_JOB}" \
+          slurm/vllm_annotate.sh) \
+          || die "  could not queue the client of step '${STEP_NAME}'."
+        ALL_JOBS+=("$SERVER_JOB")
+        ;;
+
+      vllm_offline)
+        # The model is loaded in-process, so the annotation job is the GPU job.
+        CLIENT_JOB=$(submit \
+          "${CLIENT_FLAGS[@]}" \
+          "${GPU_FLAGS[@]}" \
+          "${SERVER_SBATCH_ARGS[@]}" \
+          "${DEP_FLAGS[@]}" \
+          "${ATTEMPT_FLAGS[@]}" \
+          --export="${EXPORT_VARS}" \
+          slurm/vllm_annotate.sh) \
+          || die "  could not queue step '${STEP_NAME}'."
+        echo "  in-process on ${STEP_GPUS_PER_VLLM_SERVER} GPU(s):" \
+          "${STEP_MODEL}"
+        ;;
+
+      api | vllm_online)
+        # A hosted provider, or servers that were started somewhere else.
+        CLIENT_JOB=$(submit \
+          "${CLIENT_FLAGS[@]}" \
+          "${CPU_FLAGS[@]}" \
+          "${CLIENT_SBATCH_ARGS[@]}" \
+          "${DEP_FLAGS[@]}" \
+          "${ATTEMPT_FLAGS[@]}" \
+          --export="${EXPORT_VARS}" \
+          slurm/vllm_annotate.sh) \
+          || die "  could not queue step '${STEP_NAME}'."
+        echo "  CPU only: ${STEP_MODEL:-served-default}"
+        ;;
+
+      *)
+        echo "  unknown step kind '${STEP_KIND}'" >&2
+        exit 1
+        ;;
+    esac
+
+    echo "  client:  ${CLIENT_JOB}"
+    ALL_JOBS+=("$CLIENT_JOB")
+    STEP_CLIENT_JOBS+=("$CLIENT_JOB")
+
+    # The client cancels its own servers when it ends, which is faster, but a
+    # cgroup OOM kill, `scancel -s KILL` or a dead node skips that trap and
+    # leaves the GPUs allocated until SERVER_TIME. This job cancels the same
+    # array whichever way the client ended, and only that array, so the servers
+    # of a later attempt are untouched. It is removed with the rest of the
+    # chain when the client it waits for is.
+    if [[ "$STEP_KIND" == "vllm_pool" \
+      && "${CANCEL_SERVERS_ON_EXIT:-1}" == "1" ]]; then
+      CLEANUP_JOB=$(submit \
+        "${ACCOUNT_FLAGS[@]}" \
+        --time="$CLEANUP_TIME" \
+        --job-name="cancel-${STEP_NAME}" \
+        --output="${LOG_DIR}/%x_%j.out" \
+        --error="${LOG_DIR}/%x_%j.err" \
+        --cpus-per-task=1 \
+        "${CPU_PARTITION_FLAGS[@]}" \
+        "${CLIENT_SBATCH_ARGS[@]}" \
+        --dependency="afterany:${CLIENT_JOB}" \
+        --kill-on-invalid-dep=yes \
+        --wrap="scancel ${SERVER_JOB}") \
+        || die "  could not queue the clean-up of step '${STEP_NAME}'."
+      echo "  cleanup: ${CLEANUP_JOB} cancels ${SERVER_JOB} whenever" \
+        "${CLIENT_JOB} ends"
+      ALL_JOBS+=("$CLEANUP_JOB")
+    fi
+  done
+
+  # The next step needs any one attempt of this one to have succeeded, which
+  # Slurm expresses with `?` as the separator of the dependency list. With no
+  # resubmits this is the single `afterok:` it has always been.
+  PREV_DEP=""
+  for job in "${STEP_CLIENT_JOBS[@]}"; do
+    PREV_DEP="${PREV_DEP:+${PREV_DEP}?}afterok:${job}"
+  done
+done
 
 if (( SUBMITTED == 0 )); then
-  echo "No step of '${ANNOTATE_CONFIG}' matches --steps '${STEP_FILTER}'" >&2
+  echo "No step of '${ANNOTATE_CONFIG}' matches --steps '${WANTED_STEPS}'" >&2
   exit 1
 fi
 
