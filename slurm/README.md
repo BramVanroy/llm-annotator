@@ -82,6 +82,10 @@ the pipeline as a whole rather than one step at a time, which is what
 | `CLIENT_CPUS` | `8` | Cores a CPU-only annotation job asks for. |
 | `MAX_GPUS_PER_NODE` | `8` | Ceiling a step's `engine.tensor_parallel_size` is checked against before anything is submitted. |
 | `GPU_REQUEST`, `GPU_TYPE` | `gres`, – | How GPUs are requested: `--gres=gpu:N` or `--gpus-per-node=N`, optionally typed (`gpu:a100:N`). |
+| `MAX_CONCURRENT_SERVERS` | – | Most elements of a server array that may run at once (`--array=1-N%M`), for a per-user GPU limit. Empty means no throttle. |
+| `SERVER_HOST_CMD` | `hostname` | Command a server runs to get the address other nodes reach it at. Use `hostname -f`, or a command that prints one interface's address, where the short name does not resolve. |
+| `MODEL_DOWNLOAD` | `0` | `1` fetches every model this submission serves in a CPU job before any GPU is allocated. |
+| `DOWNLOAD_PARTITION`, `DOWNLOAD_TIME` | `$CPU_PARTITION`, `02:00:00` | Partition and wall time of those download jobs. |
 | `SERVER_SBATCH_ARGS`, `CLIENT_SBATCH_ARGS` | `()` | Extra `sbatch` flags per job kind: QoS, memory, constraints, reservations. |
 | `CLUSTER_MODULES` | – | Environment modules to load inside a job. |
 | `VENV_PATH`, `UV_SYNC` | `<repo>/.venv`, `0` | Python environment to activate, and whether to `uv sync` first. |
@@ -107,6 +111,27 @@ cluster_setup_env() {
 }
 ```
 
+A container works the same way, because `llm-annotate` and `vllm` may be shell
+functions rather than executables. Define them at the **top level** of the
+cluster file, not inside `cluster_setup_env`: every script sources the cluster
+file, so a top-level function is visible in both job scripts and on the login
+node, where `submit_pipeline.sh` reads the config. A function defined inside
+`cluster_setup_env` reaches the job scripts only, because the login node never
+calls it.
+
+```sh
+SIF=/projects/shared/images/vllm-0.29.0.sif
+BINDS="/projects,/scratch-local"
+llm-annotate() { apptainer exec --nv -B "$BINDS" "$SIF" llm-annotate "$@"; }
+vllm()         { apptainer exec --nv -B "$BINDS" "$SIF" vllm "$@"; }
+cluster_setup_env() { :; }
+```
+
+The empty `cluster_setup_env` keeps the module-and-venv handling out of the way.
+Two limits: the login node has to be able to run the container runtime, and the
+bind mounts have to cover the repo, the config, the output directory and the
+Hugging Face cache.
+
 ## What each step becomes
 
 The shape of a job is derived from the step's client, never configured twice.
@@ -117,9 +142,15 @@ llm-annotate my-pipeline.yaml --describe-steps
 ```
 
 ```json
-{"index": 1, "name": "write-qa", "kind": "vllm_pool", "model": "Qwen/Qwen3-8B", "servers": 4, "min_servers": 1, "gpus_per_vllm_server": 2, "batch_size": 64, "max_concurrent_batches_per_client": 4, "queue_size": 32, "max_requests_per_server": 256, "max_requests_in_flight": 1024, ...}
-{"index": 2, "name": "rate-qa",  "kind": "api", "model": "claude-haiku-4-5", ...}
+{"index": 1, "name": "write-qa", "kind": "vllm_pool", "provider": "vllm_online", "model": "Qwen/Qwen3-8B", "servers": 4, "min_servers": 2, "gpus_per_vllm_server": 2, "step_dir": "...", "batch_size": 64, "max_concurrent_batches_per_client": 4, "queue_size": 32, "max_requests_per_server": 256, "max_requests_in_flight": 1024}
+{"index": 2, "name": "rate-qa", "kind": "api", "provider": "claude", "model": "claude-haiku-4-5", "servers": 1, "min_servers": 1, "gpus_per_vllm_server": 1, "step_dir": "...", "batch_size": 256, "max_concurrent_batches_per_client": null, "queue_size": null, "max_requests_per_server": null, "max_requests_in_flight": null}
 ```
+
+`submit_pipeline.sh` reads the same fields as shell assignments
+(`--describe-steps --format env`, one `STEP_KEY=VALUE` line per step, every
+value shell-quoted) and evaluates a line per step, so a step name or a model
+containing a space or a quote reaches `sbatch` intact. Both formats are
+documented under "Running one step at a time" in `docs/pipeline.md`.
 
 `max_requests_per_server` is `max_concurrent_batches_per_client` times
 `batch_size`: the number of prompts one server is asked to hold at once, and so
@@ -157,6 +188,20 @@ Several small server jobs schedule far sooner than one large allocation, because
 each one fits on a partially used node. They also start at different times,
 which is fine: the client starts once `pool.min_servers` are ready, and the
 remaining servers join the run as they leave the queue.
+
+`pool.min_servers` is a target with a fallback, not a hard minimum. The client
+waits for that many `.url` files and gives up waiting when `squeue` reports that
+the server array has no element left in the queue, or when `POOL_WAIT` is up. It
+then annotates on the servers it does have, and says how many in its log
+(`Annotating over 2 of 4 server(s)`). With none at all it fails instead and
+points at the `vllm-<step>_*.err` logs. A pool that half fills therefore still
+produces data, at half the throughput.
+
+At a site with a per-user GPU limit, set `MAX_CONCURRENT_SERVERS` in the cluster
+file. The array is then submitted as `--array=1-4%2`, so two servers run while
+the other two wait. It has to be at least the largest `pool.min_servers` in the
+config, otherwise the client's threshold can never be reached; the submitter
+rejects that combination on the login node.
 
 ## Serving profiles
 
@@ -212,9 +257,18 @@ server job that publishes its `.url` file again is picked up the same way a
 late starter is, so servers of one array reaching `SERVER_TIME` at different
 moments do not end the client.
 
+The host in that URL comes from `SERVER_HOST_CMD`, which is `hostname` unless
+the cluster file says otherwise. Set it to `hostname -f` where compute nodes
+only resolve fully qualified names, or to a command that prints the address of
+the fabric the client should use.
+
 Ports are `VLLM_PORT + array task id`, then probed upward for the first free one.
 Two array tasks can land on the same node (a 4-GPU node fits two
-`tensor_parallel_size: 2` servers), so a fixed port would collide.
+`tensor_parallel_size: 2` servers), so a fixed port would collide. The probe and
+the bind are two separate moments, so another process can take the port in
+between; vLLM then dies with `Address already in use` before `/health` ever
+answers, and the server job retries on the next free port, at most
+`PORT_RETRIES` times (5 by default). Any other early exit fails the task.
 
 The client is submitted with one `after:` dependency per element of its server
 array, or-joined (`--dependency=after:1234_1?after:1234_2?...`), which releases
@@ -241,8 +295,134 @@ it waits for URLs it asks `squeue` whether its server array still has an
 element in the queue, and stops waiting when it has none left.
 
 When a step finishes, its client `scancel`s that step's server array instead of
-leaving GPU jobs idling until their time limit. Set `CANCEL_SERVERS_ON_EXIT=0`
-to keep them alive.
+leaving GPU jobs idling until their time limit. That happens in an `EXIT` trap,
+which a cgroup OOM kill, a `scancel -s KILL` or a dead node skips, so the
+submitter also queues a small clean-up job per pool step:
+
+```text
+sbatch --time=00:05:00 --job-name=cancel-write-qa --cpus-per-task=1 \
+  --dependency=afterany:<client> --kill-on-invalid-dep=yes --wrap="scancel <array>"
+```
+
+`afterany` means it runs however the client ended, and it cancels that one
+array, so the servers of a later attempt are untouched. It uses the CPU
+partition and the client's `sbatch` flags, and it is not part of the chain
+between steps: the next step waits for the client, never for the clean-up. Set
+`CANCEL_SERVERS_ON_EXIT=0` to keep servers alive after their step ends; the
+clean-up job is then not submitted either.
+
+## Resubmitting automatically
+
+A step that runs out of `CLIENT_TIME` leaves a resumable run behind, but
+somebody has to notice and submit it again. `--max-resubmits N` queues that
+follow-up in advance:
+
+```sh
+./slurm/submit_pipeline.sh --max-resubmits 2 my-pipeline.yaml
+```
+
+Every step then gets up to `N + 1` attempts. Attempt *k* runs the same command
+as attempt *k-1* and carries `--dependency=afternotok:<attempt k-1>`, so it
+starts only when the attempt before it failed, timed out or was cancelled. Being
+the same command is what makes it a resume: the step's progress files are read
+and only the rows that are missing are sent to the model. A pool step gets a
+fresh server array and a fresh clean-up job per attempt, and that attempt's
+clean-up only cancels that attempt's array.
+
+What happens to the attempts that turn out not to be needed:
+
+- The attempt before it succeeded. `afternotok` can then never be satisfied, so
+  `--kill-on-invalid-dep=yes` has Slurm remove the attempt rather than leave it
+  queued. Removing it invalidates the dependency of the jobs behind it, so the
+  rest of that step's chain is removed with it.
+- The attempt before it failed, but the step had already finished in an earlier
+  submission. The attempt runs, the library loads the step's `output/` snapshot
+  and the job ends in seconds.
+
+The next step waits for "any attempt of the previous step succeeded", which
+Slurm writes as an or-joined dependency list:
+
+```text
+--dependency=afterok:<attempt 1>?afterok:<attempt 2>
+```
+
+A `,` between dependencies means all of them must be satisfied, a `?` means any
+one of them is enough, and the two cannot be mixed in one expression. So the
+next step starts as soon as any attempt of its predecessor succeeds, and the
+attempts that were removed do not hold it back. If every attempt fails, the list
+can never be satisfied and the next step stays in the queue with
+`DependencyNeverSatisfied` until you cancel it (or, at a site that configures
+`kill_invalid_depend`, Slurm removes it), which is the right outcome: nothing
+runs on a half-finished input.
+
+`--dry-run` prints the whole chain, attempts included, which is the way to check
+it before you use it:
+
+```sh
+./slurm/submit_pipeline.sh --dry-run --max-resubmits 1 my-pipeline.yaml
+```
+
+## Model downloads
+
+The servers of a pool all start at once, and on a cold cache they all download
+the same weights. `MODEL_DOWNLOAD=1` in the cluster file turns that into one
+small CPU job per distinct model, submitted before anything else, which the
+first step then waits for with `afterok`. Every later step inherits that wait
+through the chain, so a pipeline whose steps use different models downloads all
+of them up front:
+
+```text
+sbatch --time=02:00:00 --job-name=download-Qwen3-8B --cpus-per-task=2 \
+  --wrap="... && vllm_download_model Qwen/Qwen3-8B"
+```
+
+The job runs `hf download <model>`, the CLI that comes with `huggingface_hub`.
+Only the models this submission has to serve itself are fetched (the
+`vllm_pool` and `vllm_offline` steps); a hosted provider has nothing to
+download, and a `model` that is an existing directory is a local checkout and is
+left alone. `DOWNLOAD_PARTITION` and `DOWNLOAD_TIME` size the job.
+
+It is off by default. The job needs a route to huggingface.co from whichever
+node runs it, which not every site has, and against a warm cache it costs a
+queue wait for nothing. A gated model needs a token, which the job reads the
+same way any other `hf` command does: `hf auth login` once, or `HF_TOKEN` in the
+environment, which `--export=ALL` carries.
+
+Wherever you run it, `HF_HOME` decides where the weights land; it defaults to
+`.cache/huggingface` in your home directory. On a cluster, point it at a project
+or scratch filesystem that every compute node can read, from your shell profile
+or from the cluster file. A home directory is usually too small for a few 8B
+checkpoints, and a node-local path is downloaded again by every server.
+
+## Threads of a pool client
+
+A pool client holds one thread per request in flight, and such a thread only
+waits for the network. The count is `servers` x
+`max_concurrent_batches_per_client` x `batch_size`: four servers with the
+defaults (four batches of 256 each) is 4096 threads. A site with a low
+`ulimit -u`, or with a cgroup `pids.max` on its CPU jobs, fails the run with
+`RuntimeError: can't start new thread`, so the client logs the limit it found
+at the top of its log:
+
+```console
+Thread limit (ulimit -u): 4096
+```
+
+Two settings on the step's `client` block lower the count: `batch_size` (fewer
+requests per batch) and `init.max_workers` (how many requests of one batch go
+out at once, `None` by default, which sends all of them).
+
+`init.timeout` belongs next to `SERVER_TIME`. It is 3600 seconds per request and
+covers the wait in the server's queue as well as the generation itself. A
+request that outlives its server, because the server hit `SERVER_TIME` or was
+preempted, becomes an error row with an `error` and an `error_type` rather than
+a failed run. A resubmission keeps those rows as they are; `llm-annotate`'s own
+`--retry-errors` is what annotates them again, and the end-of-run summary lists
+the error types to name:
+
+```sh
+llm-annotate my-pipeline.yaml --steps write-qa --retry-errors APITimeoutError
+```
 
 ## Run-level environment variables
 
@@ -257,6 +437,7 @@ are submitted with `--export=ALL`.
 | `POOL_WAIT` | `1800` | Seconds a client waits for `min_servers` of its servers to register once it is running. Matches `READY_TIMEOUT`, so a client cannot give up on a server before the server gives up on itself. The or-joined dependency means the client only starts once a server of its pool has, so this covers a model load rather than an allocation; raise it when running `vllm_annotate.sh` by hand against a pool that is still queued. |
 | `VLLM_PORT` | `8000` | Base port a server starts probing from. The array task id is added to it, then the first free port is taken. |
 | `READY_TIMEOUT` | `1800` | Seconds a server waits for its own `/health` before giving up |
+| `PORT_RETRIES` | `5` | How often a server job retries on the next port after `vllm serve` failed to bind the one it probed. |
 | `CANCEL_SERVERS_ON_EXIT` | `1` | Whether a finished client `scancel`s its step's server array. `0` leaves the GPUs running. |
 | `SBATCH_CMD` | `sbatch` | The command that queues a job, for a site whose `sbatch` is wrapped. A submit this refuses ends the run: the steps after it would otherwise depend on a job id that was never issued. |
 | `OUTPUT_DIR`, `HUB_ID`, `OVERWRITE` | from the config | Override the config's `output_dir` / `hub_id`, or discard existing step output |
@@ -282,10 +463,16 @@ the steps:
 ./slurm/submit_pipeline.sh --steps rate-qa my-pipeline.yaml
 ```
 
-A purged scratch directory is a different case. The prepared data comes back
-from its Hub branch on its own; the JSONL progress files do not. Restore a
-step's progress backup before you resubmit, with that step's own directory
-(`<output_dir>/<NN>-<step>/annotate/`) and prefix (`<step>_`):
+[`--max-resubmits`](#resubmitting-automatically) queues those follow-up
+submissions up front, which is the same resume without waiting for you to
+notice. It needs nothing else: the attempt runs on the same cluster, against the
+same `output_dir`, so the progress files it reads are already there.
+
+A purged scratch directory is a different case, and so is a move to another
+cluster. The prepared data comes back from its Hub branch on its own; the JSONL
+progress files do not. Restore a step's progress backup before you resubmit,
+with that step's own directory (`<output_dir>/<NN>-<step>/annotate/`) and prefix
+(`<step>_`):
 
 ```sh
 python scripts/restore_progress_from_hub.py --hub-id user/my-dataset --output-dir outputs/qa/02-rate-qa/annotate --task-prefix rate-qa_
