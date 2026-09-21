@@ -7,6 +7,9 @@ from .claude_client import ClaudeClient as ClaudeClient
 from .claude_client import ClaudeRuntimeOptions as ClaudeRuntimeOptions
 from .exceptions import LLMClientError as LLMClientError
 from .exceptions import ProviderError as ProviderError
+from .exceptions import (
+    TooManyConsecutiveFailedBatchesError as TooManyConsecutiveFailedBatchesError,
+)
 from .openai_client import OpenAIClient as OpenAIClient
 from .openai_client import OpenAIRuntimeOptions as OpenAIRuntimeOptions
 from .vllm_offline_client import VLLMOfflineClient as VLLMOfflineClient
@@ -34,6 +37,7 @@ __all__ = [
     "ProviderError",
     "ProviderRuntimeOptions",
     "Response",
+    "TooManyConsecutiveFailedBatchesError",
     "VLLMBaseRuntimeOptions",
     "VLLMOnlineClient",
     "VLLMOfflineClient",

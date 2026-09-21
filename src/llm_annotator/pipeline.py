@@ -25,6 +25,7 @@ point.
 
 from __future__ import annotations
 
+import argparse
 import dataclasses
 import json
 import shlex
@@ -1126,19 +1127,12 @@ def _config_problems(
     return problems
 
 
-def main(args: list[str] | None = None) -> None:
-    """Run an annotation pipeline described by a JSON or YAML config file.
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser of the ``llm-annotate`` command.
 
-    A config that does not load is reported as one ``error:`` line per
-    problem, and the process exits with status 2. ``--debug`` keeps the
-    traceback instead. An error raised while the pipeline runs keeps its
-    traceback either way.
-
-    Args:
-        args: Optional argument list; defaults to ``sys.argv``.
+    Returns:
+        The parser, with every flag the command takes.
     """
-    import argparse
-
     parser = argparse.ArgumentParser(
         prog="llm-annotate",
         description=(
@@ -1267,65 +1261,116 @@ def main(args: list[str] | None = None) -> None:
         " per step; 'env' is one line of shell-quoted STEP_KEY=VALUE pairs"
         " per step, which a job submitter can eval instead of parsing JSON.",
     )
-    parsed = parser.parse_args(args)
+    return parser
 
+
+def _run(
+    *,
+    config: Path,
+    output_dir: str | None,
+    hub_id: str | None,
+    log_level: str | None,
+    overwrite: bool | None,
+    max_num_samples: int | None,
+    shuffle_seed: int | None,
+    settings: list[str] | None,
+    steps: str | None,
+    retry_errors: list[str] | None,
+    hosts_file: Path | None,
+    url_glob: str | None,
+    serve_args: str | None,
+    debug: bool,
+    describe_steps: bool,
+    describe_format: str,
+) -> None:
+    """Load the config named on the command line and act on it.
+
+    Args:
+        config: Path to the JSON or YAML config file.
+        output_dir: Value of ``--output-dir``.
+        hub_id: Value of ``--hub-id``.
+        log_level: Value of ``--log-level``.
+        overwrite: ``True`` when ``--overwrite`` was passed.
+        max_num_samples: Value of ``--max-num-samples``.
+        shuffle_seed: Value of ``--shuffle-seed``.
+        settings: Raw ``--set key=value`` arguments.
+        steps: Value of ``--steps``, comma separated.
+        retry_errors: Value of ``--retry-errors``: ``None`` when the flag was
+            not given, an empty list when it was given without a value.
+        hosts_file: Value of ``--hosts-file``.
+        url_glob: Value of ``--url-glob``.
+        serve_args: Step named by ``--serve-args``, or ``None``.
+        debug: Whether to keep the traceback of a config that does not load.
+        describe_steps: Whether to describe the steps instead of running them.
+        describe_format: How ``--describe-steps`` prints a step.
+    """
     selected = (
-        [name.strip() for name in parsed.steps.split(",") if name.strip()]
-        if parsed.steps
+        [name.strip() for name in steps.split(",") if name.strip()]
+        if steps
         else None
     )
 
     try:
         overrides = _cli_overrides(
-            config_path=parsed.config,
-            output_dir=parsed.output_dir,
-            hub_id=parsed.hub_id,
-            log_level=parsed.log_level,
-            overwrite=parsed.overwrite,
-            max_num_samples=parsed.max_num_samples,
-            shuffle_seed=parsed.shuffle_seed,
-            settings=parsed.settings,
+            config_path=config,
+            output_dir=output_dir,
+            hub_id=hub_id,
+            log_level=log_level,
+            overwrite=overwrite,
+            max_num_samples=max_num_samples,
+            shuffle_seed=shuffle_seed,
+            settings=settings,
         )
-        config = load_pipeline_config(
-            parsed.config,
+        pipeline_config = load_pipeline_config(
+            config,
             overrides=overrides,
             step_client_overrides=_pool_source_override(
-                parsed.config, parsed.hosts_file, parsed.url_glob, selected
+                config, hosts_file, url_glob, selected
             ),
         )
     except ValueError as exc:
-        if parsed.debug:
+        if debug:
             raise
-        for location, message in _config_problems(exc, parsed.config):
+        for location, message in _config_problems(exc, config):
             print(f"error: {location}: {message}", file=sys.stderr)
         sys.exit(2)
-    configure_logging(level=config.log_level)
+    configure_logging(level=pipeline_config.log_level)
     if overrides:
         applied = ", ".join(f"{k}={v}" for k, v in overrides.items())
         LOGGER.info(f"Config overrides from the command line: {applied}.")
 
-    if parsed.describe_steps:
-        for described in config.describe_steps():
-            if parsed.describe_format == "env":
+    if describe_steps:
+        for described in pipeline_config.describe_steps():
+            if describe_format == "env":
                 print(_describe_step_env(described))
             else:
                 print(json.dumps(described))
         return
 
-    if parsed.serve_args:
-        for arg in _serve_args(config, parsed.serve_args):
+    if serve_args:
+        for arg in _serve_args(pipeline_config, serve_args):
             print(arg)
         return
 
     run_pipeline(
-        config,
+        pipeline_config,
         selected=selected,
-        retry_errors=(
-            False
-            if parsed.retry_errors is None
-            else parsed.retry_errors or True
-        ),
+        retry_errors=(False if retry_errors is None else retry_errors or True),
     )
+
+
+def main(args: list[str] | None = None) -> None:
+    """Run an annotation pipeline described by a JSON or YAML config file.
+
+    A config that does not load is reported as one ``error:`` line per
+    problem, and the process exits with status 2. ``--debug`` keeps the
+    traceback instead. An error raised while the pipeline runs keeps its
+    traceback either way.
+
+    Args:
+        args: Optional argument list; defaults to ``sys.argv``.
+    """
+    _run(**vars(_build_parser().parse_args(args)))
 
 
 __all__ = ["main", "run_pipeline"]
