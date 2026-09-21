@@ -529,3 +529,43 @@ def test_restored_record_keeps_the_checks_of_the_first_machine(
         annotator.prepare_data(
             output_dir=machine_b, prompt_template="A: {text}", dataset=source
         )
+
+
+def test_restore_force_skips_blank_and_unusable_lines(
+    tmp_path: Path, fake_download: Callable[[Path], list[dict[str, Any]]]
+) -> None:
+    # Verifies a blank line in the backup, a local line that holds no row,
+    # and a backup file whose rows are all local already.
+    branch_dir = tmp_path / "branch"
+    branch_dir.mkdir()
+    (branch_dir / "progress_backup_0.jsonl").write_text(
+        json.dumps({"idx": 0, "response": "hub"})
+        + "\n\n"
+        + json.dumps({"idx": 1, "response": "hub"})
+        + "\n",
+        encoding="utf-8",
+    )
+    (branch_dir / "progress_backup_1.jsonl").write_text(
+        json.dumps({"idx": 7, "response": "hub"}) + "\n", encoding="utf-8"
+    )
+    fake_download(branch_dir)
+
+    local = tmp_path / "out" / "progress_backup"
+    local.mkdir(parents=True)
+    (local / "progress_backup_1.jsonl").write_text(
+        '"not a row"\n' + json.dumps({"idx": 7, "response": "local"}) + "\n",
+        encoding="utf-8",
+    )
+
+    restore_progress_from_hub(
+        hub_id="me/ds", output_dir=tmp_path / "out", force=True
+    )
+
+    assert (local / "progress_backup_0.jsonl").read_text().splitlines() == [
+        json.dumps({"idx": 0, "response": "hub"}),
+        json.dumps({"idx": 1, "response": "hub"}),
+    ]
+    assert (local / "progress_backup_1.jsonl").read_text().splitlines() == [
+        '"not a row"',
+        json.dumps({"idx": 7, "response": "local"}),
+    ]
