@@ -15,6 +15,7 @@ import pytest
 from datasets import Dataset
 from huggingface_hub.errors import RevisionNotFoundError
 
+from llm_annotator import hub as hub_mod
 from llm_annotator.annotator import Annotator, SelectionRecord
 from llm_annotator.clients.base import (
     Client,
@@ -22,7 +23,7 @@ from llm_annotator.clients.base import (
     ProviderRuntimeOptions,
     Response,
 )
-from llm_annotator.hub import restore_progress_from_hub
+from llm_annotator.hub import main, restore_progress_from_hub
 
 
 RESTORE_SCRIPT = (
@@ -569,3 +570,59 @@ def test_restore_force_skips_blank_and_unusable_lines(
         '"not a row"',
         json.dumps({"idx": 7, "response": "local"}),
     ]
+
+
+def test_main_calls_restore_progress_from_hub_with_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, Any] = {}
+
+    def fake_restore(**kwargs: Any) -> Path:
+        seen.update(kwargs)
+        return Path("ignored")
+
+    monkeypatch.setattr(hub_mod, "restore_progress_from_hub", fake_restore)
+
+    main(["--hub-id", "me/ds", "--output-dir", "outputs/run"])
+
+    assert seen == {
+        "hub_id": "me/ds",
+        "output_dir": Path("outputs/run"),
+        "task_prefix": "",
+        "idx_column": "idx",
+        "force": False,
+    }
+
+
+def test_main_passes_through_optional_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, Any] = {}
+
+    def fake_restore(**kwargs: Any) -> Path:
+        seen.update(kwargs)
+        return Path("ignored")
+
+    monkeypatch.setattr(hub_mod, "restore_progress_from_hub", fake_restore)
+
+    main(
+        [
+            "--hub-id",
+            "me/ds",
+            "--output-dir",
+            "outputs/run",
+            "--task-prefix",
+            "judge_",
+            "--idx-column",
+            "row_id",
+            "--force",
+        ]
+    )
+
+    assert seen == {
+        "hub_id": "me/ds",
+        "output_dir": Path("outputs/run"),
+        "task_prefix": "judge_",
+        "idx_column": "row_id",
+        "force": True,
+    }

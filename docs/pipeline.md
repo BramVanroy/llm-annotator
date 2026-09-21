@@ -586,11 +586,10 @@ A step's directory is `<output_dir>/<NN>-<name>/annotate/` and its prefix is
 is `outputs/qa`, restores with:
 
 ```sh
-python scripts/restore_progress_from_hub.py --hub-id user/my-dataset --output-dir outputs/qa/02-judge/annotate --task-prefix judge_
+llm-annotate-restore --hub-id user/my-dataset --output-dir outputs/qa/02-judge/annotate --task-prefix judge_
 ```
 
-The script is part of a checkout of the repository. With an installed package,
-call the function that it wraps:
+Or call the function it wraps from Python:
 
 ```python
 from llm_annotator import restore_progress_from_hub

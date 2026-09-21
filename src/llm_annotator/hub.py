@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import shutil
 import tempfile
@@ -16,7 +17,7 @@ from llm_annotator.annotator import (
     PROGRESS_DS_LOCAL_SUBDIR,
     SELECTION_RECORD_FILE,
 )
-from llm_annotator.logging_utils import get_logger
+from llm_annotator.logging_utils import configure_logging, get_logger
 
 
 LOGGER = get_logger("hub")
@@ -241,3 +242,72 @@ def restore_progress_from_hub(
         f" '{branch}' of '{hub_id}' into '{progress_dir}'."
     )
     return progress_dir
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser of the ``llm-annotate-restore`` command.
+
+    Returns:
+        The parser, with every flag the command takes.
+    """
+    parser = argparse.ArgumentParser(
+        prog="llm-annotate-restore",
+        description=(
+            "Download the JSONL progress backup and the selection record of"
+            " an annotation run from the Hugging Face Hub, so that a rerun"
+            " resumes instead of annotating every row again."
+        ),
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--hub-id",
+        required=True,
+        help="Dataset repository that the run backs up to.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        required=True,
+        type=Path,
+        help=(
+            "The annotator's output directory. For a pipeline step this is"
+            " <output_dir>/<NN>-<name>/annotate/."
+        ),
+    )
+    parser.add_argument(
+        "--task-prefix",
+        default="",
+        help=(
+            "Task prefix of the run, which names both the Hub branch and the"
+            " local progress directory. For a pipeline step this is <name>_."
+        ),
+    )
+    parser.add_argument(
+        "--idx-column",
+        default="idx",
+        help=(
+            "Column that holds the sample id. Only read when rows are merged"
+            " into existing progress files."
+        ),
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Merge into a progress directory that already holds files. Rows"
+            " are merged per sample id and a local row wins."
+        ),
+    )
+    return parser
+
+
+def main(args: list[str] | None = None) -> None:
+    """Restore a run's Hub progress backup into its local output directory.
+
+    Args:
+        args: Optional argument list; defaults to ``sys.argv``.
+    """
+    configure_logging()
+    restore_progress_from_hub(**vars(_build_parser().parse_args(args)))
+
+
+__all__ = ["main", "restore_progress_from_hub"]

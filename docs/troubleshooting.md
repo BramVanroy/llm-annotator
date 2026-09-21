@@ -426,7 +426,7 @@ and a move to another cluster both look like this.
 Fix: run the restore command that the message prints, then start the run again.
 
 ```sh
-python scripts/restore_progress_from_hub.py --hub-id user/my-dataset --output-dir outputs/qa/02-judge/annotate --task-prefix judge_
+llm-annotate-restore --hub-id user/my-dataset --output-dir outputs/qa/02-judge/annotate --task-prefix judge_
 ```
 
 Without `--force` the restore refuses a progress directory that is not empty:

@@ -44,7 +44,7 @@ anthropic = [
 openai = [
     "openai>=2.36.0,<3",
 ]
-# Used by examples/wiki-nl-persona-qa/prepare_seed.py to sentence-split an
+# Used by case-studies/wiki-nl-persona-qa/prepare_seed.py to sentence-split an
 # oversized section. A blank pipeline + sentencizer only, no model download.
 spacy = [
     "spacy>=3.8,<4",
@@ -85,6 +85,7 @@ dev = [
 
 [project.scripts]
 llm-annotate = "llm_annotator.pipeline:main"
+llm-annotate-restore = "llm_annotator.hub:main"
 
 [project.urls]
 Homepage = "https://github.com/BramVanroy/llm-annotator"
@@ -156,6 +157,7 @@ exclude = [
     "tests",
     "scratches",
     "examples",
+    "case-studies",
     "docs",
     # interrogate walks the whole working tree when it is given no path, and
     # both callers (`make quality` and the badge workflow) give it none, so

@@ -2051,7 +2051,7 @@ class Annotator:
             f" while '{output_dir}' holds no progress files. This run would"
             " annotate every row again and its first upload would replace"
             " the backup with fewer rows. Restore the backup first:\n"
-            "    python scripts/restore_progress_from_hub.py --hub-id"
+            "    llm-annotate-restore --hub-id"
             f" {hub_id} --output-dir {output_dir}{prefix_flag}\n"
             "Pass overwrite=True to delete the backup branch and annotate"
             " every row again."

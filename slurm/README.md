@@ -482,7 +482,7 @@ with that step's own directory (`<output_dir>/<NN>-<step>/annotate/`) and prefix
 (`<step>_`):
 
 ```sh
-python scripts/restore_progress_from_hub.py --hub-id user/my-dataset --output-dir outputs/qa/02-rate-qa/annotate --task-prefix rate-qa_
+llm-annotate-restore --hub-id user/my-dataset --output-dir outputs/qa/02-rate-qa/annotate --task-prefix rate-qa_
 ```
 
 ## Running a step yourself
