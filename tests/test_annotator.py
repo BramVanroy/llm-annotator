@@ -1252,7 +1252,7 @@ def test_run_annotation_refuses_to_overwrite_a_hub_backup(
         )
 
     message = str(excinfo.value)
-    assert "restore_progress_from_hub.py" in message
+    assert "llm-annotate-restore --hub-id me/test" in message
     assert "--task-prefix qa_" in message
     assert "overwrite=True" in message
 
