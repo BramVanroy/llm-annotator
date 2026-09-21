@@ -228,16 +228,15 @@ def _watch_pool(
     if client_config.model is not None:
         kwargs["model"] = client_config.model
 
-    def discover() -> list[str]:
-        try:
-            return client_config.resolve_base_urls(root)
-        except ValueError:
-            return []
-
     def watch() -> None:
         while not annotator.is_shutting_down:
             pooled_urls = annotator.client_base_urls()
-            candidates = [url for url in discover() if url not in pooled_urls]
+            try:
+                configured = client_config.resolve_base_urls(root)
+            except ValueError:
+                # The pool source may not exist yet, or hold nothing.
+                configured = []
+            candidates = [url for url in configured if url not in pooled_urls]
             with ThreadPoolExecutor(max_workers=len(candidates) or 1) as pool:
                 readiness = list(
                     pool.map(lambda url: server_is_healthy(url, 5), candidates)

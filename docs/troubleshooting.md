@@ -204,10 +204,6 @@ Provide at most one of 'base_urls', 'hosts_file' or 'url_glob', got <keys>.
 ```
 
 ```text
-'pool.gpus_per_vllm_server' moved to 'engine.tensor_parallel_size', which both vLLM providers read, so a step states its GPU count once.
-```
-
-```text
 'queue_size' is <n>, below the minimum of <n> for this step: <n> server(s) times <n> concurrent batch(es) each ('max_concurrent_batches_per_client'). A queue smaller than that leaves servers idle. Set 'queue_size' to at least <n>, or remove it to keep <n> batches queued per batch slot (<n>).
 ```
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 
 from llm_annotator.clients.base import (
@@ -16,18 +17,12 @@ from llm_annotator.clients.base import (
     reject_multiple_responses,
 )
 from llm_annotator.clients.exceptions import ProviderError
-from llm_annotator.logging_utils import get_logger
 from llm_annotator.utils import add_schema_additional_properties_false
 
 
 if TYPE_CHECKING:
     from openai import OpenAI
     from openai.types.chat.chat_completion import ChatCompletion
-
-from dataclasses import dataclass
-
-
-logger = get_logger(__name__)
 
 DEFAULT_TIMEOUT = 600.0
 """Seconds one request may take, the OpenAI SDK's own default.
@@ -97,6 +92,34 @@ extra fields on the message model. vLLM emits ``reasoning``; several hosted
 OpenAI-compatible APIs emit ``reasoning_content``."""
 
 
+def _json_schema_response_format(schema: dict[str, Any]) -> dict[str, Any]:
+    """Wrap a JSON schema as an OpenAI ``response_format`` value.
+
+    Args:
+        schema: The JSON schema the response must match.
+
+    Returns:
+        The ``response_format`` value for a chat-completions request.
+
+    Examples:
+        >>> fmt = _json_schema_response_format({"type": "object"})
+        >>> (
+        ...     fmt["type"],
+        ...     fmt["json_schema"]["name"],
+        ...     fmt["json_schema"]["strict"],
+        ... )
+        ('json_schema', 'response', True)
+    """
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "response",
+            "schema": add_schema_additional_properties_false(schema),
+            "strict": True,
+        },
+    }
+
+
 def _message_reasoning(message: object) -> str | None:
     """Read the reasoning trace off a chat message, whatever the server calls it.
 
@@ -161,13 +184,13 @@ class OpenAIClient(Client[T_OpenAIOptions]):
             batch_poll_interval: Seconds between two status polls of a running
                 Batch API job. Only read when ``use_batch_api`` is ``True``.
             on_error: Error behavior when generation fails. Valid options are:
-                - ``"raise"``: raise a
-                  [`ProviderError`][llm_annotator.clients.exceptions.ProviderError]
-                  (default).
-                - ``"ignore"``: return a
+                - ``"warn"``: log a warning and return a
                   [`Response`][llm_annotator.clients.base.Response] with
-                  ``error`` set.
-                - ``"warn"``: log a warning and return an error ``Response``.
+                  ``error`` set (the default).
+                - ``"ignore"``: return that error ``Response`` without the
+                  warning.
+                - ``"raise"``: raise a
+                  [`ProviderError`][llm_annotator.clients.exceptions.ProviderError].
         """
         super().__init__(
             model=model, max_workers=max_workers, on_error=on_error
@@ -258,7 +281,9 @@ class OpenAIClient(Client[T_OpenAIOptions]):
             try:
                 self._client.batches.cancel(batch_id)
             except Exception as exc:
-                logger.warning(f"Could not cancel batch {batch_id}: {exc}")
+                self._logger.warning(
+                    f"Could not cancel batch {batch_id}: {exc}"
+                )
             self._delete_batch_files(batch_id)
 
     def _delete_batch_files(self, batch_id: str) -> None:
@@ -271,7 +296,7 @@ class OpenAIClient(Client[T_OpenAIOptions]):
             try:
                 self._client.files.delete(file_id)
             except Exception as exc:
-                logger.warning(
+                self._logger.warning(
                     f"Could not delete file {file_id} of batch"
                     f" {batch_id}: {exc}"
                 )
@@ -298,16 +323,9 @@ class OpenAIClient(Client[T_OpenAIOptions]):
         body["model"] = self.model
         body["messages"] = messages
         if options.json_schema is not None:
-            body["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "response",
-                    "schema": add_schema_additional_properties_false(
-                        options.json_schema
-                    ),
-                    "strict": True,
-                },
-            }
+            body["response_format"] = _json_schema_response_format(
+                options.json_schema
+            )
         body.update(gen_kwargs or {})
         reject_multiple_responses(body)
         return {
@@ -365,7 +383,7 @@ class OpenAIClient(Client[T_OpenAIOptions]):
         # leaves destroy() a batch to cancel and an input file to delete.
         terminal_statuses = {"completed", "failed", "expired", "cancelled"}
         while batch.status not in terminal_statuses:
-            logger.info(
+            self._logger.info(
                 f"Batch {batch_id} status: {batch.status}. Polling again"
                 f" in {self.batch_poll_interval} seconds..."
             )
@@ -522,16 +540,9 @@ class OpenAIClient(Client[T_OpenAIOptions]):
             }
         )
         if resolved.json_schema is not None:
-            request_payload["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "response",
-                    "schema": add_schema_additional_properties_false(
-                        resolved.json_schema
-                    ),
-                    "strict": True,
-                },
-            }
+            request_payload["response_format"] = _json_schema_response_format(
+                resolved.json_schema
+            )
         request_payload.update(gen_kwargs or {})
         reject_multiple_responses(request_payload)
 

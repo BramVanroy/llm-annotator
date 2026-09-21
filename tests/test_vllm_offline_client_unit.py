@@ -154,7 +154,7 @@ def test_runtime_options_with_json_schema(
     assert "structured_outputs" in payload
 
 
-def test_load_pipeline_explicit_args_override_extras(
+def test_ensure_pipeline_loaded_explicit_args_override_extras(
     fake_vllm_runtime: dict[str, Any],
 ) -> None:
     # Verifies explicit constructor args override conflicting extra kwargs.

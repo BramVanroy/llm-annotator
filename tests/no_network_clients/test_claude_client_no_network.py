@@ -35,7 +35,7 @@ def test_extract_system_instruction_happy_path() -> None:
 
 def test_claude_extract_system_instruction_errors() -> None:
     # Verifies Claude helper rejects multiple or misplaced system messages.
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError, match="single system message"):
         _extract_system_instruction(
             [
                 {"role": "system", "content": "a"},

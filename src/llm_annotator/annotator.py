@@ -117,6 +117,9 @@ FINAL_DS_SHARD_GLOB = "data-*-of-*.arrow"
 # being dispatched.
 QUEUE_BATCHES_PER_SLOT = 4
 
+DEFAULT_MAX_CONCURRENT_BATCHES = 4
+"""Simultaneous batches per vLLM server unless a step says otherwise."""
+
 # "auto" writes one progress file per this fraction of the run, so the number
 # of files stays bounded no matter how large the dataset is.
 AUTO_OUTPUT_FILE_FRACTION = 0.01
@@ -124,7 +127,7 @@ MIN_AUTO_SAMPLES_PER_OUTPUT_FILE = 1000
 
 
 def _resolve_samples_per_output_file(
-    max_samples_per_output_file: int | Literal["auto"] | None,
+    max_samples_per_output_file: int | Literal["auto"],
     *,
     num_rows: int,
 ) -> int:
@@ -135,7 +138,7 @@ def _resolve_samples_per_output_file(
 
     Args:
         max_samples_per_output_file: ``"auto"``, a positive sample count, or
-            0 (``None`` is read as 0) for a single file of unlimited size.
+            0 for a single file of unlimited size.
         num_rows: Number of rows the run covers, used by ``"auto"``.
 
     Returns:
@@ -158,9 +161,6 @@ def _resolve_samples_per_output_file(
             MIN_AUTO_SAMPLES_PER_OUTPUT_FILE,
             ceil(num_rows * AUTO_OUTPUT_FILE_FRACTION),
         )
-
-    if max_samples_per_output_file is None:
-        return 0
 
     if (
         isinstance(max_samples_per_output_file, bool)
@@ -275,6 +275,74 @@ class _ProgressUploader:
     def close(self) -> None:
         """Wait for an upload that is in flight and stop the thread."""
         self._executor.shutdown(wait=True)
+
+
+def _count_outcomes(
+    dataset: Dataset, task_prefix: str
+) -> tuple[CounterType[str], CounterType[str], CounterType[str]]:
+    """Count the finish reasons, field validity and error types of a run.
+
+    The dataset is read in batches, so a large result does not have to fit
+    in memory at once.
+
+    Args:
+        dataset: The final annotated dataset.
+        task_prefix: Prefix of the internal column names.
+
+    Returns:
+        The counts of ``finish_reason``, of ``valid_fields`` and of
+        ``error_type``. A column the dataset does not hold counts nothing.
+    """
+    finish_reason_counts: CounterType[str] = Counter()
+    valid_fields_counts: CounterType[str] = Counter()
+    error_type_counts: CounterType[str] = Counter()
+    valid_res = {None: "none", True: "valid", False: "invalid"}
+
+    for batch in dataset.iter(batch_size=10_000):
+        if f"{task_prefix}finish_reason" in batch:
+            finish_reason_counts.update(
+                "none" if item is None else item
+                for item in batch[f"{task_prefix}finish_reason"]
+            )
+
+        if f"{task_prefix}valid_fields" in batch:
+            valid_fields_counts.update(
+                valid_res.get(item, "unknown")
+                for item in batch[f"{task_prefix}valid_fields"]
+            )
+
+        if f"{task_prefix}error_type" in batch:
+            error_type_counts.update(
+                "none" if item is None else item
+                for item in batch[f"{task_prefix}error_type"]
+            )
+
+    return finish_reason_counts, valid_fields_counts, error_type_counts
+
+
+def _prompt_fields(prompt_template: str) -> tuple[str, ...]:
+    """Name the dataset columns that a prompt template fills in.
+
+    A placeholder with a conversion or a format spec is left out, so that
+    only a plain ``{column}`` counts as a column of the dataset.
+
+    Args:
+        prompt_template: The prompt template.
+
+    Returns:
+        The field names, in the order they appear.
+
+    Examples:
+        >>> _prompt_fields("Q: {question} A: {answer}")
+        ('question', 'answer')
+        >>> _prompt_fields("No placeholders here")
+        ()
+    """
+    return tuple(
+        field
+        for _, field, spec, _ in string.Formatter().parse(prompt_template)
+        if field is not None and not spec
+    )
 
 
 def _bookkeeping_columns(
@@ -532,11 +600,6 @@ class SelectionRecord:
     selected_rows: int
     components: dict[str, str] = field(default_factory=dict)
 
-    @property
-    def fingerprint(self) -> str:
-        """A single hash over every recorded component."""
-        return get_hash(json.dumps(self.components, sort_keys=True))
-
     def changed_components(self, components: dict[str, str]) -> list[str]:
         """Name the requested settings that differ from the recorded ones.
 
@@ -617,9 +680,8 @@ class SelectionRecord:
             output_dir: The annotator's output directory.
             task_prefix: The task prefix of the run.
         """
-        payload = dataclasses.asdict(self) | {"fingerprint": self.fingerprint}
         self.path(output_dir, task_prefix).write_text(
-            json.dumps(payload, indent=2), encoding="utf-8"
+            json.dumps(dataclasses.asdict(self), indent=2), encoding="utf-8"
         )
 
 
@@ -687,10 +749,10 @@ class Annotator:
     Args:
         client: An initialised [`Client`][llm_annotator.clients.base.Client]
             instance that performs the actual generation.
-        batch_size: Number of samples per inference batch. It depends on the
-            client and its settings which batching is actually used. Batch
-            size here is mostly intended for progress reporting. The client
-            may split the given batch into smaller sub-batches if needed.
+        batch_size: Number of samples handed to the client in one
+            ``batch_generate`` call. It decides how much work is in flight at
+            once, so it is what a provider's rate limit or a vLLM server's
+            ``max_num_seqs`` has to cover.
         num_proc: Number of processes for dataset preprocessing.
         verbose: Whether to print progress information.
 
@@ -752,22 +814,17 @@ class Annotator:
         *,
         process_pdout: Path,
         idx_column: str,
-        dataset_split: str | None = None,
-        dataset_config: str | None = None,
     ) -> set[int]:
         """Get indices of samples that have already been processed.
 
         Scans existing output files to determine which samples can be skipped
-        in resumed processing.
-
-        A hard crash can leave a partially written final line behind. The code here
-        is robust so that it can delete the last non-parseable JSON line and still recover.
+        in resumed processing. A hard crash can leave a partially written
+        final line behind, so the last line of a file is dropped when it does
+        not parse.
 
         Args:
             process_pdout: Output directory path to scan for existing files.
             idx_column: Column name used as unique identifier.
-            dataset_split: Only count rows from this split, when recorded.
-            dataset_config: Only count rows from this config, when recorded.
 
         Returns:
             Set of indices that have already been processed.
@@ -780,7 +837,6 @@ class Annotator:
             return ids_done
 
         for pfin in sorted(process_pdout.glob("*.jsonl")):
-            # skip and remove empty files
             if pfin.stat().st_size == 0:
                 pfin.unlink()
                 continue
@@ -812,21 +868,6 @@ class Annotator:
                             " Cannot determine which samples to skip on resume. Please check your configuration"
                             " and ensure the index column is included in the output."
                         )
-
-                    # Filter on dataset split/config
-                    if (
-                        dataset_split
-                        and "dataset_split" in row
-                        and row["dataset_split"] != dataset_split
-                    ):
-                        continue
-
-                    if (
-                        dataset_config
-                        and "dataset_config" in row
-                        and row["dataset_config"] != dataset_config
-                    ):
-                        continue
 
                     ids_done.add(row[idx_column])
 
@@ -913,12 +954,7 @@ class Annotator:
         *,
         prompt_template: str,
         idx_column: str,
-        dataset_name: str | None = None,
-        dataset: Dataset | None = None,
-        dataset_config: str | None = None,
-        data_dir: str | None = None,
-        data_files: str | list[str] | dict[str, str | list[str]] | None = None,
-        dataset_split: str | None = None,
+        dataset: Dataset,
         max_num_samples: int | None = None,
         shuffle_seed: int | None = None,
         prompt_fields: Iterable[str] = (),
@@ -929,20 +965,14 @@ class Annotator:
         preprocess_fn: Callable | None = None,
         reuse_idx_column: bool = False,
     ) -> Dataset:
-        """Load and preprocess the dataset for annotation.
-
-        Handles dataset loading, applies prompt templates, and manages
-        caching for efficient resumption of interrupted jobs.
+        """Select, template and sort the rows of a source dataset.
 
         Args:
             prompt_template: Prompt template used to build chat messages.
             idx_column: Column name used as unique identifier. Must not exist in the input dataset.
-            dataset_name: Name or path of the dataset to load.
-            dataset: Pre-loaded dataset to use instead of loading from name/path.
-            dataset_config: Dataset configuration name (optional).
-            data_dir: Data directory for local datasets (optional).
-            data_files: Specific file(s) for local datasets (optional).
-            dataset_split: Specific split to load (optional).
+            dataset: The source dataset, as
+                [`_load_source`][llm_annotator.annotator.Annotator._load_source]
+                returns it.
             max_num_samples: Maximum number of samples to process.
             shuffle_seed: Seed for dataset shuffling (optional).
             prompt_fields: Fields required by the prompt template.
@@ -981,17 +1011,7 @@ class Annotator:
                 "'max_num_samples' must be a positive integer or None"
             )
 
-        dataset = self._load_source(
-            dataset_name=dataset_name,
-            dataset=dataset,
-            dataset_config=dataset_config,
-            data_dir=data_dir,
-            data_files=data_files,
-            dataset_split=dataset_split,
-        )
-
         if idx_column not in dataset.column_names:
-            # Index column for tracking samples and resuming interrupted runs
             dataset = dataset.add_column(idx_column, list(range(len(dataset))))
         elif not reuse_idx_column:
             raise ValueError(
@@ -1252,32 +1272,30 @@ class Annotator:
                 res[f"{task_prefix}valid"] = is_valid
             results.append(res)
 
-        if f"{task_prefix}valid_fields" in results[0]:
-            n_invalid = sum(
-                1 for res in results if not res[f"{task_prefix}valid_fields"]
-            )
-            if n_invalid == len(results) and self.verbose:
-                self._logger.warning(
-                    "Warning: All samples in the batch failed to produce valid JSON fields."
-                    " This might be exceptional (esp. for smaller batches)"
-                    " but if it happens often it suggests a deeper issue, such"
-                    " as too few 'max_completion_tokens' in options."
-                )
-
-        if f"{task_prefix}valid" in results[0]:
-            n_invalid = sum(
-                1 for res in results if not res[f"{task_prefix}valid"]
-            )
-            if n_invalid == len(results) and self.verbose:
-                self._logger.warning(
-                    "Warning: All samples in the batch failed to produce valid outputs after"
-                    " running the custom validation function."
-                )
+        checks = (
+            (
+                f"{task_prefix}valid_fields",
+                "All samples in the batch failed to produce valid JSON"
+                " fields. This might be exceptional (esp. for smaller"
+                " batches) but if it happens often it suggests a deeper"
+                " issue, such as too few 'max_completion_tokens' in options.",
+            ),
+            (
+                f"{task_prefix}valid",
+                "All samples in the batch failed to produce valid outputs"
+                " after running the custom validation function.",
+            ),
+        )
+        for column, message in checks:
+            if column not in results[0]:
+                continue
+            if self.verbose and all(not res[column] for res in results):
+                self._logger.warning(message)
 
         return results
 
     def _invalid_indices(
-        self, results: list[dict[str, Any]], task_prefix: str
+        self, *, results: list[dict[str, Any]], task_prefix: str
     ) -> list[int]:
         """Return the positions of results that failed schema or custom validation.
 
@@ -1356,7 +1374,9 @@ class Annotator:
         if num_retries_invalid <= 0:
             return results
 
-        invalid_indices = self._invalid_indices(results, task_prefix)
+        invalid_indices = self._invalid_indices(
+            results=results, task_prefix=task_prefix
+        )
         n_retries = 0
         while invalid_indices and n_retries < num_retries_invalid:
             n_retries += 1
@@ -1381,7 +1401,9 @@ class Annotator:
             for local_idx, global_idx in enumerate(invalid_indices):
                 results[global_idx] = retry_results[local_idx]
 
-            invalid_indices = self._invalid_indices(results, task_prefix)
+            invalid_indices = self._invalid_indices(
+                results=results, task_prefix=task_prefix
+            )
 
             if (
                 self.verbose
@@ -1610,45 +1632,20 @@ class Annotator:
         has_local_cache = prepared_data_path.is_dir() and any(
             prepared_data_path.glob("*")
         )
-        if has_local_cache and not force_data_preparation:
-            cached_ds = Dataset.load_from_disk(prepared_data_path)
-            self._adopt_record(
+        if not force_data_preparation:
+            cached_ds = self._reuse_prepared_data(
                 previous=previous,
                 components=components,
-                cached_rows=len(cached_ds),
                 max_num_samples=max_num_samples,
                 pdout=pdout,
                 task_prefix=task_prefix,
-                origin=f"the cache at '{prepared_data_path}'",
+                prepared_data_path=prepared_data_path,
+                has_local_cache=has_local_cache,
+                hub_id=hub_id,
             )
-            return cached_ds, prepared_data_path, hub_id
-
-        if hub_id and not force_data_preparation:
-            try:
-                cached_ds = load_dataset(
-                    hub_id,
-                    revision=f"{task_prefix}{PREPARED_DS_BRANCH_SUFF}",
-                    split="train",
-                )
-            except Exception:
-                pass
-            else:
-                self._logger.info(
-                    f"Restoring prepared data from Hub to local cache at '{prepared_data_path}'..."
-                )
-                cached_ds.save_to_disk(prepared_data_path)
-                self._adopt_record(
-                    previous=previous,
-                    components=components,
-                    cached_rows=len(cached_ds),
-                    max_num_samples=max_num_samples,
-                    pdout=pdout,
-                    task_prefix=task_prefix,
-                    origin=f"the Hub backup in '{hub_id}'",
-                )
+            if cached_ds is not None:
                 return cached_ds, prepared_data_path, hub_id
 
-        # ... and if all of that fails, prepare the dataset from the source
         source = self._load_source(
             dataset_name=dataset_name,
             dataset=dataset,
@@ -1696,22 +1693,13 @@ class Annotator:
             except Exception:
                 pass
 
-        _str_formatter = string.Formatter()
-        prompt_fields = tuple(
-            [
-                fld[1]
-                for fld in _str_formatter.parse(prompt_template)
-                if fld[1] is not None and not fld[2]
-            ]
-        )
-
         prepared_dataset: Dataset = self._load_dataset(
             prompt_template=prompt_template,
             idx_column=idx_column,
             dataset=source,
             max_num_samples=max_num_samples,
             shuffle_seed=shuffle_seed,
-            prompt_fields=prompt_fields,
+            prompt_fields=_prompt_fields(prompt_template),
             task_prefix=task_prefix,
             sort_by_length=sort_by_length,
             system_message=system_message,
@@ -1756,6 +1744,72 @@ class Annotator:
             )
 
         return prepared_dataset, prepared_data_path, hub_id
+
+    def _reuse_prepared_data(
+        self,
+        *,
+        previous: SelectionRecord | None,
+        components: dict[str, str],
+        max_num_samples: int | None,
+        pdout: Path,
+        task_prefix: str,
+        prepared_data_path: Path,
+        has_local_cache: bool,
+        hub_id: str | None,
+    ) -> Dataset | None:
+        """Read prepared data back from the local cache or the Hub backup.
+
+        Args:
+            previous: The record of the prepared data, or ``None``.
+            components: The settings of the request.
+            max_num_samples: The requested sample cap.
+            pdout: The annotator's output directory.
+            task_prefix: The task prefix of the run.
+            prepared_data_path: Local prepared-data cache of this task.
+            has_local_cache: Whether that cache holds files.
+            hub_id: Hugging Face dataset ID that may hold a backup.
+
+        Returns:
+            The prepared data, or ``None`` when neither source has it.
+        """
+        if has_local_cache:
+            cached_ds = Dataset.load_from_disk(prepared_data_path)
+            self._adopt_record(
+                previous=previous,
+                components=components,
+                cached_rows=len(cached_ds),
+                max_num_samples=max_num_samples,
+                pdout=pdout,
+                task_prefix=task_prefix,
+                origin=f"the cache at '{prepared_data_path}'",
+            )
+            return cached_ds
+
+        if hub_id:
+            try:
+                cached_ds = load_dataset(
+                    hub_id,
+                    revision=f"{task_prefix}{PREPARED_DS_BRANCH_SUFF}",
+                    split="train",
+                )
+            except Exception:
+                return None
+            self._logger.info(
+                f"Restoring prepared data from Hub to local cache at '{prepared_data_path}'..."
+            )
+            cached_ds.save_to_disk(prepared_data_path)
+            self._adopt_record(
+                previous=previous,
+                components=components,
+                cached_rows=len(cached_ds),
+                max_num_samples=max_num_samples,
+                pdout=pdout,
+                task_prefix=task_prefix,
+                origin=f"the Hub backup in '{hub_id}'",
+            )
+            return cached_ds
+
+        return None
 
     def _adopt_record(
         self,
@@ -2003,6 +2057,131 @@ class Annotator:
             " every row again."
         )
 
+    def _resolve_output_schema(
+        self,
+        *,
+        output_schema: str | dict[str, Any] | None,
+        options: ProviderRuntimeOptions | None,
+        task_prefix: str,
+        idx_column: str,
+    ) -> tuple[dict[str, Any] | None, ProviderRuntimeOptions | None]:
+        """Decode an output schema and carry it into the runtime options.
+
+        Args:
+            output_schema: The schema as JSON text or a mapping, or ``None``.
+            options: The runtime options of the run, or ``None``.
+            task_prefix: The task prefix of the run.
+            idx_column: Name of the sample id column.
+
+        Returns:
+            The decoded schema and the options that hold it.
+
+        Raises:
+            TypeError: If ``output_schema`` does not decode to a mapping.
+            ValueError: If the schema is given twice, or if one of its
+                top-level properties has the name of a column that the
+                annotator writes itself.
+        """
+        if output_schema is not None:
+            if isinstance(output_schema, str):
+                output_schema = json.loads(output_schema)
+            if not isinstance(output_schema, dict):
+                raise TypeError("'output_schema' must decode to a dictionary.")
+            if options is not None and options.json_schema is not None:
+                raise ValueError(
+                    "Provide 'output_schema' OR set 'options.json_schema', not both."
+                )
+            options = dataclasses.replace(
+                options or ProviderRuntimeOptions(),
+                json_schema=output_schema,
+            )
+
+        schema = options.json_schema if options is not None else None
+        if schema:
+            reserved = _bookkeeping_columns(
+                task_prefix=task_prefix, idx_column=idx_column
+            )
+            taken = sorted(set(schema.get("properties", {})) & reserved)
+            if taken:
+                names = ", ".join(f"'{name}'" for name in taken)
+                raise ValueError(
+                    f"The output schema property names {names} are also the"
+                    " names of columns that the annotator writes for every"
+                    " sample. Pick other names in the schema, or give the run"
+                    " another 'task_prefix' or 'idx_column'."
+                )
+
+        return output_schema, options
+
+    def _resolve_prepared_dataset(
+        self,
+        *,
+        prepared_dataset: Dataset | None,
+        prepared_data_path: str | Path | None,
+        hub_id: str | None,
+        task_prefix: str,
+        idx_column: str,
+    ) -> Dataset:
+        """Find the prepared data among the three sources that may hold it.
+
+        The dataset in hand wins, then the local cache, then the Hub backup.
+        A source that fails to load is a warning, so the next one still gets
+        a turn.
+
+        Args:
+            prepared_dataset: Prepared data the caller already holds.
+            prepared_data_path: Local path of a prepared-data cache.
+            hub_id: Hugging Face dataset ID that holds a prepared-data branch.
+            task_prefix: The task prefix of the run.
+            idx_column: Name of the sample id column.
+
+        Returns:
+            The prepared dataset.
+
+        Raises:
+            ValueError: If no source yields prepared data, or if the prepared
+                data has no ``idx_column``.
+        """
+        if prepared_dataset is None and prepared_data_path:
+            try:
+                prepared_dataset = Dataset.load_from_disk(
+                    Path(prepared_data_path)
+                )
+            except Exception as exc:
+                self._logger.warning(
+                    f"Failed to load prepared dataset from local path '{prepared_data_path}'."
+                    f" This might be because the file does not exist or is not a valid dataset. Error: {exc}"
+                )
+
+        if prepared_dataset is None and hub_id:
+            try:
+                prepared_dataset = load_dataset(
+                    hub_id,
+                    revision=f"{task_prefix}{PREPARED_DS_BRANCH_SUFF}",
+                    split="train",
+                )
+            except Exception as exc:
+                self._logger.warning(
+                    f"Failed to load prepared dataset from Hub ID '{hub_id}' with revision '{PREPARED_DS_BRANCH_SUFF}'."
+                    f" This might be because the dataset or revision does not exist, or due to network issues. Error: {exc}"
+                )
+
+        if prepared_dataset is None:
+            raise ValueError(
+                "No prepared data found. Provide 'prepared_dataset', "
+                "'prepared_data_path' (locally saved dataset), or 'hub_id' (cloud-saved dataset)."
+                " If needed, first run 'prepare_data' to create the prepared dataset."
+            )
+
+        if idx_column not in prepared_dataset.column_names:
+            raise ValueError(
+                f"Expected index column '{idx_column}' not found in prepared dataset."
+                " This column is required for tracking processed samples and resuming on failure."
+                " Please ensure the prepared dataset includes the index column with name matching 'idx_column' argument."
+            )
+
+        return prepared_dataset
+
     @destroy_on_error
     def run_annotation(
         self,
@@ -2013,8 +2192,6 @@ class Annotator:
         prepared_data_path: str | Path | None = None,
         hub_id: str | None = None,
         overwrite: bool = False,
-        dataset_split: str | None = None,
-        dataset_config: str | None = None,
         keep_columns: str | Iterable[str] | bool | None = None,
         options: ProviderRuntimeOptions | None = None,
         gen_kwargs: dict[str, Any] | None = None,
@@ -2055,8 +2232,6 @@ class Annotator:
                 [`prepare_data`][llm_annotator.annotator.Annotator.prepare_data]
                 to rebuild it. It also keeps the artifacts of every other
                 ``task_prefix`` in the same directory.
-            dataset_split: Dataset split used for skip filtering.
-            dataset_config: Dataset config used for skip filtering.
             keep_columns: Columns to keep in output. ``True`` for all.
             options: Runtime options passed to the client.
             gen_kwargs: Extra request parameters merged over ``options``,
@@ -2115,7 +2290,6 @@ class Annotator:
                 ``max_consecutive_failed_batches`` consecutive batches fail
                 entirely.
         """
-        upload_every_n_samples = upload_every_n_samples or 0
         # Rejected here so a bad value fails before any data is loaded. The
         # concrete size needs the prepared dataset's row count, so it is
         # resolved again once that dataset is in hand.
@@ -2129,44 +2303,26 @@ class Annotator:
                 " integer"
             )
 
-        if upload_every_n_samples < 0 or not isinstance(
-            upload_every_n_samples, int
+        if upload_every_n_samples is None:
+            upload_every_n_samples = 0
+        if (
+            isinstance(upload_every_n_samples, bool)
+            or not isinstance(upload_every_n_samples, int)
+            or upload_every_n_samples < 0
         ):
             raise ValueError(
-                "upload_every_n_samples must be a positive integer or 0"
+                "'upload_every_n_samples' must be a positive integer or 0,"
+                f" but got {upload_every_n_samples!r}"
             )
         if upload_every_n_samples > 0 and not hub_id:
             upload_every_n_samples = 0
 
-        if output_schema is not None:
-            if isinstance(output_schema, str):
-                output_schema = json.loads(output_schema)
-            if not isinstance(output_schema, dict):
-                raise TypeError("'output_schema' must decode to a dictionary.")
-            if options is not None and options.json_schema is not None:
-                raise ValueError(
-                    "Provide 'output_schema' OR set 'options.json_schema', not both."
-                )
-            # Inject the output_schema into options for use in _process_output
-            options = dataclasses.replace(
-                options or ProviderRuntimeOptions(),
-                json_schema=output_schema,
-            )
-
-        schema = options.json_schema if options is not None else None
-        if schema:
-            reserved = _bookkeeping_columns(
-                task_prefix=task_prefix, idx_column=idx_column
-            )
-            taken = sorted(set(schema.get("properties", {})) & reserved)
-            if taken:
-                names = ", ".join(f"'{name}'" for name in taken)
-                raise ValueError(
-                    f"The output schema property names {names} are also the"
-                    " names of columns that the annotator writes for every"
-                    " sample. Pick other names in the schema, or give the run"
-                    " another 'task_prefix' or 'idx_column'."
-                )
+        output_schema, options = self._resolve_output_schema(
+            output_schema=output_schema,
+            options=options,
+            task_prefix=task_prefix,
+            idx_column=idx_column,
+        )
 
         self._ignored_keys = set()
 
@@ -2174,9 +2330,7 @@ class Annotator:
             keep_columns = set()
         elif isinstance(keep_columns, str):
             keep_columns = {keep_columns}
-        elif keep_columns is True:
-            keep_columns = True
-        else:
+        elif keep_columns is not True:
             try:
                 keep_columns = set(keep_columns)
             except TypeError as exc:
@@ -2195,44 +2349,13 @@ class Annotator:
             overwrite=overwrite,
         )
 
-        prepared_path = (
-            Path(prepared_data_path) if prepared_data_path else None
+        prepared_dataset = self._resolve_prepared_dataset(
+            prepared_dataset=prepared_dataset,
+            prepared_data_path=prepared_data_path,
+            hub_id=hub_id,
+            task_prefix=task_prefix,
+            idx_column=idx_column,
         )
-        if prepared_dataset is None and prepared_data_path:
-            try:
-                prepared_dataset = Dataset.load_from_disk(prepared_path)
-            except Exception as exc:
-                self._logger.warning(
-                    f"Failed to load prepared dataset from local path '{prepared_data_path}'."
-                    f" This might be because the file does not exist or is not a valid dataset. Error: {exc}"
-                )
-
-        if prepared_dataset is None and hub_id:
-            try:
-                prepared_dataset = load_dataset(
-                    hub_id,
-                    revision=f"{task_prefix}{PREPARED_DS_BRANCH_SUFF}",
-                    split="train",
-                )
-            except Exception as exc:
-                self._logger.warning(
-                    f"Failed to load prepared dataset from Hub ID '{hub_id}' with revision '{PREPARED_DS_BRANCH_SUFF}'."
-                    f" This might be because the dataset or revision does not exist, or due to network issues. Error: {exc}"
-                )
-
-        if prepared_dataset is None:
-            raise ValueError(
-                "No prepared data found. Provide 'prepared_dataset', "
-                "'prepared_data_path' (locally saved dataset), or 'hub_id' (cloud-saved dataset)."
-                " If needed, first run 'prepare_data' to create the prepared dataset."
-            )
-
-        if idx_column not in prepared_dataset.column_names:
-            raise ValueError(
-                f"Expected index column '{idx_column}' not found in prepared dataset."
-                " This column is required for tracking processed samples and resuming on failure."
-                " Please ensure the prepared dataset includes the index column with name matching 'idx_column' argument."
-            )
 
         samples_per_output_file = _resolve_samples_per_output_file(
             max_samples_per_output_file, num_rows=len(prepared_dataset)
@@ -2281,12 +2404,9 @@ class Annotator:
                 " progress files; they are annotated again ('retry_errors')."
             )
 
-        # Get indices from the local
         skip_idxs = self._get_skip_idxs(
             process_pdout=process_pdout,
             idx_column=idx_column,
-            dataset_split=dataset_split,
-            dataset_config=dataset_config,
         )
         processed_n_samples = len(skip_idxs)
 
@@ -2321,7 +2441,7 @@ class Annotator:
             extract_prompt_prefix(prompt_template) if prompt_template else None
         )
 
-        pfout = self.get_pfout_name(
+        pfout = self._get_pfout_name(
             process_pdout=process_pdout,
             max_samples_per_output_file=samples_per_output_file,
             processed_n_samples=processed_n_samples,
@@ -2385,7 +2505,7 @@ class Annotator:
                 if time_to_upload or file_is_full:
                     fhout.close()
                     remove_empty_jsonl_files(process_pdout)
-                    pfout = self.get_pfout_name(
+                    pfout = self._get_pfout_name(
                         process_pdout=process_pdout,
                         max_samples_per_output_file=samples_per_output_file,
                         processed_n_samples=processed_n_samples,
@@ -2409,7 +2529,7 @@ class Annotator:
                         **{
                             k: v[i]
                             for k, v in batch.items()
-                            if keep_columns is True or k in keep_columns  # type: ignore[operator]
+                            if keep_columns is True or k in keep_columns
                         },
                         **res,
                     }
@@ -2842,7 +2962,6 @@ class Annotator:
         if not keep_idx_column:
             ds = ds.remove_columns([idx_column])
 
-        # Save final dataset to root directory
         ds.save_to_disk(process_pdout.parent)
 
         if hub_id:
@@ -2854,7 +2973,6 @@ class Annotator:
 
         ds.cleanup_cache_files()
 
-        # Clean up the local prepared-data cache
         cached_input_ds = (
             process_pdout.parent / f"{task_prefix}{PREPARED_DS_LOCAL_SUBDIR}"
         )
@@ -2862,35 +2980,23 @@ class Annotator:
             shutil.rmtree(cached_input_ds, ignore_errors=True)
 
         if hub_id:
-            # Clean up the prepared-data branch on the Hub
-            try:
-                delete_branch(
-                    hub_id,
-                    branch=f"{task_prefix}{PREPARED_DS_BRANCH_SUFF}",
-                    repo_type="dataset",
-                )
-            except Exception as exc:
-                self._logger.warning(
-                    "Failed to delete prepared-data branch"
-                    f" '{task_prefix}{PREPARED_DS_BRANCH_SUFF}' on"
-                    f" '{hub_id}': {exc}"
-                )
-
-            # Clean up the progress upload branch used for JSONL progress backup
-            # These branches can take up a lot of space and are easily forgotten,
-            # so best to clean up
-            try:
-                delete_branch(
-                    hub_id,
-                    branch=f"{task_prefix}{PROGRESS_BACKUP_BRANCH_SUFF}",
-                    repo_type="dataset",
-                )
-            except Exception as exc:
-                self._logger.warning(
-                    "Failed to delete progress branch"
-                    f" '{task_prefix}{PROGRESS_BACKUP_BRANCH_SUFF}' on"
-                    f" '{hub_id}': {exc}"
-                )
+            # Both branches are transient, and they grow large enough that
+            # leaving them behind is a real cost to the repository.
+            for suffix, label in (
+                (PREPARED_DS_BRANCH_SUFF, "prepared-data"),
+                (PROGRESS_BACKUP_BRANCH_SUFF, "progress"),
+            ):
+                try:
+                    delete_branch(
+                        hub_id,
+                        branch=f"{task_prefix}{suffix}",
+                        repo_type="dataset",
+                    )
+                except Exception as exc:
+                    self._logger.warning(
+                        f"Failed to delete {label} branch"
+                        f" '{task_prefix}{suffix}' on '{hub_id}': {exc}"
+                    )
 
         self._add_metadata(
             root_pdout=process_pdout.parent,
@@ -2944,40 +3050,16 @@ class Annotator:
         mtd_dir = root_pdout / METADATA_LOCAL_SUBDIR
         mtd_dir.mkdir(exist_ok=True)
 
-        # Add version info
         mtd_dir.joinpath(VERSION_FILE).write_text(
             json.dumps(get_lib_versions(), indent=4, default=str),
             encoding="utf-8",
         )
 
-        # Get counts for finish_reason and valid_fields
-        finish_reason_counts: CounterType[str] = Counter()
-        valid_fields_counts: CounterType[str] = Counter()
-        valid_res = {None: "none", True: "valid", False: "invalid"}
-        error_type_counts: CounterType[str] = Counter()
-
-        # Iterate to avoid OOM
-        for batch in dataset.iter(batch_size=10_000):
-            if f"{task_prefix}finish_reason" in batch:
-                reasons = [
-                    "none" if item is None else item
-                    for item in batch[f"{task_prefix}finish_reason"]
-                ]
-                finish_reason_counts.update(reasons)
-
-            if f"{task_prefix}valid_fields" in batch:
-                valids = [
-                    valid_res.get(item, "unknown")
-                    for item in batch[f"{task_prefix}valid_fields"]
-                ]
-                valid_fields_counts.update(valids)
-
-            if f"{task_prefix}error_type" in batch:
-                error_types = [
-                    "none" if item is None else item
-                    for item in batch[f"{task_prefix}error_type"]
-                ]
-                error_type_counts.update(error_types)
+        (
+            finish_reason_counts,
+            valid_fields_counts,
+            error_type_counts,
+        ) = _count_outcomes(dataset, task_prefix)
 
         run_summary: dict[str, float] | None = None
         if num_rows_annotated and elapsed_seconds and elapsed_seconds > 0:
@@ -3039,7 +3121,7 @@ class Annotator:
                 path_in_repo=METADATA_LOCAL_SUBDIR,
             )
 
-    def get_pfout_name(
+    def _get_pfout_name(
         self,
         *,
         process_pdout: Path,
@@ -3070,8 +3152,8 @@ class Annotator:
     def push_progress_to_hub(
         self,
         dir_path: Path | str,
-        hub_id: str | None = None,
         *,
+        hub_id: str,
         task_prefix: str = "",
         active_path: Path | None = None,
         active_bytes: int = 0,
@@ -3093,21 +3175,13 @@ class Annotator:
 
         Args:
             dir_path: Directory that holds the ``*.jsonl`` progress files.
-            hub_id: Optional Hugging Face dataset ID to upload into.
+            hub_id: Hugging Face dataset ID to upload into.
             task_prefix: String prefix to use for branch naming.
             active_path: The progress file that the writer has open, when
                 the writer is running.
             active_bytes: How many bytes of ``active_path`` were written
                 when the upload was requested.
-
-        Raises:
-            ValueError: If no ``hub_id`` is given.
         """
-        if not hub_id:
-            raise ValueError(
-                "'hub_id' must be set to push data to the HuggingFace Hub"
-            )
-
         pdout = Path(dir_path)
         branch = f"{task_prefix}{PROGRESS_BACKUP_BRANCH_SUFF}"
         create_repo(hub_id, repo_type="dataset", exist_ok=True, private=True)
@@ -3279,7 +3353,7 @@ class VLLMQueueAnnotator(Annotator):
     clients: Sequence[Client[Any]]
     queue_size: int | None = None
     max_workers: int | None = None
-    max_concurrent_batches_per_client: int = 4
+    max_concurrent_batches_per_client: int = DEFAULT_MAX_CONCURRENT_BATCHES
     # Required in the base class but set to init=False here
     # since we derive it from the first client in the pool
     client: Client = field(init=False, repr=False)
@@ -3321,7 +3395,8 @@ class VLLMQueueAnnotator(Annotator):
                     f" '{type(client).__name__}'."
                 )
 
-        # not used here but to satisfy the base class and type-checer
+        # Inherited helpers read `client`, so the pool names its first
+        # member as the one they use.
         self.client = self.clients[0]
         self.max_concurrent_batches_per_client = (
             self._resolve_max_concurrent_batches_per_client(
@@ -3566,11 +3641,7 @@ class VLLMQueueAnnotator(Annotator):
                 self._client_pool.put(client)
 
     def destroy(self) -> None:
-        """Clean up the resources of every client in the pool. Since clients
-        can only be ``VLLMOnlineClient``s, the impact is likely minimal:
-        that class has no meaningful ``destroy`` of its own. It inherits
-        ``OpenAIClient``'s, which only does batch-related cleanup, and vLLM
-        does not support the OpenAI Batch API.
+        """Clean up the resources of every client in the pool.
 
         Every client is destroyed even if some of them raise; the first error
         is re-raised afterwards.
@@ -3848,8 +3919,6 @@ class VLLMQueueAnnotator(Annotator):
         try:
             _fill_queue()
 
-            # start retrieving first results and replacing the completed
-            # jobs with new ones until the work is done
             while pending:
                 done, pending = wait(pending, return_when=FIRST_COMPLETED)
                 for future in done:

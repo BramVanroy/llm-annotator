@@ -134,13 +134,13 @@ class Client(ABC, Generic[T_Options]):
             model: Provider-specific model name.
             max_workers: Maximum number of concurrent worker threads for ``batch_generate``. Clients that support native batching may ignore this parameter.
             on_error: Error behavior for provider failures.
-                - ``"raise"``: raise a
-                  [`ProviderError`][llm_annotator.clients.exceptions.ProviderError]
-                  (default).
-                - ``"ignore"``: return a
+                - ``"warn"``: log a warning and return a
                   [`Response`][llm_annotator.clients.base.Response] with
-                  ``error`` set.
-                - ``"warn"``: log a warning and return an error ``Response``.
+                  ``error`` set (the default).
+                - ``"ignore"``: return that error ``Response`` without the
+                  warning.
+                - ``"raise"``: raise a
+                  [`ProviderError`][llm_annotator.clients.exceptions.ProviderError].
         """
         if on_error not in {"raise", "ignore", "warn"}:
             raise ValueError(

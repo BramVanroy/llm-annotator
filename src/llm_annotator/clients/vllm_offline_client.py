@@ -231,23 +231,21 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
         self._pipeline_loaded = False
 
     def _ensure_pipeline_loaded(self) -> None:
-        """Load the pipeline on first use if it has not been loaded yet."""
-        if not self._pipeline_loaded:
-            self._load_pipeline()
-
-    def _load_pipeline(self) -> None:
-        """Load the vLLM LLM engine and move weights to GPU.
+        """Load the vLLM engine and move the weights to GPU on first use.
 
         Explicit constructor arguments take precedence over any conflicting
-        keys in ``extra_vllm_kwargs``. Called lazily on first use so that
+        keys in ``extra_vllm_kwargs``. The engine is built lazily so that
         ``enable_prefix_caching`` and ``enable_chunked_prefill`` can be
         adjusted (e.g. by
         [`warm_up`][llm_annotator.clients.vllm_offline_client.VLLMOfflineClient.warm_up])
-        before the engine is constructed.
+        before it is constructed.
 
         Raises:
             ImportError: If vLLM is not installed.
         """
+        if self._pipeline_loaded:
+            return
+
         from vllm import LLM
 
         # Start from caller-supplied extras, then overwrite with explicit args

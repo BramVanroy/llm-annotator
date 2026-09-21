@@ -157,59 +157,17 @@ def dummy_annotator() -> Annotator:
     return Annotator(client=DummyClient(), batch_size=2, verbose=True)
 
 
-def test_get_skip_idxs_with_filters(
+def test_load_source_and_selection_validation_errors(
     tmp_path: Path, dummy_annotator: Annotator
 ) -> None:
-    # Verifies skip-index discovery respects dataset_split and dataset_config filters.
-    p = tmp_path / "out"
-    p.mkdir()
-    (p / "out.jsonl").write_text(
-        "\n".join(
-            [
-                json.dumps(
-                    {
-                        "idx": 1,
-                        "dataset_split": "train",
-                        "dataset_config": "en",
-                    }
-                ),
-                json.dumps(
-                    {"idx": 2, "dataset_split": "test", "dataset_config": "en"}
-                ),
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    only_train = dummy_annotator._get_skip_idxs(
-        process_pdout=p,
-        idx_column="idx",
-        dataset_split="train",
-        dataset_config="en",
-    )
-    assert only_train == {1}
-
-
-def test_load_dataset_validation_errors(
-    tmp_path: Path, dummy_annotator: Annotator
-) -> None:
-    # Verifies core _load_dataset argument validation branches.
+    # Verifies the source and selection validation branches.
     ds = Dataset.from_dict({"text": ["a"]})
 
     with pytest.raises(ValueError, match="Provide only one"):
-        dummy_annotator._load_dataset(
-            prompt_template="{text}",
-            idx_column="idx",
-            dataset=ds,
-            dataset_name="x",
-        )
+        dummy_annotator._load_source(dataset=ds, dataset_name="x")
 
     with pytest.raises(ValueError, match="must be provided"):
-        dummy_annotator._load_dataset(
-            prompt_template="{text}",
-            idx_column="idx",
-        )
+        dummy_annotator._load_source()
 
     with pytest.raises(ValueError, match="positive integer"):
         dummy_annotator._load_dataset(
@@ -1114,10 +1072,10 @@ def test_post_annotate_and_pfout_name(
     )
     assert done.column_names == ["response"]
 
-    single = dummy_annotator.get_pfout_name(
+    single = dummy_annotator._get_pfout_name(
         process_pdout=p, max_samples_per_output_file=0, processed_n_samples=0
     )
-    chunked = dummy_annotator.get_pfout_name(
+    chunked = dummy_annotator._get_pfout_name(
         process_pdout=p, max_samples_per_output_file=10, processed_n_samples=25
     )
     assert single.name == "out.jsonl"
@@ -1147,9 +1105,6 @@ def test_push_dir_to_hub_calls_hf_helpers(
         "llm_annotator.annotator.upload_file",
         lambda *args, **kwargs: called.append("record"),
     )
-
-    with pytest.raises(ValueError, match="must be set"):
-        annotator.push_progress_to_hub(tmp_path, hub_id=None)
 
     annotator.push_progress_to_hub(tmp_path, hub_id="me/test")
     assert called == ["repo", "branch", "upload"]
@@ -1480,10 +1435,10 @@ def test_annotator_smoke_with_all_client_types(client_cls: type[Any]) -> None:
     assert all(item["response"] == "ok" for item in out)
 
 
-def test_load_dataset_with_dataset_name_split_selection(
+def test_load_source_with_dataset_name_split_selection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Verifies _load_dataset defaults to the only split when dataset_name is provided.
+    # Verifies _load_source defaults to the only split of a named dataset.
     annotator = Annotator(client=DummyClient(), verbose=False)
 
     monkeypatch.setattr(
@@ -1495,21 +1450,15 @@ def test_load_dataset_with_dataset_name_split_selection(
         lambda *args, **kwargs: Dataset.from_dict({"text": ["a", "b"]}),
     )
 
-    loaded = annotator._load_dataset(
-        prompt_template="Q: {text}",
-        idx_column="idx",
-        dataset_name="dummy/name",
-        prompt_fields=("text",),
-    )
+    loaded = annotator._load_source(dataset_name="dummy/name")
 
     assert len(loaded) == 2
-    assert "messages" in loaded.column_names
 
 
-def test_load_dataset_split_validation_errors(
+def test_load_source_split_validation_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Verifies _load_dataset raises on ambiguous or unknown dataset split names.
+    # Verifies _load_source raises on ambiguous or unknown split names.
     annotator = Annotator(client=DummyClient(), verbose=False)
 
     monkeypatch.setattr(
@@ -1521,20 +1470,11 @@ def test_load_dataset_split_validation_errors(
     )
 
     with pytest.raises(ValueError, match="multiple splits"):
-        annotator._load_dataset(
-            prompt_template="Q: {text}",
-            idx_column="idx",
-            dataset_name="dummy/name",
-            prompt_fields=("text",),
-        )
+        annotator._load_source(dataset_name="dummy/name")
 
     with pytest.raises(ValueError, match="does not have a split"):
-        annotator._load_dataset(
-            prompt_template="Q: {text}",
-            idx_column="idx",
-            dataset_name="dummy/name",
-            dataset_split="validation",
-            prompt_fields=("text",),
+        annotator._load_source(
+            dataset_name="dummy/name", dataset_split="validation"
         )
 
 
@@ -1548,11 +1488,13 @@ def test_load_dataset_from_local_jsonl_data_dir(tmp_path: Path) -> None:
     )
     annotator = Annotator(client=DummyClient(), verbose=False)
 
+    source = annotator._load_source(
+        dataset_name="json", data_dir=str(tmp_path)
+    )
     loaded = annotator._load_dataset(
         prompt_template="Q: {text}",
         idx_column="idx",
-        dataset_name="json",
-        data_dir=str(tmp_path),
+        dataset=source,
         prompt_fields=("text",),
     )
 
@@ -1560,7 +1502,7 @@ def test_load_dataset_from_local_jsonl_data_dir(tmp_path: Path) -> None:
     assert "messages" in loaded.column_names
 
 
-def test_load_dataset_from_local_jsonl_data_files(tmp_path: Path) -> None:
+def test_load_source_from_local_jsonl_data_files(tmp_path: Path) -> None:
     # 'data_files' selects specific files instead of a whole directory.
     (tmp_path / "keep.jsonl").write_text(
         json.dumps({"text": "a"}) + "\n", encoding="utf-8"
@@ -1570,12 +1512,8 @@ def test_load_dataset_from_local_jsonl_data_files(tmp_path: Path) -> None:
     )
     annotator = Annotator(client=DummyClient(), verbose=False)
 
-    loaded = annotator._load_dataset(
-        prompt_template="Q: {text}",
-        idx_column="idx",
-        dataset_name="json",
-        data_files=str(tmp_path / "keep.jsonl"),
-        prompt_fields=("text",),
+    loaded = annotator._load_source(
+        dataset_name="json", data_files=str(tmp_path / "keep.jsonl")
     )
 
     assert len(loaded) == 1
@@ -2487,14 +2425,13 @@ def test_run_annotation_chunks_output_files_without_hub(
         ("auto", 2_000, 1000),
         (250, 500_000, 250),
         (0, 500_000, 0),
-        (None, 500_000, 0),
     ],
 )
 def test_resolve_samples_per_output_file(
     value: Any, num_rows: int, expected: int
 ) -> None:
     # Verifies "auto" scaling above the floor, the floor itself, and that a
-    # fixed int, 0 and None pass through unchanged (None as 0).
+    # fixed int and 0 pass through unchanged.
     assert (
         _resolve_samples_per_output_file(value, num_rows=num_rows) == expected
     )
@@ -2604,7 +2541,12 @@ def test_selection_record_write_read_round_trip(tmp_path: Path) -> None:
     stored = json.loads(
         (tmp_path / "p_selection.json").read_text(encoding="utf-8")
     )
-    assert stored["fingerprint"] == record.fingerprint
+    assert stored == {
+        "max_num_samples": 10,
+        "source_rows": 40,
+        "selected_rows": 10,
+        "components": {"shuffle_seed": "42", "dataset": "abc123"},
+    }
 
 
 @pytest.mark.parametrize(
@@ -3683,31 +3625,6 @@ def test_get_skip_idxs_skips_blank_lines(
     result = dummy_annotator._get_skip_idxs(process_pdout=p, idx_column="idx")
 
     assert result == {1, 2}
-
-
-def test_get_skip_idxs_skips_a_row_with_a_different_dataset_config(
-    tmp_path: Path, dummy_annotator: Annotator
-) -> None:
-    # Verifies a row recorded under another dataset_config is not counted as
-    # done for the config that was asked for.
-    p = tmp_path / "out"
-    p.mkdir()
-    (p / "out.jsonl").write_text(
-        "\n".join(
-            [
-                json.dumps({"idx": 1, "dataset_config": "en"}),
-                json.dumps({"idx": 2, "dataset_config": "fr"}),
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    result = dummy_annotator._get_skip_idxs(
-        process_pdout=p, idx_column="idx", dataset_config="fr"
-    )
-
-    assert result == {2}
 
 
 def test_prepare_data_sort_by_length_orders_prompts(tmp_path: Path) -> None:
