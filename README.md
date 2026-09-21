@@ -151,8 +151,19 @@ explicitly into a preparation step and a generation step. `prepare_data`
 applies prompt templates, optional sorting, and saves the prepared
 artifacts locally and to Hugging Face Hub. `run_annotation` then handles
 only model inference. If generation fails, re-run it with the same
-`output_dir` and `hub_id`:  the prepared data is restored and the samples
-already recorded in the progress files are skipped.
+`output_dir` and `hub_id`: the prepared data is restored from the Hub and
+the samples already recorded in the local progress files are skipped. On a
+machine that has no local progress files (a purged scratch directory, or a
+run that moves to another cluster), restore the progress backup from the
+Hub first:
+
+```sh
+python scripts/restore_progress_from_hub.py --hub-id my-org/imdb-sentiment --output-dir outputs/imdb-sentiment
+```
+
+`run_annotation` refuses to start when the repository has a progress backup
+while the local progress directory is empty, so a forgotten restore cannot
+replace the backup with a run that starts from zero.
 
 A single `hub_id` drives every Hub destination: the prepared data and the
 JSONL progress backup live on temporary branches of that repo, the final

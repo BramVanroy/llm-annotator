@@ -505,6 +505,35 @@ resumes every step, without `--overwrite`: only the new rows are sent to the
 model, in every step. See [Growing a run](growing-a-run.md) for the full
 workflow, what is allowed to change, and what is rejected.
 
+### Resuming on another machine
+
+A step with its own `hub_id` backs its data up to two branches of that
+repository: `<task_prefix>prepared_dataset` and `<task_prefix>progress_backup`.
+A re-run of the identical command restores the prepared data from the first
+branch on its own, and nothing restores the JSONL progress files on the second
+one. A machine without local progress files (a purged scratch directory, or a
+run that moves to another cluster) therefore annotates every row of that step
+again unless the backup is restored first.
+
+A step's directory is `<output_dir>/<NN>-<name>/annotate/` and its prefix is
+`<name>_`, so the step `judge`, the second one of a pipeline whose `output_dir`
+is `outputs/qa`, restores with:
+
+```sh
+python scripts/restore_progress_from_hub.py --hub-id user/my-dataset --output-dir outputs/qa/02-judge/annotate --task-prefix judge_
+```
+
+The selection record (`<task_prefix>selection.json`) travels with the progress
+files and is restored next to them, so the restored run still refuses an edited
+prompt or output schema. Add `--force` to merge the backup into a progress
+directory that already holds files: rows are merged per sample id and a local
+row wins.
+
+A step whose repository has a progress backup while its local progress
+directory is empty does not start at all, and the error names the restore
+command above. Use `--overwrite` for that step to delete the backup branch and
+annotate every row again.
+
 ### Editing a step
 
 Editing a step's `prompt`, `system_prompt`, `sort_by_length` or output schema and re-running the
