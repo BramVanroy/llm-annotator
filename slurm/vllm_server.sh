@@ -103,6 +103,10 @@ for (( attempt = 0; ; attempt += 1 )); do
 
   kill "$SERVER_PID" 2> /dev/null || true
   wait "$SERVER_PID" 2> /dev/null || true
+  # `tee` is a child of this shell rather than of the server, so the bare wait
+  # is what makes sure everything the server wrote is in the file before the
+  # retry decision reads it.
+  wait 2> /dev/null || true
 
   if (( attempt < PORT_RETRIES )) && vllm_port_bind_failed "$SERVE_LOG"; then
     echo "Port ${PORT} was taken before vLLM could bind it;" \
