@@ -153,3 +153,30 @@ client = VLLMOfflineClient(
 with Annotator(client=client) as anno:
     ...
 ```
+
+#### Sizing GPU throughput
+
+`VLLMOfflineClient.batch_generate` hands every conversation it receives to one
+`vllm.LLM.chat` call; there is no client-side batch size. vLLM profiles the model at
+start-up and reserves the KV cache from `gpu_memory_utilization` (vLLM's own default is
+0.92; this client's default is 0.90) before any request runs. Once requests are queued,
+the scheduler decides how many run in one iteration, bounded by `max_num_seqs` (maximum
+sequences per iteration) and `max_num_batched_tokens` (maximum tokens per iteration).
+`max_model_len` is the model's context length (prompt plus output). Raise `max_num_seqs`,
+`max_num_batched_tokens` or `gpu_memory_utilization` for more throughput, and lower
+`max_model_len` to fit a longer run in memory. In a config file these settings live under
+the step's `engine` block.
+
+The annotator's own `batch_size` only decides how many samples go to one `LLM.chat`
+call, and therefore how often results reach the progress files; it does not decide how
+much work runs on the GPU at once.
+
+#### Migration
+
+`VLLMOfflineClient(batch_size=..., min_batch_size=...)` and `init: {batch_size: ...}` in
+a config are gone, together with the decorator `auto_reduce_batch_size` that halved a
+chunk on a CUDA out-of-memory error. Remove those arguments and set the annotator's own
+`batch_size` instead. A config with `min_batch_size` under a `vllm_offline` step's `init`
+fails at load time with "Unknown 'init' keys for provider 'vllm_offline'", and one with
+`batch_size` there with "'init' sets 'batch_size'. A run has one batch size, the client
+block's own 'batch_size', which decides how many samples go to the provider per call."

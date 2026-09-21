@@ -117,7 +117,6 @@ def main(args: list[str] | None = None) -> None:
         model=parsed_args.model,
         max_model_len=parsed_args.max_model_len,
         max_num_seqs=parsed_args.max_num_seqs,
-        batch_size=parsed_args.max_num_seqs,
         speculative_config=parsed_args.speculative_config,
     )
 
