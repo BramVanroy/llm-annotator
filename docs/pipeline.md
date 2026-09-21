@@ -344,8 +344,8 @@ client:
 handle at once, and every batch is `batch_size` samples, so one server holds up
 to `max_concurrent_batches_per_client * batch_size` prompts. A `vllm_online`
 step sends every sample of a batch as its own `/v1/chat/completions` request,
-all at the same time, so that number is also the requests the server has
-in flight and what its `engine.max_num_seqs` has to cover. The whole pool runs
+all at the same time, so that same number is the count of requests the server
+holds, and what its `engine.max_num_seqs` has to cover. The whole pool runs
 `servers * max_concurrent_batches_per_client` batches at once, which is the
 floor for `queue_size`: a smaller queue cannot fill every server, so the config
 is rejected with the minimum spelled out. Leave `queue_size` out to keep four
