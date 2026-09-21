@@ -205,6 +205,13 @@ to that step alone — a step on another provider is left untouched. A file of
 URLs would be read once; the glob is re-read while the run continues, so a
 server whose file appears after the run has started still joins the pool.
 
+A server that ends before the run does (hits `SERVER_TIME`, is preempted, or
+otherwise stops answering `/health`) is dropped from the pool once a batch
+fails on it, and the run continues on the servers that are left. A requeued
+server job that publishes its `.url` file again is picked up the same way a
+late starter is, so servers of one array reaching `SERVER_TIME` at different
+moments do not end the client.
+
 Ports are `VLLM_PORT + array task id`, then probed upward for the first free one.
 Two array tasks can land on the same node (a 4-GPU node fits two
 `tensor_parallel_size: 2` servers), so a fixed port would collide.

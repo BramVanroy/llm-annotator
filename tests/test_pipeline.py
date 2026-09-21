@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from datasets import Dataset
 
+import llm_annotator.pipeline as pipeline_mod
 from llm_annotator.annotator import (
     Annotator,
     SelectionRecord,
@@ -117,6 +118,35 @@ class BrokenJSONClient(EchoClient):
             stop_reason="stop",
             provider=self.provider_type,
             model=self.model,
+        )
+
+
+class FailingTextClient(EchoClient):
+    """EchoClient that errors whenever a prompt contains one of some texts."""
+
+    def __init__(self, *, fail_texts: frozenset[str], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.fail_texts = fail_texts
+
+    def generate(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        options: ProviderRuntimeOptions | None = None,
+        gen_kwargs: dict[str, Any] | None = None,
+    ) -> Response:
+        prompt = messages[-1]["content"]
+        if any(text in prompt for text in self.fail_texts):
+            self.seen_prompts.append(prompt)
+            return Response(
+                text="",
+                error="boom",
+                error_type="ProviderError",
+                provider=self.provider_type,
+                model=self.model,
+            )
+        return super().generate(
+            messages=messages, options=options, gen_kwargs=gen_kwargs
         )
 
 
@@ -513,6 +543,78 @@ def test_overwrite_reruns_every_step(
     assert [c.model for c in built_clients] == ["writer", "judge"]
 
 
+@pytest.fixture
+def failing_clients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[FailingTextClient]:
+    """Route every client construction to a client that fails "document 0"."""
+    created: list[FailingTextClient] = []
+
+    def fake_build_client(self: ClientConfig, root: Path) -> Client[Any]:
+        _ = root
+        client = FailingTextClient(
+            fail_texts=frozenset({"document 0"}),
+            model=self.model or "echo",
+            **self.init,
+        )
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(ClientConfig, "build_client", fake_build_client)
+    return created
+
+
+def test_retry_errors_false_leaves_errored_rows_final(
+    tmp_path: Path, failing_clients: list[FailingTextClient]
+) -> None:
+    first = run_pipeline(two_step_config(tmp_path))
+    failing_clients.clear()
+
+    second = run_pipeline(two_step_config(tmp_path))
+
+    assert failing_clients == []
+    assert second.to_dict() == first.to_dict()
+    assert first["write_error"].count("boom") == 1
+
+
+def test_retry_errors_true_redoes_the_same_rows_in_every_selected_step(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    failing_clients: list[FailingTextClient],
+) -> None:
+    first = run_pipeline(two_step_config(tmp_path))
+
+    # Only row 0 ("document 0") errors in the first step, which cascades
+    # into the second step's prompt for the same row (it still names
+    # "document 0", even though "question_v1" came back as None).
+    assert first["write_error"].count("boom") == 1
+    assert first["rate_error"].count("boom") == 1
+
+    retried_clients: list[EchoClient] = []
+
+    def fake_healthy_build_client(
+        self: ClientConfig, root: Path
+    ) -> Client[Any]:
+        _ = root
+        client = EchoClient(model=self.model or "echo", **self.init)
+        retried_clients.append(client)
+        return client
+
+    monkeypatch.setattr(
+        ClientConfig, "build_client", fake_healthy_build_client
+    )
+
+    final = run_pipeline(two_step_config(tmp_path), retry_errors=True)
+
+    write_retry, rate_retry = retried_clients
+    assert write_retry.seen_prompts == ["Ask about: document 0"]
+    assert rate_retry.seen_prompts == [
+        "Rate question::Ask about: document 0 for document 0"
+    ]
+    assert all(err is None for err in final["write_error"])
+    assert all(err is None for err in final["rate_error"])
+
+
 def test_step_snapshots_and_final_dataset_are_written(
     tmp_path: Path, built_clients: list[EchoClient]
 ) -> None:
@@ -830,6 +932,38 @@ def test_cli_max_num_samples_grows_a_finished_run(
     assert len(dataset) == 4
     # Two rows from the pilot, four rows minus those two from the growth.
     assert sum(len(client.seen_prompts) for client in built_clients) == 4
+
+
+@pytest.mark.parametrize(
+    ("cli_args", "expected"),
+    [
+        ([], False),
+        (["--retry-errors"], True),
+        (
+            ["--retry-errors", "ConnectError", "APITimeoutError"],
+            ["ConnectError", "APITimeoutError"],
+        ),
+    ],
+)
+def test_cli_retry_errors_flag_maps_to_run_pipeline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cli_args: list[str],
+    expected: bool | list[str],
+) -> None:
+    config_path = _write_cli_config(tmp_path, num_rows=1)
+    seen: dict[str, Any] = {}
+
+    def fake_run_pipeline(config: PipelineConfig, **kwargs: Any) -> Dataset:
+        _ = config
+        seen.update(kwargs)
+        return Dataset.from_dict({})
+
+    monkeypatch.setattr(pipeline_mod, "run_pipeline", fake_run_pipeline)
+
+    main([str(config_path), *cli_args])
+
+    assert seen["retry_errors"] == expected
 
 
 def test_cli_set_reaches_any_key(

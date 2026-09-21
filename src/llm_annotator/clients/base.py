@@ -274,6 +274,22 @@ class Client(ABC, Generic[T_Options]):
             options: Optional generation options used to derive the warm-up params.
         """
 
+    def is_healthy(self, timeout: float = 5.0) -> bool:
+        """Check whether the backend can take requests (``True`` by default).
+
+        Override in clients whose backend can be probed.
+        [`VLLMQueueAnnotator`][llm_annotator.annotator.VLLMQueueAnnotator]
+        calls this after a batch failed entirely, and removes the server from
+        its pool when the answer is ``False``.
+
+        Args:
+            timeout: Maximum number of seconds to wait for an answer.
+
+        Returns:
+            Whether the backend answers.
+        """
+        return True
+
     def destroy(self) -> None:
         """Clean up any resources used by the client."""
 

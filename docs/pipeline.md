@@ -325,6 +325,15 @@ numbers, so a pool can be sized before a single GPU is allocated.
 `url_glob` is re-read while the run continues, so a server whose file
 appears later is admitted into the pool and takes over part of the work.
 
+When a batch fails entirely on one server, that server's `/health` endpoint
+is probed. A server that does not answer is removed from the pool, and its
+batch is sent to another server (no errored rows are written for it). A batch
+that fails entirely on a healthy server is recorded as errors. Every
+configured URL that is not in the pool is probed once a second, so a server
+that recovers, or a requeued SLURM server job that publishes its `.url` file
+again, joins the run the same way a late starter does. The run stops with
+`TooManyConsecutiveFailedBatchesError` once no server is left.
+
 When the servers do not exist yet and something has to start them, say how many
 you want in `pool` and what each one is in `engine`. Both blocks are reported
 to a job submitter rather than acted on by the library, apart from
@@ -557,7 +566,8 @@ a template containing the `{prompt}` placeholder:
 llm-annotate [-h] [--output-dir OUTPUT_DIR] [--hub-id HUB_ID]
              [--log-level LOG_LEVEL] [--overwrite]
              [--max-num-samples MAX_NUM_SAMPLES] [--shuffle-seed SHUFFLE_SEED]
-             [--set KEY=VALUE] [--steps STEPS] [--hosts-file HOSTS_FILE]
+             [--set KEY=VALUE] [--steps STEPS]
+             [--retry-errors [ERROR_TYPE ...]] [--hosts-file HOSTS_FILE]
              [--url-glob URL_GLOB] [--serve-args STEP] [--describe-steps]
              config
 ```
@@ -567,6 +577,16 @@ config keys, which is handy for pointing one config at a scratch directory or
 resuming with a different log level without editing the file. `--steps`,
 `--hosts-file`, `--url-glob`, `--serve-args` and `--describe-steps` are
 described under [Running one step at a time](#running-one-step-at-a-time).
+
+`--retry-errors` without a value annotates every errored row of the selected
+steps again. With one or more `ERROR_TYPE` values only the rows with that
+`error_type` are redone, as in
+`llm-annotate cfg.yaml --retry-errors ConnectError APITimeoutError`. A row that
+is redone in one step is also redone in every selected step after it, because
+those steps read what it produces. Finished steps that are affected are
+resumed: every other row keeps its result. See
+[Errors and retries](index.md#errors-and-retries) for when a row counts as
+errored.
 
 ### Overriding config keys
 

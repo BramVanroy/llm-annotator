@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import types
 from dataclasses import replace
 from pathlib import Path
@@ -425,6 +426,326 @@ def test_run_annotation_consecutive_failure_count_resets_on_success(
     )
 
     assert len(out) == 7
+
+
+def _write_progress_rows(out_dir: Path, rows: list[dict[str, Any]]) -> None:
+    progress_dir = out_dir / "progress_backup"
+    progress_dir.mkdir(parents=True, exist_ok=True)
+    (progress_dir / "progress.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+
+@pytest.mark.parametrize(
+    ("retry_errors", "expected_retried_texts"),
+    [
+        (False, set()),
+        (True, {"Q: a", "Q: b"}),
+        (["TypeA"], {"Q: a"}),
+    ],
+)
+def test_run_annotation_retry_errors_selects_which_rows_are_redone(
+    tmp_path: Path,
+    retry_errors: bool | list[str],
+    expected_retried_texts: set[str],
+) -> None:
+    # Verifies retry_errors=False leaves errored rows final (and never calls
+    # the client for them), True redoes every errored row, and a list of
+    # error types redoes only the rows of those types.
+    out_dir = tmp_path / "out"
+    _write_progress_rows(
+        out_dir,
+        [
+            {
+                "idx": 0,
+                "response": None,
+                "error": "boom",
+                "error_type": "TypeA",
+            },
+            {
+                "idx": 1,
+                "response": None,
+                "error": "boom",
+                "error_type": "TypeB",
+            },
+            {"idx": 2, "response": "r2", "error": None, "error_type": None},
+        ],
+    )
+
+    client = TrackingClient()
+    annotator = Annotator(client=client, batch_size=2, verbose=False)
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": [0, 1, 2],
+            "text": ["a", "b", "c"],
+            "messages": [
+                [{"role": "user", "content": f"Q: {t}"}] for t in "abc"
+            ],
+        }
+    )
+
+    out = annotator.run_annotation(
+        output_dir=out_dir,
+        prompt_template="Q: {text}",
+        prepared_dataset=prepared_ds,
+        keep_idx_column=True,
+        retry_errors=retry_errors,
+    )
+
+    assert sorted(out["idx"]) == [0, 1, 2]
+    assert set(client.seen_prompts) == expected_retried_texts
+
+
+def test_run_annotation_drops_held_back_rows_when_the_run_aborts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Verifies the rows of batches that failed entirely are not written when
+    # the circuit breaker raises, so a resumed run annotates them again.
+    out_dir = tmp_path / "out"
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": list(range(4)),
+            "text": [str(i) for i in range(4)],
+            "messages": [
+                [{"role": "user", "content": f"Q: {i}"}] for i in range(4)
+            ],
+        }
+    )
+
+    def _always_failing_batch(
+        self: Annotator, **kwargs: Any
+    ) -> list[dict[str, Any]]:
+        batch = kwargs["batch"]
+        size = len(batch["idx"])
+        return [
+            {
+                "response": None,
+                "finish_reason": None,
+                "num_tokens": None,
+                "error": "boom",
+                "error_type": "ProviderError",
+            }
+            for _ in range(size)
+        ]
+
+    monkeypatch.setattr(Annotator, "_process_batch", _always_failing_batch)
+    annotator = Annotator(
+        client=DummyClient(on_error="ignore"), batch_size=1, verbose=False
+    )
+
+    with pytest.raises(TooManyConsecutiveFailedBatchesError):
+        annotator.run_annotation(
+            output_dir=out_dir,
+            prompt_template="Q: {text}",
+            prepared_dataset=prepared_ds,
+            num_retries_invalid=0,
+            max_consecutive_failed_batches=2,
+        )
+
+    progress_dir = out_dir / "progress_backup"
+    written_rows = [
+        json.loads(line)
+        for pfin in progress_dir.glob("*.jsonl")
+        for line in pfin.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert written_rows == []
+
+    monkeypatch.undo()
+    healthy_annotator = Annotator(
+        client=DummyClient(), batch_size=1, verbose=False
+    )
+    result = healthy_annotator.run_annotation(
+        output_dir=out_dir,
+        prompt_template="Q: {text}",
+        prepared_dataset=prepared_ds,
+        keep_idx_column=True,
+    )
+
+    assert sorted(result["idx"]) == [0, 1, 2, 3]
+    assert all(error is None for error in result["error"])
+
+
+def test_run_annotation_writes_held_back_rows_once_a_later_batch_succeeds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Verifies a held-back batch's rows are not lost: they are written once a
+    # later batch succeeds, not only dropped on abort.
+    calls = {"n": 0}
+
+    def _first_batch_fails(
+        self: Annotator, **kwargs: Any
+    ) -> list[dict[str, Any]]:
+        calls["n"] += 1
+        batch = kwargs["batch"]
+        size = len(batch["idx"])
+        if calls["n"] == 1:
+            return [
+                {
+                    "response": None,
+                    "finish_reason": None,
+                    "num_tokens": None,
+                    "error": "boom",
+                    "error_type": "ProviderError",
+                }
+                for _ in range(size)
+            ]
+        return [
+            {
+                "response": "ok",
+                "finish_reason": "stop",
+                "num_tokens": 1,
+                "error": None,
+                "error_type": None,
+            }
+            for _ in range(size)
+        ]
+
+    monkeypatch.setattr(Annotator, "_process_batch", _first_batch_fails)
+    annotator = Annotator(
+        client=DummyClient(on_error="ignore"), batch_size=1, verbose=False
+    )
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": [0, 1],
+            "text": ["a", "b"],
+            "messages": [
+                [{"role": "user", "content": "Q: a"}],
+                [{"role": "user", "content": "Q: b"}],
+            ],
+        }
+    )
+
+    result = annotator.run_annotation(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        prepared_dataset=prepared_ds,
+        num_retries_invalid=0,
+        max_consecutive_failed_batches=5,
+        keep_idx_column=True,
+    )
+
+    assert sorted(result["idx"]) == [0, 1]
+    errors = dict(zip(result["idx"], result["error"], strict=True))
+    assert errors == {0: "boom", 1: None}
+
+
+def test_run_annotation_writes_rows_right_away_when_hold_back_is_disabled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Verifies max_consecutive_failed_batches=0 writes a failed batch's rows
+    # immediately instead of holding them back for a later success.
+    def _always_failing_batch(
+        self: Annotator, **kwargs: Any
+    ) -> list[dict[str, Any]]:
+        batch = kwargs["batch"]
+        size = len(batch["idx"])
+        return [
+            {
+                "response": None,
+                "finish_reason": None,
+                "num_tokens": None,
+                "error": "boom",
+                "error_type": "ProviderError",
+            }
+            for _ in range(size)
+        ]
+
+    monkeypatch.setattr(Annotator, "_process_batch", _always_failing_batch)
+    annotator = Annotator(
+        client=DummyClient(on_error="ignore"), batch_size=1, verbose=False
+    )
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": [0],
+            "text": ["a"],
+            "messages": [[{"role": "user", "content": "Q: a"}]],
+        }
+    )
+
+    result = annotator.run_annotation(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        prepared_dataset=prepared_ds,
+        num_retries_invalid=0,
+        max_consecutive_failed_batches=0,
+        keep_idx_column=True,
+    )
+
+    assert result["idx"] == [0]
+    assert result["error"] == ["boom"]
+
+
+def test_run_annotation_summary_warns_with_error_counts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Verifies the end-of-run summary is a WARNING naming the error type
+    # when the run produced errors.
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": [0, 1],
+            "text": ["a", "b"],
+            "messages": [
+                [{"role": "user", "content": "Q: a"}],
+                [{"role": "user", "content": "Q: b"}],
+            ],
+        }
+    )
+
+    def _first_sample_errors(
+        self: Annotator, **kwargs: Any
+    ) -> list[dict[str, Any]]:
+        batch = kwargs["batch"]
+        return [
+            {
+                "response": None if idx == 0 else "ok",
+                "finish_reason": None if idx == 0 else "stop",
+                "num_tokens": None if idx == 0 else 1,
+                "error": "boom" if idx == 0 else None,
+                "error_type": "ProviderError" if idx == 0 else None,
+            }
+            for idx in batch["idx"]
+        ]
+
+    monkeypatch.setattr(Annotator, "_process_batch", _first_sample_errors)
+    annotator = Annotator(client=DummyClient(), batch_size=2, verbose=False)
+
+    with caplog.at_level(logging.INFO, logger="llm_annotator.annotator"):
+        annotator.run_annotation(
+            output_dir=tmp_path / "out",
+            prompt_template="Q: {text}",
+            prepared_dataset=prepared_ds,
+            num_retries_invalid=0,
+        )
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("ProviderError" in r.message for r in warnings)
+    assert any("retry_errors" in r.message for r in warnings)
+
+
+def test_run_annotation_summary_is_info_for_a_clean_run(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Verifies a run without errors logs the summary at INFO, not WARNING.
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": [0],
+            "text": ["a"],
+            "messages": [[{"role": "user", "content": "Q: a"}]],
+        }
+    )
+    annotator = Annotator(client=DummyClient(), batch_size=2, verbose=False)
+
+    with caplog.at_level(logging.INFO, logger="llm_annotator.annotator"):
+        annotator.run_annotation(
+            output_dir=tmp_path / "out",
+            prompt_template="Q: {text}",
+            prepared_dataset=prepared_ds,
+        )
+
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
 
 
 def test_run_annotation_guard_rails(tmp_path: Path) -> None:

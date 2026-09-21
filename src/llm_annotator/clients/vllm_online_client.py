@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import secrets
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
@@ -22,6 +24,29 @@ from llm_annotator.clients.base import (
 )
 from llm_annotator.clients.exceptions import ConfigurationError, ProviderError
 from llm_annotator.clients.openai_client import OpenAIClient
+from llm_annotator.logging_utils import get_logger
+
+
+LOGGER = get_logger("clients.vllm_online")
+
+
+def server_is_healthy(base_url: str, timeout: float) -> bool:
+    """Check whether a vLLM server answers its ``/health`` endpoint.
+
+    Args:
+        base_url: Base URL of the server, with or without the ``/v1`` suffix.
+        timeout: Maximum number of seconds to wait for an answer.
+
+    Returns:
+        Whether the server answers with status 200.
+    """
+    health = f"{base_url.removesuffix('/v1').rstrip('/')}/health"
+    try:
+        with urllib.request.urlopen(health, timeout=timeout) as response:
+            return int(response.status) == 200
+    except (urllib.error.URLError, OSError) as exc:
+        LOGGER.debug(f"vLLM server at '{base_url}' does not answer: {exc}")
+        return False
 
 
 @dataclass(slots=True, frozen=True)
@@ -216,10 +241,22 @@ class VLLMOnlineClient(OpenAIClient[VLLMOnlineRuntimeOptions]):
             base_url=base_url,
             on_error=on_error,
         )
+        self.base_url = base_url
 
         if model is None:
             models = self._client.models.list()
             self.model = models.data[0].id
+
+    def is_healthy(self, timeout: float = 5.0) -> bool:
+        """Check whether the server answers its ``/health`` endpoint.
+
+        Args:
+            timeout: Maximum number of seconds to wait for an answer.
+
+        Returns:
+            Whether the server answers with status 200.
+        """
+        return server_is_healthy(self.base_url, timeout)
 
     def generate(
         self,
@@ -417,4 +454,5 @@ __all__ = [
     "VLLMBaseRuntimeOptions",
     "VLLMOnlineClient",
     "VLLMOnlineRuntimeOptions",
+    "server_is_healthy",
 ]
