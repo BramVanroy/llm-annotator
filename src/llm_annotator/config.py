@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 import glob
+import inspect
 import json
 import threading
 import time
@@ -690,7 +691,58 @@ class ClientConfig(_StrictBase):
                 f"Unknown 'options' for provider '{self.provider}':"
                 f" {unknown}. Valid options are {sorted(valid)}."
             )
+
+        self._check_init_keys()
         return self
+
+    def _check_init_keys(self) -> None:
+        """Compare ``init`` against the constructor of the provider's client.
+
+        The client classes import their provider SDK inside their methods, so
+        the signature is available without ``openai``, ``anthropic`` or
+        ``vllm`` being installed.
+
+        Raises:
+            ValueError: If ``init`` names something the constructor does not
+                take, or a value that the client block states elsewhere.
+        """
+        if "model" in self.init:
+            raise ValueError(
+                "'init' sets 'model', which the client block names itself."
+                " Write it as 'model' next to 'provider'."
+            )
+        if self.is_pool() and "base_url" in self.init:
+            raise ValueError(
+                "'init' sets 'base_url', but each server of a pool gets its"
+                " own. The pool's servers are named by 'base_urls',"
+                " 'hosts_file' or 'url_glob'."
+            )
+
+        try:
+            client_cls = _client_class(self.provider)
+        except ImportError:
+            # Without the client class there is no signature to compare
+            # against; the constructor reports the key when the step runs.
+            return
+
+        parameters = inspect.signature(client_cls.__init__).parameters
+        if any(p.kind is p.VAR_KEYWORD for p in parameters.values()):
+            return
+        accepted = {
+            name
+            for name, parameter in parameters.items()
+            # 'model' has its own key in the client block, so it is not
+            # offered here as an 'init' key.
+            if name not in {"self", "model"}
+            and parameter.kind is not parameter.VAR_POSITIONAL
+        }
+        unknown_init = sorted(set(self.init) - accepted)
+        if unknown_init:
+            raise ValueError(
+                f"Unknown 'init' keys for provider '{self.provider}':"
+                f" {unknown_init}. {client_cls.__name__} takes"
+                f" {sorted(accepted)}."
+            )
 
     def _check_pool_concurrency(self) -> None:
         """Reject pool concurrency keys that are misplaced or too small.

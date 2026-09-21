@@ -173,6 +173,50 @@ def test_unknown_option_names_the_valid_ones() -> None:
     assert "temperature" in message
 
 
+def test_unknown_init_key_names_the_accepted_ones() -> None:
+    with pytest.raises(ValueError) as excinfo:
+        ClientConfig(provider="openai", model="m", init={"on_eror": "warn"})
+    message = str(excinfo.value)
+
+    assert "on_eror" in message
+    assert "openai" in message
+    assert "'on_error'" in message.replace('"', "'")
+
+
+@pytest.mark.parametrize(
+    "provider, init",
+    [
+        ("openai", {"api_key": "k", "base_url": "u", "max_workers": 2}),
+        ("claude", {"api_key": "k", "on_error": "raise"}),
+        ("vllm_online", {"base_url": "http://a:8000/v1"}),
+        ("vllm_offline", {"language_model_only": False, "batch_size": 4}),
+    ],
+)
+def test_init_accepts_constructor_arguments(
+    provider: str, init: dict[str, Any]
+) -> None:
+    client = ClientConfig.model_validate(
+        {"provider": provider, "model": "m", "init": init}
+    )
+
+    assert client.init == init
+
+
+def test_init_rejects_the_model_key() -> None:
+    with pytest.raises(ValueError, match="'init' sets 'model'"):
+        ClientConfig(provider="openai", model="m", init={"model": "other"})
+
+
+def test_init_rejects_a_base_url_for_a_pool() -> None:
+    with pytest.raises(ValueError, match="each server of a pool gets its own"):
+        ClientConfig(
+            provider="vllm_online",
+            model="m",
+            base_urls=["http://a:8000/v1"],
+            init={"base_url": "http://b:8000/v1"},
+        )
+
+
 def test_build_options_uses_provider_dataclass() -> None:
     options = ClientConfig(
         provider="claude", model="m", options={"max_completion_tokens": 32}
