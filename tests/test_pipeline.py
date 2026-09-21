@@ -1740,3 +1740,58 @@ def test_pipeline_step_outside_the_selection_must_match_too(
 
     with pytest.raises(ValueError, match="finished with other settings"):
         run_pipeline(edited, selected=["three"])
+
+
+def _edited_write_config(tmp_path: Path, **overrides: Any) -> PipelineConfig:
+    """Build the two-step pipeline with another prompt in its first step."""
+    config = two_step_config(tmp_path, **overrides)
+    config.steps[0].prompt = "Ask something else about: {text}"
+    return config
+
+
+def test_pipeline_refuses_a_step_whose_input_was_annotated_again(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    run_pipeline(two_step_config(tmp_path))
+
+    # The way out of an edited prompt: 'write' is annotated again from
+    # scratch, so the questions that 'rate' judged no longer exist.
+    run_pipeline(_edited_write_config(tmp_path, overwrite=True), ["write"])
+    built_clients.clear()
+
+    with pytest.raises(
+        ValueError, match="annotated again from scratch"
+    ) as exc:
+        run_pipeline(_edited_write_config(tmp_path))
+
+    assert "--steps rate --overwrite" in str(exc.value)
+    assert built_clients == []
+
+    # That command annotates 'rate' against the new questions, and leaves
+    # 'write' alone.
+    result = run_pipeline(
+        _edited_write_config(tmp_path, overwrite=True), ["rate"]
+    )
+    assert [client.model for client in built_clients] == ["judge"]
+    assert all(
+        "Ask something else about" in prompt
+        for prompt in built_clients[0].seen_prompts
+    )
+    assert len(result) == 4
+
+
+def test_pipeline_growth_keeps_a_later_step_on_its_rows(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    # A step that resumes (rather than starting over) leaves the steps after
+    # it on the rows they already annotated.
+    big_source = source_dataset(tmp_path / "growth", num_rows=40)
+    run_pipeline(growth_config(tmp_path, big_source, max_num_samples=10))
+    built_clients.clear()
+
+    grown = run_pipeline(
+        growth_config(tmp_path, big_source, max_num_samples=20)
+    )
+
+    assert len(grown) == 20
+    assert [len(client.seen_prompts) for client in built_clients] == [10, 10]

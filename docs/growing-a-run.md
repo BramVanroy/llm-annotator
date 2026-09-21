@@ -95,12 +95,15 @@ the run is rejected (see below):
 The message names every setting that changed, for example:
 
 ```text
-The finished rows in 'outputs/run/progress_backup' were annotated with other settings than the
-ones given now: the prompt template changed. Restore the old value(s), use a new 'output_dir', or
-overwrite the run ('overwrite=True', '--overwrite' on the command line) to discard the finished
-rows and annotate every sample again. A run can only grow through a higher 'max_num_samples' with
-the same settings, or through rows appended to a source that is not shuffled.
+The finished rows in 'outputs/run/progress_backup' cannot be reused: the prompt template changed.
+Restore the old value(s), use a new 'output_dir', or overwrite the run ('overwrite=True') to
+discard the finished rows and annotate every sample again. A run can only grow through a higher
+'max_num_samples' with the same settings, or through rows appended to a source that is not
+shuffled.
 ```
+
+A pipeline names the command instead of `overwrite=True`, see
+[Editing a step](pipeline.md#editing-a-step).
 
 Three ways out: restore the old value, use a new `output_dir` for the different run, or pass
 `--overwrite` (`overwrite: true`) to discard the finished work and start over. `--overwrite`
@@ -126,8 +129,10 @@ llm-annotate pilot.yaml
 The rows that `sentiment` already finished hold answers to the old prompt, so the run stops with the
 `ValueError` above. Pick one of the three ways out: put the old prompt back and keep those answers,
 point `output_dir` somewhere else to keep both versions on disk, or discard the old answers with
-`--overwrite` (in a pipeline, `llm-annotate pilot.yaml --steps sentiment --overwrite` redoes that
-one step and leaves the steps before it alone).
+`--overwrite`. In a pipeline the error names the command itself, here
+`llm-annotate pilot.yaml --steps sentiment confidence --overwrite`: the edited step and the steps
+that read it are annotated again, and the steps before it keep their results. See
+[Editing a step](pipeline.md#editing-a-step).
 
 An edit made before any row has been annotated has nothing to conflict with: the prepared data is
 rebuilt from the new prompt and the run continues, with an INFO line that names what changed.

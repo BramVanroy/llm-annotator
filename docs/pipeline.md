@@ -467,23 +467,43 @@ resumes every step, without `--overwrite`: only the new rows are sent to the
 model, in every step. See [Growing a run](growing-a-run.md) for the full
 workflow, what is allowed to change, and what is rejected.
 
+### Editing a step
+
 Editing a step's `prompt`, `system_prompt`, `sort_by_length` or output schema and re-running the
-same config does not silently mix old and new answers. The step whose setting changed is treated
-as unfinished, and so is every later step, since it reads what that step produced:
+same config does not mix old and new answers. The step whose setting changed is not loaded from its
+snapshot:
 
 * With no progress files for that step yet, it is rebuilt with the new setting.
-* With finished rows already on disk, the run stops with a `ValueError` naming what changed,
-  before anything is deleted. Select the affected step (and, if it is not the last one, the steps
-  after it, since a selection has to be contiguous) and pass `--overwrite` to redo only those:
+* With finished rows already on disk, the run stops with a `ValueError` that names what changed and
+  the command that resolves it, before anything is deleted:
+
+  ```text
+  The finished rows in 'outputs/qa/02-judge/annotate/judge_progress_backup' cannot be reused: the
+  prompt template changed. Restore the old value(s), use a new 'output_dir', or re-run with
+  '--steps judge summarise --overwrite' to annotate that step and the ones that read it again from
+  scratch. A run can only grow through a higher 'max_num_samples' with the same settings, or
+  through rows appended to a source that is not shuffled.
+  ```
 
   ```bash
-  llm-annotate cfg.yaml --steps judge --overwrite
   llm-annotate cfg.yaml --steps judge summarise --overwrite
   ```
 
-  Steps outside the selection keep their finished results. See [Editing a prompt
-  mid-run](growing-a-run.md#editing-a-prompt-mid-run) for the full error message and a worked
-  example.
+  The command names the edited step and every step after it. A step that is annotated again from
+  scratch produces a new answer for every row, and the steps that read it hold judgements of the
+  old ones. Steps before it keep their finished results and are not sent to the model again.
+
+The pipeline enforces that. Each run of a step gets a token, which the steps after it record as the
+version of the input they read. A step that starts with an empty progress directory (after
+`--overwrite`, or after its prepared data was rebuilt) gets a new token, so the step that reads it
+stops with:
+
+```text
+... cannot be reused: step 'judge' was annotated again from scratch. ...
+```
+
+A step keeps its token while it resumes, so a higher `dataset.max_num_samples`, appended rows and
+`--retry-errors` leave the steps after it on the rows they already annotated, exactly as before.
 
 A step outside the selection that no longer matches its own record raises a different error: `Step
 'x' has finished with other settings than the ones that are requested now, so there is no input for

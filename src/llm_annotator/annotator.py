@@ -194,8 +194,16 @@ _COMPONENT_CHANGES: dict[str, str] = {
     "preprocess_fn": "'preprocess_fn' changed",
     "dataset": "the source dataset changed",
     "output_schema": "the output schema changed",
+    "upstream": "an earlier step was annotated again from scratch",
 }
 """What each recorded component is called when it differs from the record."""
+
+_REUSE_REMEDY = (
+    "Restore the old value(s), use a new 'output_dir', or overwrite the run"
+    " ('overwrite=True') to discard the finished rows and annotate every"
+    " sample again."
+)
+"""What to do about finished rows that the request no longer matches."""
 
 
 def _callable_component(func: Callable | None, *, setting: str) -> str:
@@ -312,24 +320,25 @@ def _schema_component(output_schema: dict[str, Any] | None) -> str:
     return get_hash(json.dumps(output_schema, sort_keys=True, default=repr))
 
 
-def _reuse_error(progress_dir: Path, causes: list[str]) -> ValueError:
+def _reuse_error(
+    progress_dir: Path, causes: list[str], remedy: str = _REUSE_REMEDY
+) -> ValueError:
     """Build the error for finished rows that the request no longer matches.
 
     Args:
         progress_dir: Directory that holds the progress files.
         causes: One phrase per setting that differs from the record.
+        remedy: What the caller can do about it. A pipeline names the command
+            that redoes the affected steps instead.
 
     Returns:
         The error to raise.
     """
     return ValueError(
-        f"The finished rows in '{progress_dir}' were annotated with other"
-        f" settings than the ones given now: {', '.join(causes)}. Restore"
-        " the old value(s), use a new 'output_dir', or overwrite the run"
-        " ('overwrite=True', '--overwrite' on the command line) to discard"
-        " the finished rows and annotate every sample again. A run can only"
-        " grow through a higher 'max_num_samples' with the same settings, or"
-        " through rows appended to a source that is not shuffled."
+        f"The finished rows in '{progress_dir}' cannot be reused:"
+        f" {', '.join(causes)}. {remedy} A run can only grow through a higher"
+        " 'max_num_samples' with the same settings, or through rows appended"
+        " to a source that is not shuffled."
     )
 
 
@@ -1395,12 +1404,17 @@ class Annotator:
         previous = SelectionRecord.read(pdout, task_prefix)
         changed: list[str] = []
         if previous is not None:
-            # The output schema has no effect on the prepared data and is
-            # recorded by `run_annotation`, so it is carried over untouched.
-            if "output_schema" in previous.components:
-                components["output_schema"] = previous.components[
-                    "output_schema"
-                ]
+            # A recorded component that this method does not produce belongs
+            # to another layer (the output schema to `run_annotation`, the
+            # step bookkeeping to the pipeline), so a rebuild keeps it.
+            components = {
+                **{
+                    name: value
+                    for name, value in previous.components.items()
+                    if name not in components
+                },
+                **components,
+            }
             self._warn_unknown_components(previous, components, pdout)
             changed = previous.changed_components(components)
             causes = [_COMPONENT_CHANGES[name] for name in changed]
