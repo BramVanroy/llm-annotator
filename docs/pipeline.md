@@ -101,6 +101,11 @@ Each step writes several kinds of column:
 * **Schema properties.** Every top-level property of `output_schema` becomes a
   column under its own name. A schema with `question` and `answer` produces
   exactly those two columns, which is what the next step's prompt refers to.
+  A property that a response leaves out is `None` on that row, and a key that
+  the model returns without the schema declaring it is dropped (reported once
+  per run), so every row of a step has the same columns. A property may not be
+  called `idx` or carry the name of a bookkeeping column of the same step; such
+  a schema is refused before the step's first request.
 * **Bookkeeping columns**, namespaced by the step's `task_prefix` (which
   defaults to `<name>_`): `{prefix}response`, `{prefix}finish_reason`,
   `{prefix}num_tokens`, `{prefix}error`, `{prefix}error_type`,

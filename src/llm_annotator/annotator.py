@@ -78,11 +78,33 @@ LOGGER = get_logger("annotator")
 # (eg on SLURM, no need to use 128 cores for a small dataset)
 DEFAULT_CPU_COUNT = min(8, max(1, (cpu_count() or 1) - 1))
 
+BOOKKEEPING_SUFFIXES = (
+    "error",
+    "error_type",
+    "finish_reason",
+    "messages",
+    "num_tokens",
+    "reasoning",
+    "response",
+    "valid",
+    "valid_fields",
+)
+"""Column names, after the task prefix, that the annotator writes itself."""
+
 PREPARED_DS_BRANCH_SUFF = "prepared_dataset"
 PREPARED_DS_LOCAL_SUBDIR = "prepared_dataset"
 PROGRESS_BACKUP_BRANCH_SUFF = "progress_backup"
 PROGRESS_DS_LOCAL_SUBDIR = "progress_backup"
 SELECTION_RECORD_FILE = "selection.json"
+METADATA_LOCAL_SUBDIR = "metadata"
+METADATA_FILE_SUFF = "annotation_metadata.json"
+VERSION_FILE = "_version.json"
+
+# What `Dataset.save_to_disk` writes for the final dataset in the root of the
+# output directory. Named here so that a run can remove its own result without
+# clearing the directory, which holds the artifacts of the other tasks.
+FINAL_DS_FILES = ("dataset_info.json", "state.json")
+FINAL_DS_SHARD_GLOB = "data-*-of-*.arrow"
 
 # How many batches a vLLM pool keeps queued per concurrent request slot when
 # `queue_size` is not given. One batch per slot would keep every server busy;
@@ -147,6 +169,30 @@ def _resolve_samples_per_output_file(
         )
 
     return max_samples_per_output_file
+
+
+def _bookkeeping_columns(
+    *, task_prefix: str, idx_column: str | None = None
+) -> set[str]:
+    """Name the columns that the annotator writes for every sample.
+
+    Args:
+        task_prefix: Prefix of the internal column names.
+        idx_column: Name of the sample id column. ``None`` leaves it out, for
+            a caller that does not know it.
+
+    Returns:
+        The column names that a schema property or a parsed key must not use.
+
+    Examples:
+        >>> columns = _bookkeeping_columns(task_prefix="qa_", idx_column="idx")
+        >>> sorted(columns)[:3]
+        ['idx', 'qa_error', 'qa_error_type']
+    """
+    columns = {f"{task_prefix}{name}" for name in BOOKKEEPING_SUFFIXES}
+    if idx_column is not None:
+        columns.add(idx_column)
+    return columns
 
 
 def is_retried_error(
@@ -576,10 +622,12 @@ class Annotator:
     num_proc: int | None = DEFAULT_CPU_COUNT
     verbose: bool = False
     _logger: Any = field(init=False, repr=False)
+    _ignored_keys: set[str] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         """Initialize the logger for annotator runtime messages."""
         self._logger = get_logger("annotator")
+        self._ignored_keys = set()
 
     def __enter__(self) -> "Annotator":
         """Enter the context manager, returning the annotator instance."""
@@ -807,19 +855,20 @@ class Annotator:
         Raises:
             ValueError: If configuration is invalid or required fields are missing.
         """
-        # only set for VLLMOfflineClient, which cannot be pickled for multiprocessing
+        num_proc = self.num_proc
         pipeline_loaded = getattr(self.client, "_pipeline_loaded", False)
 
         if (
-            self.num_proc is not None
+            num_proc is not None
             and isinstance(self.client, VLLMOfflineClient)
             and pipeline_loaded
         ):
             self._logger.warning(
-                "num_proc>1 cannot be used with VLLMOfflineClient because the loaded model "
-                "cannot be pickled for multiprocessing. Setting num_proc=None."
+                "num_proc>1 cannot be used with VLLMOfflineClient because the"
+                " loaded model cannot be pickled for multiprocessing. This"
+                " dataset is mapped in a single process."
             )
-            self.num_proc = None
+            num_proc = None
 
         if max_num_samples is not None and max_num_samples <= 0:
             raise ValueError(
@@ -856,60 +905,53 @@ class Annotator:
         if max_num_samples:
             dataset = dataset.select(range(min(max_num_samples, len(dataset))))
 
-        if dataset is not None:
-            # Validate that the dataset contains all fields required by the
-            # prompt template. Tests expect a ValueError when a required
-            # field is missing
-            if prompt_fields:
-                missing = [
-                    fld
-                    for fld in prompt_fields
-                    if fld not in dataset.column_names
-                ]
-                if missing:
-                    raise ValueError(
-                        f"Template contains field '{missing[0]}' not present in dataset."
-                        f" Available columns: {dataset.column_names}"
-                    )
-
-            if preprocess_fn is not None:
-                dataset = preprocess_fn(dataset=dataset)
-
-            dataset = dataset.map(
-                _create_messages,
-                num_proc=self.num_proc,
-                fn_kwargs={
-                    "prompt_fields": prompt_fields,
-                    "prompt_template": prompt_template,
-                    "task_prefix": task_prefix,
-                    "system_message": system_message,
-                },
-                desc="Applying prompt template",
+        missing = [
+            fld for fld in prompt_fields if fld not in dataset.column_names
+        ]
+        if missing:
+            raise ValueError(
+                f"Template contains field '{missing[0]}' not present in dataset."
+                f" Available columns: {dataset.column_names}"
             )
 
-            if sort_by_length:
-                if self.verbose:
-                    self._logger.info(
-                        "Sorting dataset roughly by prompt length for more efficient batching (longest first)..."
-                    )
-                dataset = dataset.map(
-                    lambda msgs: {
-                        f"{task_prefix}messages_chars": len(
-                            json.dumps(msgs, default=str)
-                        )
-                    },
-                    num_proc=self.num_proc,
-                    input_columns=[f"{task_prefix}messages"],
-                )
-                # Sort by longest first to trigger OOM as soon as possible
-                if sort_by_length == "shortest_first":
-                    do_reverse = False
-                else:
-                    do_reverse = True
+        if preprocess_fn is not None:
+            dataset = preprocess_fn(dataset=dataset)
 
-                dataset = dataset.sort(
-                    f"{task_prefix}messages_chars", reverse=do_reverse
-                ).remove_columns([f"{task_prefix}messages_chars"])
+        dataset = dataset.map(
+            _create_messages,
+            num_proc=num_proc,
+            fn_kwargs={
+                "prompt_fields": prompt_fields,
+                "prompt_template": prompt_template,
+                "task_prefix": task_prefix,
+                "system_message": system_message,
+            },
+            desc="Applying prompt template",
+        )
+
+        if sort_by_length:
+            if self.verbose:
+                self._logger.info(
+                    "Sorting dataset roughly by prompt length for more efficient batching (longest first)..."
+                )
+            dataset = dataset.map(
+                lambda msgs: {
+                    f"{task_prefix}messages_chars": len(
+                        json.dumps(msgs, default=str)
+                    )
+                },
+                num_proc=num_proc,
+                input_columns=[f"{task_prefix}messages"],
+            )
+            # Sort by longest first to trigger OOM as soon as possible
+            if sort_by_length == "shortest_first":
+                do_reverse = False
+            else:
+                do_reverse = True
+
+            dataset = dataset.sort(
+                f"{task_prefix}messages_chars", reverse=do_reverse
+            ).remove_columns([f"{task_prefix}messages_chars"])
 
         return dataset
 
@@ -933,11 +975,17 @@ class Annotator:
             - A key '{prefix}response' containing the raw model output text.
             - A key '{prefix}finish_reason' indicating why generation stopped.
             - A key '{prefix}num_tokens' indicating the number of tokens in the output.
+            - A key '{prefix}error' and '{prefix}error_type' describing a failed request.
             - A key '{prefix}reasoning' containing the model's reasoning trace, or None when the provider did not return one separately.
 
             And if an output_schema is provided, also:
-                - Keys from the output_schema with their parsed values (or None if parsing failed).
-                - A key '{prefix}valid_fields' indicating if all required fields were valid.
+                - One key per top-level property of the schema. A property that
+                  the response does not hold is None, so that every row has the
+                  same keys. A parsed key that the schema does not declare is
+                  ignored, with one warning per run.
+                - A key '{prefix}valid_fields', False when the response errored,
+                  did not parse as JSON, was not a JSON object, or left out a
+                  property that the schema requires.
         """
         data: dict[str, Any] = {
             f"{task_prefix}response": response.text,
@@ -951,38 +999,69 @@ class Annotator:
             f"{task_prefix}reasoning": response.reasoning,
         }
 
-        if response.error is not None:
-            if not output_schema:
-                return data
-
-            result = dict.fromkeys(output_schema.get("properties", {}).keys())
-            return {
-                **data,
-                f"{task_prefix}valid_fields": False,
-                **result,
-            }
-
         if not output_schema:
             return data
 
-        valid_fields = None
-        result = dict.fromkeys(output_schema.get("properties", {}).keys())
+        properties: dict[str, Any] = output_schema.get("properties", {})
+        # Every row carries every property, so that the rows of one run stack
+        # into a dataset with one set of columns.
+        result: dict[str, Any] = dict.fromkeys(properties)
+        invalid = {**data, f"{task_prefix}valid_fields": False, **result}
+
+        if response.error is not None:
+            return invalid
+
         try:
             parsed_response = json.loads(response.text)
         except json.JSONDecodeError:
-            valid_fields = False
-        else:
-            result = parsed_response
+            return invalid
 
-            if "required" in output_schema:
-                required_keys = output_schema["required"]
-                valid_fields = all(key in result for key in required_keys)
+        if not isinstance(parsed_response, dict):
+            return invalid
 
+        for key, value in parsed_response.items():
+            if key in properties:
+                result[key] = value
+            else:
+                self._warn_ignored_key(key=key, task_prefix=task_prefix)
+
+        valid_fields = all(
+            key in parsed_response for key in output_schema.get("required", [])
+        )
         return {
             **data,
             f"{task_prefix}valid_fields": valid_fields,
             **result,
         }
+
+    def _warn_ignored_key(self, *, key: str, task_prefix: str) -> None:
+        """Report a parsed key that does not become a column.
+
+        The same key is only reported once per run, since a model that returns
+        it for one sample usually returns it for every sample.
+
+        Args:
+            key: The key of the parsed response.
+            task_prefix: String prefix used for internal column names.
+        """
+        if key in self._ignored_keys:
+            return
+        self._ignored_keys.add(key)
+
+        if key in _bookkeeping_columns(task_prefix=task_prefix):
+            self._logger.warning(
+                f"The model returned the key '{key}', which is the name of a"
+                " column that the annotator writes for every sample. The key"
+                " is ignored and the column keeps the annotator's value. This"
+                " is reported once per run."
+            )
+        else:
+            self._logger.warning(
+                f"The model returned the key '{key}', which the output schema"
+                " does not declare as a property. The key is ignored, so that"
+                " every row has the same columns. This is reported once per"
+                " run."
+            )
 
     def _process_batch(
         self,
@@ -1016,7 +1095,8 @@ class Annotator:
                 to dispatch a batch to a specific worker.
 
         Returns:
-            List of processed output dictionaries for each sample in the batch.
+            List of processed output dictionaries for each sample in the batch,
+            empty for a batch without samples.
 
         Raises:
             ValueError: If the client did not return exactly one response per
@@ -1024,6 +1104,9 @@ class Annotator:
         """
         output_schema = options.json_schema if options is not None else None
         messages = batch[f"{task_prefix}messages"]
+        if not messages:
+            return []
+
         client = client if client is not None else self.client
         responses = client.batch_generate(
             messages=messages,
@@ -1135,6 +1218,10 @@ class Annotator:
     ) -> list[dict[str, Any]]:
         """Annotate one batch, retrying the samples that come back invalid.
 
+        Every attempt applies ``postprocess_fn`` before ``validate_fn``, so a
+        sample that is answered on a retry has the same columns as one that
+        was valid on the first attempt.
+
         Args:
             batch: Dictionary containing batch data with messages samples.
             options: Runtime options passed to the client.
@@ -1181,6 +1268,7 @@ class Annotator:
                 gen_kwargs=gen_kwargs,
                 task_prefix=task_prefix,
                 validate_fn=validate_fn,
+                postprocess_fn=postprocess_fn,
                 client=client,
             )
 
@@ -1331,10 +1419,12 @@ class Annotator:
             dataset_split: Specific split to load (optional).
             max_num_samples: Maximum number of samples to prepare.
             shuffle_seed: Seed for dataset shuffling.
-            preprocess_fn: Optional function to preprocess the dataset after loading and before ap  plying the prompt template.
+            preprocess_fn: Optional function to preprocess the dataset after loading and before applying the prompt template.
             prompt_field_swapper: Optional mapping to replace template fields.
             idx_column: Column name used as unique identifier. Must not exist in the input dataset.
-            task_prefix: Prefix for internal columns and artifact names.
+            task_prefix: Prefix for the internal column names and for the
+                artifacts of this task inside ``output_dir``, so that several
+                tasks can share one directory and one ``hub_id``.
             sort_by_length: Whether to sort prompts by length.
             system_message: Optional system message for chat prompts.
             hub_id: Optional Hugging Face dataset ID used for both prepared-data
@@ -1729,6 +1819,49 @@ class Annotator:
                 f" {record.selected_rows:,} rows. Finished rows are reused."
             )
 
+    def _remove_task_output(
+        self, *, root_pdout: Path, task_prefix: str, hub_id: str | None
+    ) -> None:
+        """Remove what an earlier run of this task left in the output directory.
+
+        Every artifact is named, never globbed on the bare prefix, so that a
+        task with an empty ``task_prefix`` does not remove the files of the
+        other tasks that share the directory. The prepared data and the record
+        that describes it are kept, so a run that is overwritten does not have
+        to prepare its data again. The final dataset in the root belongs to no
+        single task, and is removed because the run that starts writes it
+        again.
+
+        Args:
+            root_pdout: The annotator's output directory.
+            task_prefix: The task prefix of the run.
+            hub_id: Hugging Face dataset ID of the run, or ``None``.
+        """
+        shutil.rmtree(
+            root_pdout / f"{task_prefix}{PROGRESS_DS_LOCAL_SUBDIR}",
+            ignore_errors=True,
+        )
+        (
+            root_pdout
+            / METADATA_LOCAL_SUBDIR
+            / f"{task_prefix}{METADATA_FILE_SUFF}"
+        ).unlink(missing_ok=True)
+
+        for name in FINAL_DS_FILES:
+            (root_pdout / name).unlink(missing_ok=True)
+        for shard in root_pdout.glob(FINAL_DS_SHARD_GLOB):
+            shard.unlink()
+
+        if hub_id:
+            branch = f"{task_prefix}{PROGRESS_BACKUP_BRANCH_SUFF}"
+            try:
+                delete_branch(hub_id, branch=branch, repo_type="dataset")
+            except Exception as exc:
+                self._logger.debug(
+                    f"Could not delete the branch '{branch}' on '{hub_id}',"
+                    f" which usually means it does not exist: {exc}"
+                )
+
     @destroy_on_error
     def run_annotation(
         self,
@@ -1769,11 +1902,18 @@ class Annotator:
             prepared_data_path: Local path to prepared data on disk.
             hub_id: Hugging Face dataset ID used for prepared-data cache and
                 JSONL progress backup.
-            overwrite: Whether to overwrite existing output directory EXCEPT
-                for the prepared data cache (which is preserved to allow resuming).
-                If you want to overwrite the prepared data cache, delete it manually or set
-                ``force_data_preparation=True`` in
-                [`prepare_data`][llm_annotator.annotator.Annotator.prepare_data].
+            overwrite: Whether to discard the finished rows of this task and
+                annotate every sample again. It removes
+                ``<output_dir>/<task_prefix>progress_backup/``, the Hub branch
+                of the same name, ``metadata/<task_prefix>annotation_metadata.json``
+                and the final dataset in the root of ``output_dir``. It keeps
+                the prepared data (``<task_prefix>prepared_dataset/``, its Hub
+                branch and ``<task_prefix>selection.json``), so a crashed run
+                resumes without preparing its data again; pass
+                ``force_data_preparation=True`` to
+                [`prepare_data`][llm_annotator.annotator.Annotator.prepare_data]
+                to rebuild it. It also keeps the artifacts of every other
+                ``task_prefix`` in the same directory.
             dataset_split: Dataset split used for skip filtering.
             dataset_config: Dataset config used for skip filtering.
             keep_columns: Columns to keep in output. ``True`` for all.
@@ -1790,7 +1930,13 @@ class Annotator:
                 stays cheap. A fixed number trades the samples lost at a
                 crash against the cost of rescanning the files on every
                 resume; 0 writes a single file of unlimited size.
-            task_prefix: Prefix for internal columns and file names.
+            task_prefix: Prefix for the internal column names and for the
+                artifacts of this task inside ``output_dir``, so that several
+                tasks can share one directory and one ``hub_id``. The final
+                dataset in the root of ``output_dir`` and on Hub ``main`` is
+                shared by design: the task that finishes last replaces it, and
+                with ``keep_columns=True`` it holds the columns of the tasks
+                that ran before it.
             validate_fn: Optional custom validation function.
             postprocess_fn: Optional postprocessing function that takes in a sample and must return a dict.
             num_retries_invalid: Number of retries for invalid outputs.
@@ -1815,9 +1961,11 @@ class Annotator:
             Final concatenated annotation dataset.
 
         Raises:
-            ValueError: If no prepared data source can be resolved, or if
-                ``output_schema`` differs from the one that the finished rows
-                were annotated with and ``overwrite`` is off.
+            ValueError: If no prepared data source can be resolved, if a
+                top-level property of the schema has the name of a column that
+                the annotator writes itself, or if ``output_schema`` differs
+                from the one that the finished rows were annotated with while
+                ``overwrite`` is off.
             TooManyConsecutiveFailedBatchesError: If
                 ``max_consecutive_failed_batches`` consecutive batches fail
                 entirely.
@@ -1859,6 +2007,23 @@ class Annotator:
                 options or ProviderRuntimeOptions(),
                 json_schema=output_schema,
             )
+
+        schema = options.json_schema if options is not None else None
+        if schema:
+            reserved = _bookkeeping_columns(
+                task_prefix=task_prefix, idx_column=idx_column
+            )
+            taken = sorted(set(schema.get("properties", {})) & reserved)
+            if taken:
+                names = ", ".join(f"'{name}'" for name in taken)
+                raise ValueError(
+                    f"The output schema property names {names} are also the"
+                    " names of columns that the annotator writes for every"
+                    " sample. Pick other names in the schema, or give the run"
+                    " another 'task_prefix' or 'idx_column'."
+                )
+
+        self._ignored_keys = set()
 
         if not keep_columns:
             keep_columns = set()
@@ -1935,21 +2100,14 @@ class Annotator:
                 " that."
             )
 
-        # Only empty the output directory after potentially reading the cached input
-        # To overwrite the cached prepared dataset, the user must explicitly delete
-        # the prepared data directory or set force_data_preparation=True in prepare_data.
+        # Only discard the finished rows after potentially reading the cached
+        # input.
         if root_pdout.is_dir() and overwrite:
-            # Remove everything except the prepared data
-            for item in root_pdout.glob("*"):
-                if item.is_dir():
-                    if (
-                        prepared_path is None
-                        or item.resolve() != prepared_path.resolve()
-                    ):
-                        shutil.rmtree(item, ignore_errors=True)
-                elif item != SelectionRecord.path(root_pdout, task_prefix):
-                    # The record describes the prepared data, which is kept
-                    item.unlink()
+            self._remove_task_output(
+                root_pdout=root_pdout,
+                task_prefix=task_prefix,
+                hub_id=hub_id,
+            )
 
         root_pdout.mkdir(exist_ok=True, parents=True)
         process_pdout = root_pdout / f"{task_prefix}{PROGRESS_DS_LOCAL_SUBDIR}"
@@ -2195,15 +2353,23 @@ class Annotator:
             preprocess_fn: Optional preprocessing callback.
             prompt_field_swapper: Optional mapping that renames prompt fields.
             idx_column: Column name used as the stable sample identifier.
-            task_prefix: Prefix for internal column names and output files.
+            task_prefix: Prefix for the internal column names and for the
+                artifacts of this task inside ``output_dir``, so that several
+                tasks can share one directory and one ``hub_id``. The final
+                dataset in the root of ``output_dir`` and on Hub ``main`` is
+                shared by design: the task that finishes last replaces it, and
+                with ``keep_columns=True`` it holds the columns of the tasks
+                that ran before it.
             sort_by_length: Whether to sort prompts by length.
             system_message: Optional system message for the chat prompt.
             hub_id: Optional Hub dataset ID for prepared-data cache and
                 JSONL progress backup.
             force_data_preparation: Rebuild prepared data even if cached.
-            overwrite: Whether to overwrite the output directory EXCEPT for the prepared data cache
-                (which is preserved to allow resuming). If you want to overwrite the prepared data cache,
-                delete it manually or set ``force_data_preparation=True``.
+            overwrite: Whether to discard the finished rows of this task and
+                annotate every sample again, see
+                [`run_annotation`][llm_annotator.annotator.Annotator.run_annotation].
+                The prepared data, and the artifacts of every other
+                ``task_prefix`` in the same directory, are kept.
             keep_columns: Columns to keep in the final dataset.
             options: Runtime options passed to the client.
             gen_kwargs: Extra request parameters merged over ``options``,
@@ -2338,9 +2504,11 @@ class Annotator:
             hub_id: Optional Hub dataset ID for prepared-data cache and
                 JSONL progress backup.
             force_data_preparation: Rebuild prepared data even if cached.
-            overwrite: Whether to overwrite the output directory EXCEPT for the prepared data cache
-                (which is preserved to allow resuming). If you want to overwrite the prepared data cache,
-                delete it manually or set ``force_data_preparation=True``.
+            overwrite: Whether to discard the finished rows of this task and
+                annotate every sample again, see
+                [`run_annotation`][llm_annotator.annotator.Annotator.run_annotation].
+                The prepared data, and the artifacts of every other
+                ``task_prefix`` in the same directory, are kept.
             options: Runtime options passed to the client.
             gen_kwargs: Extra request parameters merged over ``options``,
                 for anything the options dataclass does not name.
@@ -2354,7 +2522,11 @@ class Annotator:
                 stays cheap. A fixed number trades the samples lost at a
                 crash against the cost of rescanning the files on every
                 resume; 0 writes a single file of unlimited size.
-            task_prefix: Prefix for internal column names and output files.
+            task_prefix: Prefix for the internal column names and for the
+                artifacts of this task inside ``output_dir``, so that several
+                tasks can share one directory and one ``hub_id``. The final
+                dataset in the root of ``output_dir`` and on Hub ``main`` is
+                shared by design: the task that finishes last replaces it.
             validate_fn: Optional validation callback.
             postprocess_fn: Optional postprocessing callback.
             num_retries_invalid: Number of retries for invalid outputs.
@@ -2480,22 +2652,24 @@ class Annotator:
         keep_idx_column: bool = False,
         task_prefix: str = "",
     ) -> Dataset:
-        """Clean up after annotation is complete.
+        """Build the final dataset out of the progress files and clean up.
 
-        Removes empty output files and performs any final cleanup operations.
-        Deletes the local prepared-data cache directory and the two temporary
-        Hub branches (``JSONL_BACKUP_BRANCH`` and ``prepared_cache``) once
-        they are no longer needed.
+        Concatenates the progress files, sorts them by ``idx_column`` and
+        keeps the first row of every repeated id. The result is written to the
+        root of the output directory and, with a ``hub_id``, pushed to the
+        ``main`` branch of that repository. Afterwards the local prepared-data
+        cache and the two temporary Hub branches are removed and the metadata
+        of the run is written.
 
         Args:
-            pdout: Output directory path to clean up.
-            hub_id: Optional Hugging Face dataset ID for uploads and cleanup.
+            process_pdout: Directory that holds the ``*.jsonl`` progress files.
             idx_column: Column name used as unique identifier.
+            hub_id: Optional Hugging Face dataset ID for uploads and cleanup.
             keep_idx_column: Whether to keep the idx_column in the final dataset before uploading and returning.
-            task_prefix: Prefix used for the local cache directory name and the upload branch name.
+            task_prefix: Prefix used for the local cache directory name and the upload branch names.
 
         Returns:
-            The concatenated dataset of all annotation results (JSON-invalid samples are NOT removed)
+            The concatenated dataset of all annotation results (invalid samples are NOT removed)
         """
         ds = self._load_progress_files(process_pdout).sort(idx_column)
 
@@ -2588,10 +2762,14 @@ class Annotator:
         task_prefix: str,
         hub_id: str | None = None,
     ) -> None:
-        """
-        Add simple metadata the a "metadata" subdirectory of the output directory.
-        This includes counts of finish_reason, valid_fields, and error_type, as well as library version information.
-        Optionally upload to the hub into the "metadata" subdirectory of the dataset repository.
+        """Write counts and library versions to the metadata subdirectory.
+
+        The counts of the run go to
+        ``<output_dir>/metadata/<task_prefix>annotation_metadata.json``, one
+        file per task of the directory. The library versions go to
+        ``_version.json``, which is shared because it does not depend on the
+        task. Both are uploaded to the ``metadata`` folder of the Hub
+        repository when ``hub_id`` is given.
 
         Args:
             root_pdout: The root output directory path.
@@ -2599,11 +2777,11 @@ class Annotator:
             task_prefix: String prefix to use for internal column names.
             hub_id: Optional Hugging Face dataset ID to upload metadata to.
         """
-        mtd_dir = root_pdout / "metadata"
+        mtd_dir = root_pdout / METADATA_LOCAL_SUBDIR
         mtd_dir.mkdir(exist_ok=True)
 
         # Add version info
-        mtd_dir.joinpath("_version.json").write_text(
+        mtd_dir.joinpath(VERSION_FILE).write_text(
             json.dumps(get_lib_versions(), indent=4, default=str),
             encoding="utf-8",
         )
@@ -2643,7 +2821,7 @@ class Annotator:
             "error_type_counts": dict(error_type_counts),
         }
 
-        mtd_dir.joinpath("annotation_metadata.json").write_text(
+        mtd_dir.joinpath(f"{task_prefix}{METADATA_FILE_SUFF}").write_text(
             json.dumps(mtd, indent=4, default=str), encoding="utf-8"
         )
 
@@ -2670,7 +2848,7 @@ class Annotator:
                 repo_id=hub_id,
                 repo_type="dataset",
                 folder_path=mtd_dir,
-                path_in_repo="metadata",
+                path_in_repo=METADATA_LOCAL_SUBDIR,
             )
 
     def get_pfout_name(

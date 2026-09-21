@@ -6,7 +6,7 @@ import logging
 import types
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Callable, cast
 
 import pytest
 from datasets import Dataset, load_dataset
@@ -106,6 +106,44 @@ class TrackingClient(DummyClient):
         return super().batch_generate(
             messages=messages, options=options, gen_kwargs=gen_kwargs
         )
+
+
+class ScriptedClient(DummyClient):
+    """A DummyClient whose answer text comes from a script.
+
+    The script is called as ``script(call_number, messages)`` for every sample
+    of a batch, which makes it easy to answer differently on a retry.
+    """
+
+    def __init__(
+        self,
+        script: Callable[[int, list[dict[str, str]]], str],
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.script = script
+        self.calls = 0
+
+    def batch_generate(
+        self,
+        *,
+        messages: list[list[dict[str, str]]],
+        options: ProviderRuntimeOptions | None = None,
+        gen_kwargs: dict[str, Any] | None = None,
+    ) -> list[Response]:
+        _ = options
+        _ = gen_kwargs
+        self.calls += 1
+        return [
+            Response(
+                text=self.script(self.calls, msg),
+                stop_reason="stop",
+                provider=self.provider_type,
+                model=self.model,
+                num_output_tokens=1,
+            )
+            for msg in messages
+        ]
 
 
 @pytest.fixture
@@ -230,6 +268,175 @@ def test_process_output_branches(dummy_annotator: Annotator) -> None:
     assert err_schema["label"] is None
 
 
+@pytest.mark.parametrize("text", ["[1, 2]", '"text"', "null", "3"])
+def test_process_output_marks_a_non_object_response_invalid(
+    dummy_annotator: Annotator, text: str
+) -> None:
+    # Verifies valid JSON that is not an object is invalid instead of raising.
+    schema = {
+        "type": "object",
+        "properties": {"label": {"type": "string"}},
+        "required": ["label"],
+    }
+
+    res = dummy_annotator._process_output(
+        response=Response(text=text), output_schema=schema
+    )
+
+    assert res["valid_fields"] is False
+    assert res["label"] is None
+
+
+def test_process_output_fills_absent_properties_with_none(
+    dummy_annotator: Annotator,
+) -> None:
+    # Verifies every schema property is a key, whether the response holds it
+    # or not, so that all rows of a run have the same columns.
+    schema = {
+        "type": "object",
+        "properties": {"label": {"type": "string"}, "score": {"type": "int"}},
+        "required": ["label"],
+    }
+
+    res = dummy_annotator._process_output(
+        response=Response(text='{"label": "good"}'), output_schema=schema
+    )
+
+    assert res["valid_fields"] is True
+    assert res["score"] is None
+
+
+def test_process_output_without_required_is_valid_when_it_parses(
+    dummy_annotator: Annotator,
+) -> None:
+    # Verifies a schema that requires nothing accepts any parsed object.
+    schema = {"type": "object", "properties": {"label": {"type": "string"}}}
+
+    res = dummy_annotator._process_output(
+        response=Response(text="{}"), output_schema=schema
+    )
+
+    assert res["valid_fields"] is True
+    assert res["label"] is None
+
+
+def test_process_output_missing_required_property_is_invalid(
+    dummy_annotator: Annotator,
+) -> None:
+    # Verifies a response that leaves out a required property is invalid.
+    schema = {
+        "type": "object",
+        "properties": {"label": {"type": "string"}, "score": {"type": "int"}},
+        "required": ["label", "score"],
+    }
+
+    res = dummy_annotator._process_output(
+        response=Response(text='{"label": "good"}'), output_schema=schema
+    )
+
+    assert res["valid_fields"] is False
+
+
+def test_process_output_ignores_keys_outside_the_schema(
+    dummy_annotator: Annotator, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Verifies an undeclared key is dropped and reported once per run.
+    schema = {
+        "type": "object",
+        "properties": {"label": {"type": "string"}},
+        "required": ["label"],
+    }
+    response = Response(text='{"label": "good", "extra": 1, "response": "x"}')
+
+    with caplog.at_level(logging.WARNING):
+        first = dummy_annotator._process_output(
+            response=response, output_schema=schema
+        )
+        dummy_annotator._process_output(
+            response=response, output_schema=schema
+        )
+
+    assert first["label"] == "good"
+    assert "extra" not in first
+    assert first["response"] == response.text
+    warnings = [rec.message for rec in caplog.records]
+    assert sum("'extra'" in message for message in warnings) == 1
+    assert sum("'response'" in message for message in warnings) == 1
+
+
+def test_run_annotation_rejects_a_schema_property_named_like_a_column(
+    tmp_path: Path,
+) -> None:
+    # Verifies a collision is refused before any request is sent.
+    annotator = Annotator(client=DummyClient())
+    prepared = Dataset.from_dict(
+        {"idx": [0], "messages": [[{"role": "user", "content": "Q"}]]}
+    )
+
+    with pytest.raises(ValueError, match="'idx', 'response'"):
+        annotator.run_annotation(
+            output_dir=tmp_path / "out",
+            prepared_dataset=prepared,
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "idx": {"type": "int"},
+                    "response": {"type": "string"},
+                    "label": {"type": "string"},
+                },
+            },
+            upload_every_n_samples=0,
+        )
+
+
+def test_run_annotation_continues_after_a_non_object_response(
+    tmp_path: Path,
+) -> None:
+    # Verifies a JSON array response does not end the run.
+    annotator = Annotator(client=ScriptedClient(lambda call, msg: "[1, 2]"))
+    ds = Dataset.from_dict({"text": ["a", "b"]})
+
+    out = annotator.annotate_dataset(
+        output_dir=tmp_path / "out",
+        prompt_template="x {text}",
+        dataset=ds,
+        upload_every_n_samples=0,
+        num_retries_invalid=0,
+        output_schema={
+            "type": "object",
+            "properties": {"label": {"type": "string"}},
+            "required": ["label"],
+        },
+    )
+
+    assert out["valid_fields"] == [False, False]
+    assert out["label"] == [None, None]
+
+
+def test_post_annotate_loads_a_schema_column_that_is_null_in_one_file(
+    tmp_path: Path, dummy_annotator: Annotator
+) -> None:
+    # Verifies the final dataset loads when a run errored before it succeeded,
+    # which types the schema column as null in the older progress file.
+    progress_dir = tmp_path / "out" / "progress_backup"
+    progress_dir.mkdir(parents=True)
+    (progress_dir / "progress_0.jsonl").write_text(
+        '{"idx": 0, "response": "", "valid_fields": false, "label": null}\n',
+        encoding="utf-8",
+    )
+    (progress_dir / "progress_1.jsonl").write_text(
+        '{"idx": 1, "response": "{}", "valid_fields": true, "label": "ok"}\n',
+        encoding="utf-8",
+    )
+
+    ds = dummy_annotator._post_annotate(
+        process_pdout=progress_dir, idx_column="idx", keep_idx_column=True
+    )
+
+    assert ds["label"] == [None, "ok"]
+    assert Dataset.load_from_disk(tmp_path / "out")["label"] == [None, "ok"]
+
+
 def test_process_batch_validate_and_postprocess(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -263,6 +470,65 @@ def test_process_batch_validate_and_postprocess(
     assert all(item["valid"] is True for item in res)
 
     _ = capsys.readouterr()
+
+
+def test_retried_samples_are_postprocessed(tmp_path: Path) -> None:
+    # Verifies postprocess_fn runs on a retry as well as on the first attempt.
+    def script(call: int, messages: list[dict[str, str]]) -> str:
+        if call == 1 and messages[-1]["content"].endswith("b"):
+            return "BAD"
+        return "ok"
+
+    annotator = Annotator(client=ScriptedClient(script))
+    ds = Dataset.from_dict({"text": ["a", "b", "c"]})
+
+    out = annotator.annotate_dataset(
+        output_dir=tmp_path / "out",
+        prompt_template="x {text}",
+        dataset=ds,
+        upload_every_n_samples=0,
+        postprocess_fn=lambda sample: {
+            **sample,
+            "upper": sample["response"].upper(),
+        },
+        validate_fn=lambda sample: sample["response"] == "ok",
+    )
+
+    assert [(row["response"], row["upper"]) for row in out] == [
+        ("ok", "OK"),
+        ("ok", "OK"),
+        ("ok", "OK"),
+    ]
+
+
+def test_validate_fn_sees_postprocessed_columns_on_a_retry(
+    tmp_path: Path,
+) -> None:
+    # Verifies a validate_fn that reads a postprocessed column works on a
+    # retry, where the first attempt was invalid.
+    def script(call: int, messages: list[dict[str, str]]) -> str:
+        _ = messages
+        return "ok" if call > 1 else "bad"
+
+    client = ScriptedClient(script)
+    annotator = Annotator(client=client)
+    ds = Dataset.from_dict({"text": ["a", "b"]})
+
+    out = annotator.annotate_dataset(
+        output_dir=tmp_path / "out",
+        prompt_template="x {text}",
+        dataset=ds,
+        upload_every_n_samples=0,
+        postprocess_fn=lambda sample: {
+            **sample,
+            "upper": sample["response"].upper(),
+        },
+        validate_fn=lambda sample: sample["upper"] == "OK",
+    )
+
+    assert client.calls == 2
+    assert out["valid"] == [True, True]
+    assert out["upper"] == ["OK", "OK"]
 
 
 def test_run_annotation_retries_invalid(
@@ -1263,7 +1529,9 @@ def test_load_dataset_handles_loaded_vllm_pipeline_and_sorting(
         task_prefix="pre_",
     )
 
-    assert annotator.num_proc is None
+    # The guard applies to this call only; the setting itself is untouched,
+    # so a later call with another client still uses it.
+    assert annotator.num_proc == 2
     assert "pre_messages" in loaded.column_names
     assert "pre_messages_chars" not in loaded.column_names
 
@@ -1686,6 +1954,30 @@ def test_post_annotate_deletes_hub_branches(
     assert ("owner/output", "prepared_dataset") in deleted
 
 
+def test_overwrite_deletes_only_the_progress_branch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Verifies overwrite drops the Hub backup of the discarded rows and
+    # leaves the prepared-data branch, like it does on disk.
+    annotator = Annotator(client=DummyClient())
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    deleted: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "llm_annotator.annotator.delete_branch",
+        lambda repo_id, *, branch, repo_type: deleted.append(
+            (repo_id, branch)
+        ),
+    )
+
+    annotator._remove_task_output(
+        root_pdout=out_dir, task_prefix="qa_", hub_id="owner/output"
+    )
+
+    assert deleted == [("owner/output", "qa_progress_backup")]
+
+
 def test_get_skip_idxs_repairs_truncated_last_line(
     tmp_path: Path, dummy_annotator: Annotator
 ) -> None:
@@ -1765,6 +2057,25 @@ def test_process_batch_rejects_short_response_list(
             },
             options=None,
         )
+
+
+def test_process_batch_on_an_empty_batch_returns_nothing(
+    dummy_annotator: Annotator,
+) -> None:
+    # Verifies a batch without samples returns an empty result and sends no
+    # request, instead of raising an IndexError.
+    client = cast(DummyClient, dummy_annotator.client)
+    client.batch_generate = types.MethodType(  # type: ignore[method-assign]
+        lambda self, *, messages, options=None, gen_kwargs=None: (
+            _ for _ in ()
+        ).throw(AssertionError("the client was called for an empty batch")),
+        client,
+    )
+
+    assert (
+        dummy_annotator._process_batch(batch={"messages": []}, options=None)
+        == []
+    )
 
 
 def test_run_annotation_without_prompt_template(tmp_path: Path) -> None:
@@ -2644,3 +2955,124 @@ def test_run_annotation_overwrite_keeps_the_selection_record(
     )
 
     assert record_path.is_file()
+
+
+class CrashingClient(DummyClient):
+    """A DummyClient that fails every request with a RuntimeError."""
+
+    def batch_generate(
+        self,
+        *,
+        messages: list[list[dict[str, str]]],
+        options: ProviderRuntimeOptions | None = None,
+        gen_kwargs: dict[str, Any] | None = None,
+    ) -> list[Response]:
+        _ = messages
+        _ = options
+        _ = gen_kwargs
+        raise RuntimeError("backend down")
+
+
+def test_overwrite_keeps_the_prepared_data_of_a_crashed_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Verifies a crashed overwrite run leaves its prepared data on disk and
+    # that the next run reuses it instead of preparing it again.
+    out_dir = tmp_path / "out"
+    ds = Dataset.from_dict({"text": ["a", "b"]})
+    kwargs: dict[str, Any] = {
+        "output_dir": out_dir,
+        "prompt_template": "Q: {text}",
+        "dataset": ds,
+        "upload_every_n_samples": 0,
+        "overwrite": True,
+    }
+
+    with pytest.raises(RuntimeError, match="backend down"):
+        Annotator(client=CrashingClient()).annotate_dataset(**kwargs)
+
+    assert (out_dir / "prepared_dataset").is_dir()
+    assert SelectionRecord.path(out_dir).is_file()
+
+    def _no_rebuild(self: Annotator, **_kwargs: Any) -> Dataset:
+        raise AssertionError("the prepared data was rebuilt")
+
+    monkeypatch.setattr(Annotator, "_load_dataset", _no_rebuild)
+    result = Annotator(client=DummyClient()).annotate_dataset(**kwargs)
+
+    assert result["response"] == ["Q: a", "Q: b"]
+
+
+def test_overwrite_spares_the_artifacts_of_another_task(
+    tmp_path: Path,
+) -> None:
+    # Verifies two tasks can share one output_dir: overwriting the second
+    # leaves the first task's progress files, prepared data, record and
+    # metadata file in place.
+    out_dir = tmp_path / "out"
+    annotator = Annotator(client=DummyClient())
+    ds = Dataset.from_dict({"text": ["a", "b"]})
+
+    annotator.annotate_dataset(
+        output_dir=out_dir,
+        prompt_template="Q: {text}",
+        dataset=ds,
+        task_prefix="first_",
+        keep_idx_column=True,
+        upload_every_n_samples=0,
+    )
+    # A finished run removes its own prepared data, so put a file back that
+    # stands for the prepared data of a task that is still running.
+    (out_dir / "first_prepared_dataset").mkdir()
+    (out_dir / "first_prepared_dataset" / "state.json").write_text(
+        "{}", encoding="utf-8"
+    )
+    first_rows = sorted((out_dir / "first_progress_backup").glob("*.jsonl"))
+    assert first_rows
+
+    annotator.annotate_dataset(
+        output_dir=out_dir,
+        prompt_template="A: {text}",
+        dataset=ds,
+        task_prefix="second_",
+        keep_idx_column=True,
+        upload_every_n_samples=0,
+        overwrite=True,
+    )
+
+    assert sorted((out_dir / "first_progress_backup").glob("*.jsonl")) == (
+        first_rows
+    )
+    assert (out_dir / "first_prepared_dataset" / "state.json").is_file()
+    assert SelectionRecord.path(out_dir, "first_").is_file()
+    assert (out_dir / "metadata" / "first_annotation_metadata.json").is_file()
+    assert (out_dir / "metadata" / "second_annotation_metadata.json").is_file()
+    assert (out_dir / "metadata" / "_version.json").is_file()
+
+
+def test_overwrite_removes_the_final_dataset_of_the_task(
+    tmp_path: Path,
+) -> None:
+    # Verifies the shared final dataset in the root is replaced rather than
+    # merged with the shards of the run before it.
+    out_dir = tmp_path / "out"
+    annotator = Annotator(client=DummyClient())
+
+    annotator.annotate_dataset(
+        output_dir=out_dir,
+        prompt_template="Q: {text}",
+        dataset=Dataset.from_dict({"text": ["a", "b", "c"]}),
+        upload_every_n_samples=0,
+    )
+    (out_dir / "data-00000-of-00002.arrow").write_bytes(b"stale")
+
+    annotator.annotate_dataset(
+        output_dir=out_dir,
+        prompt_template="Q: {text}",
+        dataset=Dataset.from_dict({"text": ["a"]}),
+        upload_every_n_samples=0,
+        overwrite=True,
+    )
+
+    assert not (out_dir / "data-00000-of-00002.arrow").exists()
+    assert Dataset.load_from_disk(out_dir)["response"] == ["Q: a"]

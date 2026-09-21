@@ -227,6 +227,15 @@ rm -r outputs/imdb-sentiment/*/output
 llm-annotate pilot.yaml
 ```
 
+### The metadata file name
+
+The counts of a run are written to
+`<output_dir>/metadata/<task_prefix>annotation_metadata.json`. An output directory from an earlier
+release holds them under `annotation_metadata.json`, without the prefix. Nothing in the library
+reads that file, so an old one is left where it is: a run without a `task_prefix` writes the same
+name and replaces it, a run with one writes its own file next to it. Delete the old file, or point
+your own scripts at the new name.
+
 ## Limits
 
 - A source loaded by Hub id (`dataset.name`) is compared only when the prepared data is rebuilt; a
