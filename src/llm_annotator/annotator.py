@@ -2526,9 +2526,7 @@ class Annotator:
                 artifacts of this task inside ``output_dir``, so that several
                 tasks can share one directory and one ``hub_id``. The final
                 dataset in the root of ``output_dir`` and on Hub ``main`` is
-                shared by design: the task that finishes last replaces it, and
-                with ``keep_columns=True`` it holds the columns of the tasks
-                that ran before it.
+                shared by design: the task that finishes last replaces it.
             validate_fn: Optional validation callback.
             postprocess_fn: Optional postprocessing callback.
             num_retries_invalid: Number of retries for invalid outputs.

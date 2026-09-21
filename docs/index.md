@@ -170,14 +170,24 @@ artifact it stores, so two tasks can annotate the same data into one `output_dir
 `hub_id`) without reading each other's progress files:
 
 ```python
-for task, prompt in (("sentiment_", "Sentiment: {text}"), ("topic_", "Topic: {text}")):
-    ds = anno.annotate_dataset(
-        output_dir="outputs/imdb",
-        prompt_template=prompt,
-        dataset=ds,
-        task_prefix=task,
-        keep_columns=True,
-    )
+sentiment = anno.annotate_dataset(
+    output_dir="outputs/imdb",
+    prompt_template="Sentiment: {text}",
+    dataset=ds,
+    task_prefix="sentiment_",
+    keep_columns=True,
+    keep_idx_column=True,
+)
+
+topic = anno.annotate_dataset(
+    output_dir="outputs/imdb",
+    prompt_template="Topic: {text}",
+    dataset=sentiment,      # the sentiment columns travel along
+    task_prefix="topic_",
+    keep_columns=True,
+    keep_idx_column=True,
+    reuse_idx_column=True,  # keep the ids that the first call handed out
+)
 ```
 
 Each task gets its own `<task_prefix>prepared_dataset/`, `<task_prefix>progress_backup/`,
@@ -186,9 +196,9 @@ pair of Hub branches.
 
 The final dataset is shared: it is written to the root of `output_dir` and pushed to the `main`
 branch of `hub_id`, and the task that finishes last replaces it. That is the point of the example
-above. Each call reads the previous result and, with `keep_columns=True`, carries its columns
-along, so the dataset that stays behind holds the columns of every task. Two tasks that must end in
-two datasets need two `output_dir` values.
+above. The second call annotates the result of the first and, with `keep_columns=True`, carries its
+columns along, so the dataset that stays behind holds the columns of both tasks. Two tasks whose
+results must both survive on disk need two `output_dir` values.
 
 `overwrite=True` discards the finished rows of one task: its progress files, its Hub progress
 branch, its metadata file and the shared final dataset in the root, which the run writes again. It
