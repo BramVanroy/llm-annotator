@@ -99,10 +99,14 @@ def test_batch_generate_with_smollm(
             [{"role": "user", "content": "Reply with one short greeting."}],
             [{"role": "user", "content": "Reply with one short farewell."}],
         ],
-        # Room for a whole answer: a response that hits the token limit is
-        # reported as an error.
+        # A response that hits the token limit is reported as an error, and
+        # a 135M model does not end a farewell on its own. The stop strings
+        # end each answer at its first sentence.
         options=VLLMOfflineRuntimeOptions(
-            max_completion_tokens=64, temperature=0.0, seed=1
+            max_completion_tokens=64,
+            temperature=0.0,
+            seed=1,
+            stop=[".", "!", "?", "\n"],
         ),
     )
 
