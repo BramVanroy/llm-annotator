@@ -186,7 +186,7 @@ def test_unknown_init_key_names_the_accepted_ones() -> None:
         ("openai", {"api_key": "k", "base_url": "u", "max_workers": 2}),
         ("claude", {"api_key": "k", "on_error": "raise"}),
         ("vllm_online", {"base_url": "http://a:8000/v1"}),
-        ("vllm_offline", {"language_model_only": False, "batch_size": 4}),
+        ("vllm_offline", {"language_model_only": False, "on_error": "raise"}),
     ],
 )
 def test_init_accepts_constructor_arguments(
@@ -197,6 +197,13 @@ def test_init_accepts_constructor_arguments(
     )
 
     assert client.init == init
+
+
+def test_init_rejects_the_batch_size_key() -> None:
+    with pytest.raises(ValueError, match="'init' sets 'batch_size'"):
+        ClientConfig(
+            provider="vllm_offline", model="m", init={"batch_size": 4}
+        )
 
 
 def test_init_rejects_the_model_key() -> None:

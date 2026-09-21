@@ -285,7 +285,9 @@ meaning. A `vllm_offline` step turns it into `vllm.LLM(...)` keyword arguments;
 a `vllm_online` step whose servers still have to be started turns it into
 `vllm serve` flags, which `llm-annotate <config> --serve-args <step>` prints for
 a job submitter. So moving a step between the two changes only `provider`, and a
-step states its GPU count once, in `engine.tensor_parallel_size`.
+step states its GPU count once, in `engine.tensor_parallel_size`. `batch_size` does
+not size the GPU work for `vllm_offline`: vLLM schedules that itself from
+`engine.max_num_seqs` and `engine.max_num_batched_tokens`.
 
 Steps whose provider, model, `init` and `engine` all match share one live
 client, so a pipeline that uses the same local model twice loads it only once.

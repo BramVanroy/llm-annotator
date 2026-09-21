@@ -10,6 +10,7 @@ from llm_annotator.clients.base import (
     Provider,
     ProviderRuntimeOptions,
     Response,
+    reject_multiple_responses,
 )
 from llm_annotator.clients.exceptions import ProviderError
 
@@ -121,3 +122,77 @@ def test_client_batch_generate_defaults_to_generate() -> None:
         max_completion_tokens=2
     )
     assert client.generate_calls[0][2] == {"temperature": 0.1}
+
+
+class FlakyClient(DummyClient):
+    """Dummy client whose ``generate`` fails for one marked conversation."""
+
+    def generate(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        options: ProviderRuntimeOptions | None = None,
+        gen_kwargs: dict[str, Any] | None = None,
+    ) -> Response:
+        if messages[-1]["content"] == "bad":
+            raise RuntimeError("boom")
+        return DummyClient.generate(
+            self, messages=messages, options=options, gen_kwargs=gen_kwargs
+        )
+
+
+@pytest.mark.parametrize("max_workers", [None, 0, 1, 4])
+def test_generate_in_threads_keeps_order_and_isolates_failures(
+    max_workers: int | None,
+) -> None:
+    # Verifies one Response per input, in input order, at every worker count.
+    client = FlakyClient(on_error="ignore")
+
+    responses = client._generate_in_threads(
+        messages=[
+            [{"role": "user", "content": "first"}],
+            [{"role": "user", "content": "bad"}],
+            [{"role": "user", "content": "third"}],
+        ],
+        options=None,
+        gen_kwargs=None,
+        max_workers=max_workers,
+        context="demo request failed",
+    )
+
+    assert [response.text for response in responses] == ["first", "", "third"]
+    assert responses[0].error is None
+    assert responses[1].error == "demo request failed at index 1: boom"
+    assert responses[2].error is None
+
+
+def test_generate_in_threads_raises_when_on_error_is_raise() -> None:
+    # Verifies raise mode surfaces a worker failure as a ProviderError.
+    client = FlakyClient(on_error="raise")
+
+    with pytest.raises(ProviderError, match="at index 0: boom"):
+        client._generate_in_threads(
+            messages=[[{"role": "user", "content": "bad"}]],
+            options=None,
+            gen_kwargs=None,
+            max_workers=4,
+            context="demo request failed",
+        )
+
+
+def test_reject_multiple_responses_accepts_single_response() -> None:
+    # Verifies a payload without 'n', or with n=1, passes the check.
+    reject_multiple_responses({})
+    reject_multiple_responses({"n": 1})
+    reject_multiple_responses({"extra_body": {"n": 1}})
+
+
+@pytest.mark.parametrize(
+    "payload", [{"n": 2}, {"extra_body": {"n": 2}}, {"n": 0}]
+)
+def test_reject_multiple_responses_rejects_other_counts(
+    payload: dict[str, Any],
+) -> None:
+    # Verifies any 'n' other than 1 is rejected, at either level.
+    with pytest.raises(ValueError, match="one response per sample"):
+        reject_multiple_responses(payload)

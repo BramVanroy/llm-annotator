@@ -22,9 +22,6 @@ from .clients.vllm_offline_client import (
 from .clients.vllm_offline_client import (
     VLLMOfflineRuntimeOptions as VLLMOfflineRuntimeOptions,
 )
-from .clients.vllm_offline_client import (
-    auto_reduce_batch_size as auto_reduce_batch_size,
-)
 from .clients.vllm_online_client import (
     VLLMBaseRuntimeOptions as VLLMBaseRuntimeOptions,
 )
@@ -74,7 +71,6 @@ __all__ = [
     "VLLMOfflineClient",
     "VLLMOfflineRuntimeOptions",
     "VLLMOnlineRuntimeOptions",
-    "auto_reduce_batch_size",
     "build_annotator",
     "build_client",
     "configure_logging",

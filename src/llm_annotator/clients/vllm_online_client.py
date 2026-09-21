@@ -21,6 +21,7 @@ from llm_annotator.clients.base import (
     Provider,
     ProviderRuntimeOptions,
     Response,
+    reject_multiple_responses,
 )
 from llm_annotator.clients.exceptions import ConfigurationError, ProviderError
 from llm_annotator.clients.openai_client import OpenAIClient
@@ -74,12 +75,13 @@ class VLLMBaseRuntimeOptions(ProviderRuntimeOptions):
             the output.
         stop: Optional list of strings that halt generation when produced.
         seed: Optional fixed random seed for reproducible generation.
-        n: Number of independent output sequences to generate per request.
         chat_template_kwargs: Additional kwargs forwarded to the chat template.
             Pass ``{"enable_thinking": True}`` here to enable thinking mode.
         extra_body: Any other parameter the backend accepts, merged into the
             request last. This is the escape hatch for everything the fields
-            above do not name, such as ``min_p`` or ``stop_token_ids``.
+            above do not name, such as ``min_p`` or ``stop_token_ids``. It
+            cannot ask for more than one response per sample: the clients read
+            the first one and drop the rest, so an ``n`` above 1 is rejected.
     """
 
     temperature: float | None = None
@@ -90,9 +92,16 @@ class VLLMBaseRuntimeOptions(ProviderRuntimeOptions):
     frequency_penalty: float | None = None
     stop: list[str] | None = None
     seed: int | None = None
-    n: int | None = None
     chat_template_kwargs: dict[str, Any] | None = None
     extra_body: dict[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        """Reject an ``extra_body`` that asks for more than one response.
+
+        Raises:
+            ValueError: If ``extra_body`` sets ``n`` to anything but 1.
+        """
+        reject_multiple_responses({"extra_body": self.extra_body or {}})
 
     def to_payload(self) -> dict[str, Any]:
         """Build the request payload shared by both vLLM clients.
@@ -113,7 +122,6 @@ class VLLMBaseRuntimeOptions(ProviderRuntimeOptions):
             "frequency_penalty",
             "stop",
             "seed",
-            "n",
         ):
             value = getattr(self, name)
             if value is not None:
@@ -281,7 +289,14 @@ class VLLMOnlineClient(OpenAIClient[VLLMOnlineRuntimeOptions]):
                 precedence over ``options``.
 
         Returns:
-            A Response object containing the generated response.
+            A Response object containing the generated response. A failed
+            request is an error Response when ``on_error`` is ``"warn"`` or
+            ``"ignore"``.
+
+        Raises:
+            ProviderError: If the request fails and ``on_error`` is
+                ``"raise"``.
+            ValueError: If the request asks for more than one response.
         """
         resolved = options or self._default_options()
         request_payload, extra_body = resolved.split_payload()
@@ -298,6 +313,7 @@ class VLLMOnlineClient(OpenAIClient[VLLMOnlineRuntimeOptions]):
         request_payload.update(gen_kwargs or {})
         if extra_body:
             request_payload["extra_body"] = extra_body
+        reject_multiple_responses(request_payload)
 
         try:
             response = self._client.chat.completions.create(**request_payload)
@@ -354,7 +370,9 @@ class VLLMOnlineClient(OpenAIClient[VLLMOnlineRuntimeOptions]):
 
         Raises:
             ConfigurationError: If ``use_batch_api=True``.
-            ProviderError: If the batch request fails.
+            ProviderError: If the batch request fails and ``on_error`` is
+                ``"raise"``.
+            ValueError: If the request asks for more than one response.
         """
         if use_batch_api:
             raise ConfigurationError(
@@ -368,24 +386,25 @@ class VLLMOnlineClient(OpenAIClient[VLLMOnlineRuntimeOptions]):
         from openai.types.chat.chat_completion import ChatCompletion
 
         options = options or self._default_options()
-        try:
-            # Construct batch request payload following vLLM batch API format
-            request_payload: dict[str, Any] = options.to_payload()
-            request_payload["model"] = self.model
-            request_payload["messages"] = messages
-            if options.json_schema is not None:
-                # TODO: test. Maybe we need "structured_outputs"
-                # https://docs.vllm.ai/en/latest/serving/openai_compatible_server/#extra-parameters_1
-                request_payload["response_format"] = {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "response",
-                        "schema": options.json_schema,
-                        "strict": True,
-                    },
-                }
-            request_payload.update(gen_kwargs or {})
+        # Construct batch request payload following vLLM batch API format
+        request_payload: dict[str, Any] = options.to_payload()
+        request_payload["model"] = self.model
+        request_payload["messages"] = messages
+        if options.json_schema is not None:
+            # TODO: test. Maybe we need "structured_outputs"
+            # https://docs.vllm.ai/en/latest/serving/openai_compatible_server/#extra-parameters_1
+            request_payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "response",
+                    "schema": options.json_schema,
+                    "strict": True,
+                },
+            }
+        request_payload.update(gen_kwargs or {})
+        reject_multiple_responses(request_payload)
 
+        try:
             # The batch endpoint is at /v1/chat/completions/batch
             batch_url = f"{self._base_url}/chat/completions/batch"
             # Re-use the underlying httpx client

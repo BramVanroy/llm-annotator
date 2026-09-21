@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum, auto
 from typing import Any, ClassVar, Generic, Literal, Self, TypeVar
@@ -57,6 +58,40 @@ class ProviderRuntimeOptions:
             A dict of provider-specific request parameters.
         """
         return {}
+
+
+def reject_multiple_responses(payload: dict[str, Any]) -> None:
+    """Raise when a request asks the provider for more than one response.
+
+    Every client reads the first response of a request and drops the rest, so
+    a higher ``n`` spends tokens on output that is never stored. The check
+    covers ``n`` at the top level of the payload and inside a nested
+    ``extra_body``, which is where the vLLM server client puts the parameters
+    the OpenAI SDK does not accept.
+
+    Args:
+        payload: The final request payload, after ``gen_kwargs`` and
+            ``extra_body`` were merged in.
+
+    Raises:
+        ValueError: If the payload sets ``n`` to anything other than 1.
+
+    Examples:
+        >>> reject_multiple_responses({"n": 1, "temperature": 0.0})
+        >>> reject_multiple_responses(
+        ...     {"extra_body": {"n": 4}}
+        ... )  # doctest: +ELLIPSIS
+        Traceback (most recent call last):
+            ...
+        ValueError: 'n' is 4, but one response per sample is read...
+    """
+    for body in (payload, payload.get("extra_body") or {}):
+        count = body.get("n")
+        if count is not None and count != 1:
+            raise ValueError(
+                f"'n' is {count}, but one response per sample is read and the"
+                " others are dropped. Remove 'n' or set it to 1."
+            )
 
 
 @dataclass(slots=True, frozen=True)
@@ -222,6 +257,63 @@ class Client(ABC, Generic[T_Options]):
             "Subclasses must implement the generate method."
         )
 
+    def _generate_in_threads(
+        self,
+        *,
+        messages: list[list[dict[str, str]]],
+        options: T_Options | None,
+        gen_kwargs: dict[str, Any] | None,
+        max_workers: int | None,
+        context: str,
+    ) -> list[Response]:
+        """Run one [`generate`][llm_annotator.clients.base.Client.generate] call per input.
+
+        The worker count is a local value, so a small batch does not lower the
+        concurrency of the batches after it.
+
+        Args:
+            messages: One conversation per request.
+            options: Provider-specific generation options for every request.
+            gen_kwargs: Extra generation kwargs for every request.
+            max_workers: Threads to dispatch with. ``None``, ``0`` and ``1``
+                give one thread, which runs the requests one after another; a
+                higher value is capped at the number of requests.
+            context: Start of the error context, completed with the index of
+                the request that failed.
+
+        Returns:
+            One [`Response`][llm_annotator.clients.base.Response] per input
+            conversation, in input order. A request that fails is an error
+            ``Response`` and leaves the other requests untouched.
+
+        Raises:
+            ProviderError: If a request fails and ``on_error`` is ``"raise"``.
+        """
+        # A pool needs at least one thread, also for an empty batch.
+        workers = max(1, min(max_workers or 1, len(messages)))
+        responses: list[Response] = []
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [
+                executor.submit(
+                    self.generate,
+                    messages=msgs,
+                    options=options,
+                    gen_kwargs=gen_kwargs,
+                )
+                for msgs in messages
+            ]
+            for idx, future in enumerate(futures):
+                try:
+                    responses.append(future.result())
+                except Exception as exc:
+                    responses.append(
+                        self._handle_error(
+                            exc, context=f"{context} at index {idx}"
+                        )
+                    )
+        return responses
+
     def batch_generate(
         self,
         *,
@@ -231,10 +323,11 @@ class Client(ABC, Generic[T_Options]):
     ) -> list[Response]:
         """Generate responses for a batch of inputs.
 
-        The default implementation calls
-        [`generate`][llm_annotator.clients.base.Client.generate] sequentially.
-        Override this method in subclasses that support native batching
-        (e.g. vLLM offline and vLLM server) for better throughput.
+        The default implementation dispatches one
+        [`generate`][llm_annotator.clients.base.Client.generate] call per input
+        over a thread pool of ``max_workers`` threads. Override this method in
+        subclasses that support native batching (e.g. vLLM offline and vLLM
+        server) for better throughput.
 
         Args:
             messages: List of message lists, where each message dict has "role" and "content" keys.
@@ -243,16 +336,19 @@ class Client(ABC, Generic[T_Options]):
                 Has precedence over ``options``.
 
         Returns:
-            A list of Response objects containing the generated responses.
+            One Response per input, in input order. A request that fails is an
+            error Response, unless ``on_error`` is ``"raise"``.
+
+        Raises:
+            ProviderError: If a request fails and ``on_error`` is ``"raise"``.
         """
-        return [
-            self.generate(
-                messages=msgs,
-                options=options,
-                gen_kwargs=gen_kwargs,
-            )
-            for msgs in messages
-        ]
+        return self._generate_in_threads(
+            messages=messages,
+            options=options,
+            gen_kwargs=gen_kwargs,
+            max_workers=self.max_workers,
+            context=f"{self.provider_type.value} request failed",
+        )
 
     def warm_up(
         self,
@@ -308,4 +404,5 @@ __all__ = [
     "Provider",
     "ProviderRuntimeOptions",
     "Response",
+    "reject_multiple_responses",
 ]

@@ -13,6 +13,7 @@ from llm_annotator.clients.base import (
     Provider,
     ProviderRuntimeOptions,
     Response,
+    reject_multiple_responses,
 )
 from llm_annotator.clients.exceptions import ProviderError
 from llm_annotator.logging_utils import get_logger
@@ -138,7 +139,10 @@ class OpenAIClient(Client[T_OpenAIOptions]):
         self._api_key = api_key
         self._base_url = base_url
         self._client = OpenAI(api_key=self._api_key, base_url=base_url)
-        self._active_batch_ids: list[str] = []
+        self._active_batches: dict[str, list[str]] = {}
+        """Batch API jobs that have not been cleaned up yet, each mapped to the
+        ids of the files it owns: the uploaded input file, plus the output and
+        error files once the job reports them."""
 
     def _process_response(self, response: ChatCompletion) -> Response:
         """Process OpenAI response and handle stop reasons.
@@ -185,13 +189,32 @@ class OpenAIClient(Client[T_OpenAIOptions]):
         return partial
 
     def destroy(self) -> None:
-        """Cancel any in-flight batches and clean up resources."""
-        for batch_id in list(self._active_batch_ids):
+        """Cancel the batches still tracked and delete the files they own.
+
+        A cancellation or deletion that fails is logged at warning level and
+        does not stop the remaining clean-up.
+        """
+        for batch_id in list(self._active_batches):
             try:
                 self._client.batches.cancel(batch_id)
-            except Exception:
-                pass
-        self._active_batch_ids.clear()
+            except Exception as exc:
+                logger.warning(f"Could not cancel batch {batch_id}: {exc}")
+            self._delete_batch_files(batch_id)
+
+    def _delete_batch_files(self, batch_id: str) -> None:
+        """Delete the files of one batch and stop tracking it.
+
+        Args:
+            batch_id: Id of the batch whose files are deleted.
+        """
+        for file_id in self._active_batches.pop(batch_id, []):
+            try:
+                self._client.files.delete(file_id)
+            except Exception as exc:
+                logger.warning(
+                    f"Could not delete file {file_id} of batch"
+                    f" {batch_id}: {exc}"
+                )
 
     def _build_batch_request(
         self,
@@ -226,6 +249,7 @@ class OpenAIClient(Client[T_OpenAIOptions]):
                 },
             }
         body.update(gen_kwargs or {})
+        reject_multiple_responses(body)
         return {
             "custom_id": f"request-{idx}",
             "method": "POST",
@@ -242,8 +266,13 @@ class OpenAIClient(Client[T_OpenAIOptions]):
     ) -> list[Response]:
         """Run the OpenAI Batch API path for ``batch_generate``.
 
-        Uploads a JSONL file, creates a batch job, polls until the job
-        finishes, then downloads and parses the output.
+        Uploads a JSONL file, creates a batch job, polls until the job reaches
+        a final status, then reads whatever results the job produced. A batch
+        that ends as ``expired`` or ``cancelled`` can still carry finished
+        requests in its output file, so those are read as well and only the
+        ``custom_id``s without a result become errors. The input, output and
+        error files are deleted before the method returns, including when the
+        results could not be read.
 
         Args:
             messages: One list of message dicts per request.
@@ -254,116 +283,146 @@ class OpenAIClient(Client[T_OpenAIOptions]):
         Returns:
             Responses in the same order as the input ``messages``.
         """
-        from openai.types.chat.chat_completion import ChatCompletion
-
-        # Build JSONL content in memory.
         lines = [
             json.dumps(
                 self._build_batch_request(idx, msgs, options, gen_kwargs)
             )
             for idx, msgs in enumerate(messages)
         ]
-        jsonl_bytes = "\n".join(lines).encode()
-        jsonl_file = io.BytesIO(jsonl_bytes)
+        jsonl_file = io.BytesIO("\n".join(lines).encode())
 
-        # Upload input file.
         uploaded = self._client.files.create(
             file=("batch.jsonl", jsonl_file, "application/jsonl"),
             purpose="batch",
         )
-        file_id: str = uploaded.id
-
-        # Create the batch.
         batch = self._client.batches.create(
-            input_file_id=file_id,
+            input_file_id=uploaded.id,
             endpoint="/v1/chat/completions",
             completion_window="24h",
         )
         batch_id: str = batch.id
-        self._active_batch_ids.append(batch_id)
+        self._active_batches[batch_id] = [uploaded.id]
 
-        # Poll until the batch reaches a terminal state.
+        # The batch stays tracked while it runs, so that an interrupted poll
+        # leaves destroy() a batch to cancel and an input file to delete.
         terminal_statuses = {"completed", "failed", "expired", "cancelled"}
         while batch.status not in terminal_statuses:
             logger.info(
-                f"Batch {batch_id} status: {batch.status}. Polling again in {poll_interval} seconds..."
+                f"Batch {batch_id} status: {batch.status}. Polling again"
+                f" in {poll_interval} seconds..."
             )
             time.sleep(poll_interval)
             batch = self._client.batches.retrieve(batch_id)
 
-        self._active_batch_ids.remove(batch_id)
+        result_files = [
+            file_id
+            for file_id in (batch.output_file_id, batch.error_file_id)
+            if file_id
+        ]
+        self._active_batches[batch_id].extend(result_files)
 
-        # Handle batch-level failure.
-        if batch.status != "completed":
-            error_msg = f"Batch {batch_id} ended with status '{batch.status}'."
+        try:
+            try:
+                result_map = self._read_batch_results(result_files)
+            except Exception as exc:
+                return [
+                    self._handle_error(
+                        exc,
+                        context=f"OpenAI batch API result download failed at index {idx}",
+                    )
+                    for idx in range(len(messages))
+                ]
+
             return [
-                self._handle_error(
-                    ProviderError(error_msg),
-                    context=f"OpenAI batch API failed at index {idx}",
+                self._process_batch_entry(
+                    idx, result_map.get(f"request-{idx}"), batch.status
                 )
                 for idx in range(len(messages))
             ]
+        finally:
+            self._delete_batch_files(batch_id)
 
-        # Download and parse the output JSONL.
-        assert batch.output_file_id is not None
-        output_content = self._client.files.content(batch.output_file_id)
+    def _read_batch_results(
+        self, file_ids: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        """Read the result files of a finished batch.
+
+        Args:
+            file_ids: Ids of the batch's output and error files, whichever it
+                reported.
+
+        Returns:
+            One JSONL entry per ``custom_id`` the batch reported on. A batch
+            that produced no file gives an empty mapping.
+        """
         result_map: dict[str, dict[str, Any]] = {}
-        for raw_line in output_content.text.splitlines():
-            raw_line = raw_line.strip()
-            if not raw_line:
-                continue
-            parsed_line: dict[str, Any] = json.loads(raw_line)
-            result_map[parsed_line["custom_id"]] = parsed_line
+        for file_id in file_ids:
+            content = self._client.files.content(file_id)
+            for raw_line in content.text.splitlines():
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                entry: dict[str, Any] = json.loads(raw_line)
+                result_map[entry["custom_id"]] = entry
 
-        responses: list[Response] = []
-        for idx in range(len(messages)):
-            custom_id = f"request-{idx}"
-            entry: dict[str, Any] | None = result_map.get(custom_id)
-            if entry is None:
-                responses.append(
-                    self._handle_error(
-                        ProviderError(f"No output entry for '{custom_id}'."),
-                        context=f"OpenAI batch API missing result at index {idx}",
-                    )
-                )
-                continue
+        return result_map
 
-            if entry.get("error") is not None:
-                responses.append(
-                    self._handle_error(
-                        ProviderError(str(entry["error"])),
-                        context=f"OpenAI batch API item error at index {idx}",
-                    )
-                )
-                continue
+    def _process_batch_entry(
+        self,
+        idx: int,
+        entry: dict[str, Any] | None,
+        status: str,
+    ) -> Response:
+        """Turn one JSONL entry of a batch result file into a Response.
 
-            item_response = entry.get("response", {})
-            if item_response.get("status_code") != 200:
-                responses.append(
-                    self._handle_error(
-                        ProviderError(
-                            f"Unexpected status code {item_response.get('status_code')} "
-                            f"for '{custom_id}'."
-                        ),
-                        context=f"OpenAI batch API bad status at index {idx}",
-                    )
-                )
-                continue
+        Args:
+            idx: Zero-based index of the request in the input batch.
+            entry: The entry the batch reported for it, or ``None`` when the
+                batch reported none.
+            status: Final status of the batch, named in the error message of a
+                request the batch did not answer.
 
-            try:
-                completion = ChatCompletion.model_validate(
-                    item_response["body"]
-                )
-                responses.append(self._process_response(completion))
-            except Exception as exc:
-                responses.append(
-                    self._handle_error(
-                        exc,
-                        context=f"OpenAI batch API response processing failed at index {idx}",
-                    )
-                )
+        Returns:
+            The parsed [`Response`][llm_annotator.clients.base.Response], or an
+            error ``Response`` when the request has no usable result.
+        """
+        from openai.types.chat.chat_completion import ChatCompletion
 
-        return responses
+        custom_id = f"request-{idx}"
+        if entry is None:
+            return self._handle_error(
+                ProviderError(
+                    f"The batch ended with status '{status}' and holds no"
+                    f" result for '{custom_id}'."
+                ),
+                context=f"OpenAI batch API missing result at index {idx}",
+            )
+
+        if entry.get("error") is not None:
+            return self._handle_error(
+                ProviderError(str(entry["error"])),
+                context=f"OpenAI batch API item error at index {idx}",
+            )
+
+        item_response = entry.get("response") or {}
+        if item_response.get("status_code") != 200:
+            return self._handle_error(
+                ProviderError(
+                    f"Unexpected status code"
+                    f" {item_response.get('status_code')} for"
+                    f" '{custom_id}'."
+                ),
+                context=f"OpenAI batch API bad status at index {idx}",
+            )
+
+        try:
+            completion = ChatCompletion.model_validate(item_response["body"])
+            return self._process_response(completion)
+        except Exception as exc:
+            return self._handle_error(
+                exc,
+                context=f"OpenAI batch API response processing failed at index {idx}",
+            )
 
     def _default_options(self) -> T_OpenAIOptions:
         """Return default runtime options for this OpenAI-compatible client."""
@@ -385,46 +444,50 @@ class OpenAIClient(Client[T_OpenAIOptions]):
                 Has precedence over ``options``.
 
         Returns:
-            A Response object containing the generated response.
+            A Response object containing the generated response. A failed
+            request is an error Response when ``on_error`` is ``"warn"`` or
+            ``"ignore"``.
 
         Raises:
-            ProviderError: If the provider call fails.
+            ProviderError: If the request fails and ``on_error`` is
+                ``"raise"``.
+            ValueError: If the request asks for more than one response.
         """
         resolved = cast(
             OpenAIRuntimeOptions, options or self._default_options()
         )
-        try:
-            request_payload: dict[str, Any] = resolved.to_payload()
+        request_payload: dict[str, Any] = resolved.to_payload()
+        request_payload.update(
+            {
+                "model": self.model,
+                "messages": messages,
+            }
+        )
+        if resolved.json_schema is not None:
+            request_payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "response",
+                    "schema": add_schema_additional_properties_false(
+                        resolved.json_schema
+                    ),
+                    "strict": True,
+                },
+            }
+        request_payload.update(gen_kwargs or {})
+        reject_multiple_responses(request_payload)
 
-            request_payload.update(
-                {
-                    "model": self.model,
-                    "messages": messages,
-                }
-            )
-            if resolved.json_schema is not None:
-                request_payload["response_format"] = {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "response",
-                        "schema": add_schema_additional_properties_false(
-                            resolved.json_schema
-                        ),
-                        "strict": True,
-                    },
-                }
-            request_payload.update(gen_kwargs or {})
+        try:
             response = self._client.chat.completions.create(**request_payload)
         except Exception as exc:
-            # API errors specifically can always be raised
-            raise exc
-        else:
-            try:
-                return self._process_response(response=response)
-            except Exception as exc:
-                return self._handle_error(
-                    exc, context="OpenAI response processing failed"
-                )
+            return self._handle_error(exc, context="OpenAI request failed")
+
+        try:
+            return self._process_response(response=response)
+        except Exception as exc:
+            return self._handle_error(
+                exc, context="OpenAI response processing failed"
+            )
 
     def batch_generate(
         self,
@@ -454,10 +517,12 @@ class OpenAIClient(Client[T_OpenAIOptions]):
                 ``use_batch_api=True``. Defaults to ``10.0``.
 
         Returns:
-            A list of Response objects in the same order as the input.
+            A list of Response objects in the same order as the input. A
+            request that fails is an error Response when ``on_error`` is
+            ``"warn"`` or ``"ignore"``.
 
         Raises:
-            ProviderError: If any individual request fails.
+            ProviderError: If a request fails and ``on_error`` is ``"raise"``.
         """
         if use_batch_api:
             resolved = cast(
@@ -467,48 +532,13 @@ class OpenAIClient(Client[T_OpenAIOptions]):
                 messages, resolved, gen_kwargs, poll_interval
             )
 
-        if self.max_workers and self.max_workers > 1:
-            self.max_workers = min(self.max_workers, len(messages))
-            from concurrent.futures import ThreadPoolExecutor
-
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                futures = [
-                    executor.submit(
-                        self.generate,
-                        messages=msgs,
-                        options=options,
-                        gen_kwargs=gen_kwargs,
-                    )
-                    for msgs in messages
-                ]
-
-            responses: list[Response] = []
-            for idx, future in enumerate(futures):
-                try:
-                    responses.append(future.result())
-                except Exception as exc:
-                    responses.append(
-                        self._handle_error(
-                            exc,
-                            context=f"OpenAI request failed at index {idx}",
-                        )
-                    )
-        else:
-            responses = []
-            for idx, msgs in enumerate(messages):
-                try:
-                    response = self.generate(
-                        messages=msgs, options=options, gen_kwargs=gen_kwargs
-                    )
-                    responses.append(response)
-                except Exception as exc:
-                    responses.append(
-                        self._handle_error(
-                            exc,
-                            context=f"OpenAI request failed at index {idx}",
-                        )
-                    )
-        return responses
+        return self._generate_in_threads(
+            messages=messages,
+            options=options,
+            gen_kwargs=gen_kwargs,
+            max_workers=self.max_workers,
+            context="OpenAI request failed",
+        )
 
     def _handle_stop_reason(
         self,

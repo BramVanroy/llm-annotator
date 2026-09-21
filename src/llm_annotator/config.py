@@ -793,6 +793,12 @@ class ClientConfig(_StrictBase):
                 " own. The pool's servers are named by 'base_urls',"
                 " 'hosts_file' or 'url_glob'."
             )
+        if "batch_size" in self.init:
+            raise ValueError(
+                "'init' sets 'batch_size'. A run has one batch size, the"
+                " client block's own 'batch_size', which decides how many"
+                " samples go to the provider per call."
+            )
 
         try:
             client_cls = _client_class(self.provider)

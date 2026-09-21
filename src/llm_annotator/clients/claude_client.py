@@ -64,14 +64,19 @@ if TYPE_CHECKING:
 
 
 class ClaudeClient(Client[ClaudeRuntimeOptions]):
-    """Client wrapper for Anthropic Claude APIs."""
+    """Client wrapper for Anthropic Claude APIs.
+
+    The Messages API has no synchronous batch endpoint, so the inherited
+    [`batch_generate`][llm_annotator.clients.base.Client.batch_generate] sends
+    one request per sample over a thread pool of ``max_workers`` threads.
+    """
 
     provider_type = Provider.CLAUDE
 
     def __init__(
         self,
         model: str,
-        max_workers: int = 4,
+        max_workers: int | None = 4,
         api_key: str | None = None,
         on_error: OnError = "warn",
     ) -> None:
@@ -79,7 +84,9 @@ class ClaudeClient(Client[ClaudeRuntimeOptions]):
 
         Args:
             model: Claude model identifier.
-            max_workers: Maximum number of concurrent worker threads for ``batch_generate``.
+            max_workers: Maximum number of concurrent worker threads for
+                ``batch_generate``. ``None``, ``0`` and ``1`` send the requests
+                of a batch one after another.
             api_key: Anthropic API key. If not provided, the client will attempt to read from the environment variable `ANTHROPIC_API_KEY`.
             on_error: Error behavior when generation fails.
         """
@@ -91,8 +98,6 @@ class ClaudeClient(Client[ClaudeRuntimeOptions]):
 
         self._api_key = api_key
         self._client = Anthropic(api_key=self._api_key)
-
-        self._running_batch_ids: set[str] = set()
 
     def _process_response(self, response: ClaudeMessage) -> Response:
         num_output_tokens = getattr(response.usage, "output_tokens", None)
@@ -152,105 +157,59 @@ class ClaudeClient(Client[ClaudeRuntimeOptions]):
                 Has precedence over ``options``.
 
         Returns:
-            A Response object containing the generated response.
+            A Response object containing the generated response. A failed
+            request is an error Response when ``on_error`` is ``"warn"`` or
+            ``"ignore"``.
 
         Raises:
-            ProviderError: If the provider call fails.
+            ProviderError: If the request fails and ``on_error`` is
+                ``"raise"``, or if ``messages`` holds more than one system
+                message.
+            ValueError: If a message has a role Claude does not take, or a
+                system message is not the first message.
         """
         options = options or ClaudeRuntimeOptions()
 
+        # The Messages API takes the system prompt as its own argument rather
+        # than as a message.
+        messages, system_instruction = _extract_system_instruction(messages)
+
+        request_payload: dict[str, Any] = options.to_payload()
+        request_payload.update(
+            {
+                "model": self.model,
+                "messages": messages,
+            }
+        )
+
+        if system_instruction:
+            request_payload["system"] = system_instruction
+
+        if options.json_schema is not None:
+            if "output_config" not in request_payload:
+                request_payload["output_config"] = {}
+
+            schema = _sanitize_schema(
+                add_schema_additional_properties_false(options.json_schema)
+            )
+            request_payload["output_config"]["format"] = {
+                "type": "json_schema",
+                "schema": schema,
+            }
+
+        request_payload.update(gen_kwargs or {})
+
         try:
-            # Claude API requires separating the system prompt
-            messages, system_instruction = _extract_system_instruction(
-                messages
-            )
-
-            request_payload: dict[str, Any] = options.to_payload()
-
-            request_payload.update(
-                {
-                    "model": self.model,
-                    "messages": messages,
-                }
-            )
-
-            if system_instruction:
-                request_payload["system"] = system_instruction
-
-            if options.json_schema is not None:
-                if "output_config" not in request_payload:
-                    request_payload["output_config"] = {}
-
-                schema = _sanitize_schema(
-                    add_schema_additional_properties_false(options.json_schema)
-                )
-                request_payload["output_config"]["format"] = {
-                    "type": "json_schema",
-                    "schema": schema,
-                }
-
-            request_payload.update(gen_kwargs or {})
             response = self._client.messages.create(**request_payload)
         except Exception as exc:
-            # API errors specifically can always be raised
-            raise exc
-        else:
-            try:
-                return self._process_response(response=response)
-            except Exception as exc:
-                return self._handle_error(
-                    exc, context="Claude response processing failed"
-                )
+            return self._handle_error(exc, context="Claude request failed")
 
-    def batch_generate(
-        self,
-        *,
-        messages: list[list[dict[str, str]]],
-        options: ClaudeRuntimeOptions | None = None,
-        gen_kwargs: dict[str, Any] | None = None,
-    ) -> list[Response]:
-        """Generate responses for a batch of inputs concurrently.
-
-        The Anthropic API has no native synchronous batch endpoint, so requests
-        are dispatched in parallel using a thread pool.
-
-        Args:
-            messages: List of message lists, one per request.
-            options: Provider-specific generation options.
-            gen_kwargs: Additional provider-specific generation kwargs that are not covered by the standard options.
-                Has precedence over ``options``.
-
-        Returns:
-            A list of Response objects in the same order as the input.
-
-        Raises:
-            ProviderError: If any individual request fails.
-        """
-        from concurrent.futures import ThreadPoolExecutor
-
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = [
-                executor.submit(
-                    self.generate,
-                    messages=msgs,
-                    options=options,
-                    gen_kwargs=gen_kwargs,
-                )
-                for msgs in messages
-            ]
-
-        responses: list[Response] = []
-        for idx, future in enumerate(futures):
-            try:
-                responses.append(future.result())
-            except Exception as exc:
-                responses.append(
-                    self._handle_error(
-                        exc,
-                        context=f"Claude batch request failed at index {idx}",
-                    )
-                )
-        return responses
+        try:
+            return self._process_response(response=response)
+        except Exception as exc:
+            return self._handle_error(
+                exc, context="Claude response processing failed"
+            )
 
     def _handle_stop_reason(
         self, *, stop_reason: str | None, num_output_tokens: int | None
@@ -297,48 +256,65 @@ class ClaudeClient(Client[ClaudeRuntimeOptions]):
             f"Claude stopped for an unexpected reason {stop_reason!r}{token_suffix}."
         )
 
-    def destroy(self) -> None:
-        """Clean up any resources used by the client."""
-
-        if self._client is not None and self._running_batch_ids:
-            for batch_id in self._running_batch_ids:
-                self._client.messages.batches.cancel(batch_id)
-
 
 def _extract_system_instruction(
     messages: list[dict[str, str]],
 ) -> tuple[list[dict[str, str]], str]:
-    """Convert OpenAI-style messages to Claude input text and instruction.
+    """Split a leading system message off an OpenAI-style message list.
+
+    The Messages API rejects a ``system`` role inside ``messages``, so the
+    system message is removed from the list whatever its content is. An empty
+    system message therefore leaves an empty instruction, and
+    [`ClaudeClient.generate`][llm_annotator.clients.claude_client.ClaudeClient.generate]
+    then sends no ``system`` argument at all.
 
     Args:
         messages: List of message dictionaries with 'role' and 'content' keys.
+
     Returns:
-        A tuple of (list[dict[str, str]], system_instruction) to be used for Claude generation.
+        The messages without the system message, and the system instruction
+        (``""`` when there is none).
+
+    Raises:
+        ProviderError: If more than one system message is present.
+        ValueError: If a system message is not first, or a role is one Claude
+            does not take.
+
+    Examples:
+        >>> _extract_system_instruction(
+        ...     [
+        ...         {"role": "system", "content": ""},
+        ...         {"role": "user", "content": "hi"},
+        ...     ]
+        ... )
+        ([{'role': 'user', 'content': 'hi'}], '')
     """
     system_instruction = ""
+    has_system = False
+    remaining: list[dict[str, str]] = []
+
     for msg_idx, message in enumerate(messages):
         role = message["role"]
-        content = message["content"]
 
         if role == "system":
-            if system_instruction:
+            if has_system:
                 raise ProviderError(
                     "For Claude, only a single system message is supported."
                 )
-
             if msg_idx != 0:
                 raise ValueError(
                     "Make sure that the system message is the first message in the list."
                 )
-            system_instruction = content
+            has_system = True
+            system_instruction = message["content"]
         elif role not in {"user", "assistant"}:
             raise ValueError(
                 f"Unsupported message role {role!r} for Claude client. Only 'system', 'assistant', and 'user' roles are supported."
             )
+        else:
+            remaining.append(message)
 
-    messages = messages[1:] if system_instruction else messages
-
-    return messages, system_instruction
+    return remaining, system_instruction
 
 
 def _sanitize_schema(schema: dict[str, Any]) -> dict[str, Any]:

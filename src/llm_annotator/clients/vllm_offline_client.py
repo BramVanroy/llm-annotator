@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import functools
 import gc
-from collections.abc import Callable, Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -13,6 +13,7 @@ from llm_annotator.clients.base import (
     OnError,
     Provider,
     Response,
+    reject_multiple_responses,
 )
 from llm_annotator.clients.exceptions import ProviderError
 from llm_annotator.clients.vllm_online_client import VLLMBaseRuntimeOptions
@@ -23,89 +24,6 @@ if TYPE_CHECKING:
     from vllm.reasoning import ReasoningParser
 
 
-def _is_oom_error(exc: BaseException) -> bool:
-    """Return True if *exc* or any exception in its chain looks like a CUDA OOM."""
-    seen: set[int] = set()
-    current: BaseException | None = exc
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        if type(current).__name__ in {
-            "OutOfMemoryError",
-            "CudaOutOfMemoryError",
-        }:
-            return True
-        if "out of memory" in str(current).lower():
-            return True
-        current = current.__cause__ or current.__context__
-    return False
-
-
-def auto_reduce_batch_size(
-    method: Callable[..., list[Response]],
-) -> Callable[..., list[Response]]:
-    """Decorate a ``batch_generate`` method to retry with halved chunk size on OOM.
-
-    Intended for use with
-    [`VLLMOfflineClient`][llm_annotator.clients.vllm_offline_client.VLLMOfflineClient].
-    On each call the full ``messages`` list is split into chunks and dispatched
-    one at a time. When a
-    CUDA out-of-memory error is detected the current chunk size is halved and
-    the failing chunk is retried at the new size. This continues until the chunk
-    succeeds or the size would fall below the instance's ``_min_batch_size``,
-    at which point the error is re-raised.
-
-    The chunk size and minimum are read from the instance's ``_batch_size`` and
-    ``_min_batch_size`` attributes on every call, so they can be adjusted after
-    construction.
-
-    Args:
-        method: Unbound ``batch_generate`` method to wrap.
-
-    Returns:
-        The wrapped method with adaptive OOM-recovery logic applied.
-    """
-
-    @functools.wraps(method)
-    def wrapper(
-        self: VLLMOfflineClient,
-        *,
-        messages: list[list[dict[str, str]]],
-        **kwargs: Any,
-    ) -> list[Response]:
-        batch_size = (
-            self._batch_size if self._batch_size is not None else len(messages)
-        )
-        min_batch_size = max(self._min_batch_size, 1)
-        batch_size = max(batch_size, min_batch_size)
-
-        results: list[Response] = []
-        i = 0
-
-        while i < len(messages):
-            chunk = messages[i : i + batch_size]
-            try:
-                chunk_results = method(self, messages=chunk, **kwargs)
-                results.extend(chunk_results)
-                i += len(chunk)
-            except Exception as exc:
-                if not _is_oom_error(exc):
-                    raise
-                new_size = batch_size // 2
-                if new_size < min_batch_size:
-                    raise
-                self._logger.warning(
-                    "CUDA out-of-memory with batch_size=%d;"
-                    " retrying with batch_size=%d.",
-                    batch_size,
-                    new_size,
-                )
-                batch_size = new_size
-
-        return results
-
-    return wrapper
-
-
 @dataclass(slots=True, frozen=True)
 class VLLMOfflineRuntimeOptions(VLLMBaseRuntimeOptions):
     """Generation options for the vLLM offline client.
@@ -114,7 +32,7 @@ class VLLMOfflineRuntimeOptions(VLLMBaseRuntimeOptions):
     [`VLLMBaseRuntimeOptions`][llm_annotator.clients.vllm_online_client.VLLMBaseRuntimeOptions],
     which carries everything both vLLM clients spell the same way
     (``temperature``, ``top_p``, ``top_k``, ``repetition_penalty``,
-    ``presence_penalty``, ``frequency_penalty``, ``stop``, ``seed``, ``n``,
+    ``presence_penalty``, ``frequency_penalty``, ``stop``, ``seed``,
     ``chat_template_kwargs`` and ``extra_body``), with the
     ``SamplingParams`` fields that only in-process inference offers.
 
@@ -169,13 +87,10 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
     prefill. Use as a context manager to ensure GPU resources are released
     when done.
 
-    ``batch_generate`` automatically splits the message list into chunks of
-    ``batch_size`` and retries failing chunks with a halved size on CUDA
-    out-of-memory errors (see
-    [`auto_reduce_batch_size`][llm_annotator.clients.vllm_offline_client.auto_reduce_batch_size]).
-    When ``batch_size`` is ``None`` (the default) all messages are sent in a
-    single vLLM call, mirroring the original behaviour while still
-    recovering from OOM when possible.
+    ``batch_generate`` hands every conversation it is given to one
+    ``LLM.chat`` call. How many of them run at the same time is vLLM's own
+    decision, governed by ``max_num_seqs`` and ``max_num_batched_tokens``
+    against the KV cache that ``gpu_memory_utilization`` sized at start-up.
 
     Args:
         model: Hugging Face model identifier or local path.
@@ -196,13 +111,6 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
         extra_vllm_kwargs: Additional keyword arguments forwarded to
             ``vllm.LLM``. Explicit constructor arguments take precedence
             over any conflicting keys here.
-        batch_size: Starting chunk size for
-            [`batch_generate`][llm_annotator.clients.vllm_offline_client.VLLMOfflineClient.batch_generate].
-            Defaults to ``None``, which sends all messages in one call. On OOM
-            the chunk size is halved automatically until it succeeds or falls
-            below ``min_batch_size``.
-        min_batch_size: Smallest permitted chunk size before an OOM error is
-            re-raised. Must be >= 1.
 
     Examples:
         Basic generation:
@@ -270,8 +178,6 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
         reasoning_parser: str | None = None,
         extra_vllm_kwargs: dict[str, Any] | None = None,
         on_error: OnError = "warn",
-        batch_size: int | None = None,
-        min_batch_size: int = 1,
     ) -> None:
         """Initialize the offline vLLM client and load the model into memory.
 
@@ -302,12 +208,6 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
                 over any conflicting keys here.
             on_error: Error behavior when generation fails.
                 Defaults to ``"warn"``.
-            batch_size: Starting chunk size for ``batch_generate``. When
-                ``None`` (the default) all messages are sent in one call. On
-                OOM the chunk size is halved until the call succeeds or falls
-                below ``min_batch_size``.
-            min_batch_size: Smallest permitted chunk size before an OOM is
-                re-raised. Must be >= 1.
 
         Raises:
             ImportError: If vLLM is not installed (raised on first use).
@@ -327,8 +227,6 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
         self._reasoning_parser_name = reasoning_parser
         self._reasoning_parser: ReasoningParser | None = None
         self._extra_vllm_kwargs: dict[str, Any] = extra_vllm_kwargs or {}
-        self._batch_size = batch_size
-        self._min_batch_size = min_batch_size
         self._pipe: LLM | None = None
         self._pipeline_loaded = False
 
@@ -564,11 +462,13 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
                 not covered by ``options``. Has precedence over ``options``.
 
         Returns:
-            A Response object containing the generated text and metadata.
+            A Response object containing the generated text and metadata. A
+            failed call is an error Response when ``on_error`` is ``"warn"`` or
+            ``"ignore"``.
 
         Raises:
-            ProviderError: If the vLLM call fails or the stop reason is
-                an error condition.
+            ProviderError: If the vLLM call fails or the stop reason is an
+                error condition, and ``on_error`` is ``"raise"``.
         """
         return self.batch_generate(
             messages=[messages],
@@ -576,7 +476,6 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
             gen_kwargs=gen_kwargs,
         )[0]
 
-    @auto_reduce_batch_size
     def batch_generate(
         self,
         *,
@@ -586,11 +485,9 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
     ) -> list[Response]:
         """Generate responses for a batch of conversations.
 
-        The full ``messages`` list is automatically split into chunks and each
-        chunk is dispatched to vLLM separately. On a CUDA out-of-memory error
-        the chunk size is halved and retried. Chunk size and minimum are
-        configured via the ``batch_size`` and ``min_batch_size`` constructor
-        arguments. Response order matches input order.
+        Every conversation goes to one ``LLM.chat`` call, which returns once
+        all of them are generated. vLLM decides how many run at the same time.
+        Response order matches input order.
 
         Args:
             messages: List of conversations, where each conversation is a list
@@ -603,10 +500,13 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
 
         Returns:
             A list of Response objects, one per input conversation, in the
-            same order as the input.
+            same order as the input. A failed call gives one error Response per
+            conversation when ``on_error`` is ``"warn"`` or ``"ignore"``.
 
         Raises:
-            ProviderError: If the model is not loaded or the vLLM call fails.
+            ProviderError: If the model is not loaded or the vLLM call fails,
+                and ``on_error`` is ``"raise"``.
+            ValueError: If the request asks for more than one response.
         """
         self._ensure_pipeline_loaded()
         if self._pipe is None:
@@ -629,6 +529,7 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
         resolved = options or VLLMOfflineRuntimeOptions()
         payload = resolved.to_payload()
         payload.update(gen_kwargs or {})
+        reject_multiple_responses(payload)
         try:
             sampling_params = SamplingParams(**payload)
         except TypeError as exc:
@@ -674,45 +575,65 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
 
         return responses
 
+    @contextmanager
+    def _cleanup_step(self, name: str) -> Iterator[None]:
+        """Run one clean-up step and log a failure instead of raising it.
+
+        Args:
+            name: Name of the step, used in the warning.
+
+        Yields:
+            Control to the body of the step.
+        """
+        try:
+            yield
+        except Exception as exc:
+            self._logger.warning(f"vLLM clean-up step '{name}' failed: {exc}")
+
     def destroy(self) -> None:
         """Free GPU memory and clean up all vLLM resources.
 
-        Safe to call multiple times; subsequent calls after the first are
-        no-ops. Also invoked automatically when the client is used as a
-        context manager.
+        Every step runs even when an earlier one fails, and a failed step is
+        logged at warning level with its name and the exception. Safe to call
+        multiple times; subsequent calls after the first are no-ops. Also
+        invoked automatically when the client is used as a context manager.
         """
         if self._pipe is None:
             return
 
-        try:
-            from torch import cuda
-            from vllm.distributed import (
-                destroy_distributed_environment,
-                destroy_model_parallel,
-            )
+        pipe = self._pipe
+        self._pipe = None
+
+        with self._cleanup_step("destroy model parallel"):
+            from vllm.distributed import destroy_model_parallel
 
             destroy_model_parallel()
+
+        with self._cleanup_step("destroy distributed environment"):
+            from vllm.distributed import destroy_distributed_environment
+
             destroy_distributed_environment()
 
-            try:
-                self._pipe.llm_engine.model_executor.shutdown()
-                del self._pipe.llm_engine.model_executor
-            except Exception:
-                pass
-            try:
-                self._pipe.llm_engine.engine_core.shutdown()
-                del self._pipe.llm_engine.engine_core
-            except Exception:
-                pass
+        with self._cleanup_step("shut down model executor"):
+            pipe.llm_engine.model_executor.shutdown()
+            del pipe.llm_engine.model_executor
 
-            del self._pipe.llm_engine
-            del self._pipe
+        with self._cleanup_step("shut down engine core"):
+            pipe.llm_engine.engine_core.shutdown()
+            del pipe.llm_engine.engine_core
+
+        with self._cleanup_step("release the engine"):
+            del pipe.llm_engine
+
+        # The last reference to the engine has to go before the allocator can
+        # hand its blocks back.
+        del pipe
+
+        with self._cleanup_step("free GPU memory"):
+            from torch import cuda
+
             cuda.empty_cache()
             gc.collect()
-        except Exception:
-            pass
-        finally:
-            self._pipe = None
 
     def _handle_stop_reason(
         self, *, stop_reason: str | None, num_output_tokens: int | None
@@ -753,5 +674,4 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
 __all__ = [
     "VLLMOfflineClient",
     "VLLMOfflineRuntimeOptions",
-    "auto_reduce_batch_size",
 ]
