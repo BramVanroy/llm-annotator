@@ -873,6 +873,70 @@ def test_dataset_config_accepts_data_files_shapes(
     assert config.data_files == data_files
 
 
+def test_local_data_paths_resolve_against_the_config_dir(
+    tmp_path: Path,
+) -> None:
+    config = DatasetConfig.model_validate(
+        {
+            "name": "json",
+            "data_dir": "data",
+            "data_files": {
+                "train": ["train/*.jsonl", "extra.jsonl"],
+                "test": "test.jsonl",
+            },
+        }
+    )
+
+    assert config.resolved_data_dir(tmp_path) == str(tmp_path / "data")
+    assert config.resolved_data_files(tmp_path) == {
+        "train": [
+            str(tmp_path / "train/*.jsonl"),
+            str(tmp_path / "extra.jsonl"),
+        ],
+        "test": str(tmp_path / "test.jsonl"),
+    }
+
+
+def test_a_local_directory_name_is_a_local_source(tmp_path: Path) -> None:
+    (tmp_path / "corpus").mkdir()
+    config = DatasetConfig.model_validate(
+        {"name": "corpus", "data_files": "part-*.parquet"}
+    )
+
+    assert config.is_local_source(tmp_path)
+    assert config.resolved_data_files(tmp_path) == str(
+        tmp_path / "part-*.parquet"
+    )
+
+
+@pytest.mark.parametrize(
+    "name, data_files",
+    [
+        ("stanfordnlp/imdb", "plain_text/train-*.parquet"),
+        ("json", "https://example.com/data.jsonl"),
+        ("json", "hf://datasets/user/repo/a.jsonl"),
+    ],
+)
+def test_data_files_that_are_not_local_paths_are_left_alone(
+    tmp_path: Path, name: str, data_files: str
+) -> None:
+    config = DatasetConfig.model_validate(
+        {"name": name, "data_files": data_files}
+    )
+
+    assert config.resolved_data_files(tmp_path) == data_files
+
+
+def test_absolute_data_paths_are_left_alone(tmp_path: Path) -> None:
+    absolute = str(tmp_path / "somewhere" / "data.jsonl")
+    config = DatasetConfig.model_validate(
+        {"name": "json", "data_dir": "/data", "data_files": absolute}
+    )
+
+    assert config.resolved_data_dir(tmp_path) == "/data"
+    assert config.resolved_data_files(tmp_path) == absolute
+
+
 def test_dataset_config_data_dir_and_data_files_reject_path() -> None:
     with pytest.raises(ValueError, match="only apply to 'name'"):
         DatasetConfig.model_validate({"path": "b", "data_dir": "d"})

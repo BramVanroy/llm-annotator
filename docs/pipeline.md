@@ -53,6 +53,23 @@ resolves against the directory holding the config file, never against your
 current working directory. A config directory is therefore self-contained and
 can be copied to a cluster or shared with a colleague as a unit.
 
+`dataset.data_dir` and `dataset.data_files` follow the same rule when
+`dataset.name` names a local source: one of the packaged builders (`json`,
+`csv`, `parquet`, `text`, `arrow`, ...) or a directory on disk. Glob patterns
+are prefixed rather than expanded, so `data_files: data/*.jsonl` keeps working
+from any directory:
+
+```yaml
+dataset:
+  name: json
+  split: train
+  data_files: data/*.jsonl    # <config dir>/data/*.jsonl
+```
+
+A URL (`https://`, `hf://`, ...) and an absolute path are left alone. So are
+the `data_files` of a Hub dataset id, which are patterns inside that
+repository rather than paths on this machine.
+
 The `--output-dir` CLI flag is the one exception: since it is typed at the
 shell rather than written into the config, it resolves against your current
 working directory instead, the same as the `config` argument itself.

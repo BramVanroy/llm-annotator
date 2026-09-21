@@ -448,8 +448,8 @@ def _run_step(
             kwargs["dataset_name"] = source.name
             kwargs["dataset_config"] = source.config
             kwargs["dataset_split"] = source.split
-            kwargs["data_dir"] = source.data_dir
-            kwargs["data_files"] = source.data_files
+            kwargs["data_dir"] = source.resolved_data_dir(root)
+            kwargs["data_files"] = source.resolved_data_files(root)
 
     if is_first and config.dataset is not None:
         kwargs["max_num_samples"] = config.dataset.max_num_samples

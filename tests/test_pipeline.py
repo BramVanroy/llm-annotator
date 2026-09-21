@@ -382,6 +382,46 @@ def test_pipeline_runs_over_local_jsonl_data_files(
     assert len(dataset) == 2
 
 
+def test_relative_data_files_resolve_against_the_config_dir(
+    tmp_path: Path,
+    built_clients: list[EchoClient],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Run from another directory: a relative 'data_files' glob belongs to the
+    # config file, like every other path in a config.
+    source_jsonl_dir(tmp_path, num_rows=2)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    config = two_step_config(
+        tmp_path,
+        dataset={"name": "json", "data_files": "source_jsonl/*.jsonl"},
+    )
+
+    dataset = run_pipeline(config)
+
+    assert len(dataset) == 2
+
+
+def test_relative_data_dir_resolves_against_the_config_dir(
+    tmp_path: Path,
+    built_clients: list[EchoClient],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_jsonl_dir(tmp_path, num_rows=3)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    config = two_step_config(
+        tmp_path,
+        dataset={"name": "json", "data_dir": "source_jsonl"},
+    )
+
+    dataset = run_pipeline(config)
+
+    assert len(dataset) == 3
+
+
 # --- chaining ----------------------------------------------------------------
 
 

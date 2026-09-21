@@ -12,6 +12,7 @@ import dataclasses
 import glob
 import inspect
 import json
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -51,6 +52,32 @@ StepKind = Literal["vllm_pool", "vllm_online", "vllm_offline", "api"]
 
 DEFAULT_MAX_CONCURRENT_BATCHES = 4
 """Simultaneous batch requests per vLLM server unless a step says otherwise."""
+
+LOCAL_DATASET_BUILDERS = frozenset(
+    {
+        "arrow",
+        "audiofolder",
+        "csv",
+        "imagefolder",
+        "json",
+        "pandas",
+        "parquet",
+        "sql",
+        "text",
+        "videofolder",
+        "webdataset",
+        "xml",
+    }
+)
+"""``datasets`` builder names that read files from the local machine.
+
+A ``dataset.name`` from this set makes ``data_dir`` and ``data_files`` local
+paths, which resolve against the config file's directory like every other path
+in a config.
+"""
+
+_URL_SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://")
+"""What a ``data_files`` entry looks like when it is not a local path."""
 
 
 def load_config_file(path: str | Path) -> dict[str, Any]:
@@ -204,6 +231,47 @@ def _options_class(provider: ProviderName) -> type[ProviderRuntimeOptions]:
 
         return VLLMOfflineRuntimeOptions
     raise ValueError(f"Unknown provider '{provider}'.")
+
+
+def _resolve_data_path(value: str, root: Path) -> str:
+    """Resolve one ``data_dir`` or ``data_files`` entry against a directory.
+
+    Args:
+        value: The entry as written in the config, possibly a glob pattern.
+        root: Directory that relative paths resolve against.
+
+    Returns:
+        The entry with a relative local path made absolute. A URL and an
+        absolute path are returned unchanged.
+
+    Examples:
+        >>> from pathlib import Path
+        >>> _resolve_data_path("data/*.jsonl", Path("/cfg"))
+        '/cfg/data/*.jsonl'
+        >>> _resolve_data_path("hf://datasets/user/repo/a.json", Path("/cfg"))
+        'hf://datasets/user/repo/a.json'
+    """
+    if _URL_SCHEME.match(value):
+        return value
+    candidate = Path(value).expanduser()
+    if candidate.is_absolute():
+        return str(candidate)
+    return str(root / candidate)
+
+
+def _resolve_data_files(value: str | list[str], root: Path) -> str | list[str]:
+    """Resolve one ``data_files`` value, which may be a list.
+
+    Args:
+        value: A single entry or a list of them.
+        root: Directory that relative paths resolve against.
+
+    Returns:
+        The same shape, with relative local paths made absolute.
+    """
+    if isinstance(value, str):
+        return _resolve_data_path(value, root)
+    return [_resolve_data_path(entry, root) for entry in value]
 
 
 def _provider_bound_keys(provider: ProviderName) -> set[str]:
@@ -397,6 +465,73 @@ class DatasetConfig(_StrictBase):
                 "'data_dir' and 'data_files' only apply to 'name', not 'path'."
             )
         return self
+
+    def is_local_source(self, root: Path) -> bool:
+        """Check whether ``name`` loads files from this machine.
+
+        Args:
+            root: Directory that relative paths resolve against.
+
+        Returns:
+            ``True`` for a packaged builder such as ``json`` or ``csv``, and
+            for a ``name`` that is a directory on disk. ``False`` for a Hub
+            dataset id, whose ``data_files`` are patterns inside the
+            repository.
+
+        Examples:
+            >>> from pathlib import Path
+            >>> DatasetConfig(name="json").is_local_source(Path("."))
+            True
+            >>> DatasetConfig(name="stanfordnlp/imdb").is_local_source(
+            ...     Path(".")
+            ... )
+            False
+        """
+        if self.name is None:
+            return False
+        if self.name in LOCAL_DATASET_BUILDERS:
+            return True
+        return _resolve_path(self.name, root).is_dir()
+
+    def resolved_data_dir(self, root: Path) -> str | None:
+        """Get ``data_dir`` with a relative local path made absolute.
+
+        Args:
+            root: Directory that relative paths resolve against.
+
+        Returns:
+            The directory as ``load_dataset`` should see it, or ``None`` when
+            the block names none.
+        """
+        if self.data_dir is None or not self.is_local_source(root):
+            return self.data_dir
+        return _resolve_data_path(self.data_dir, root)
+
+    def resolved_data_files(
+        self, root: Path
+    ) -> str | list[str] | dict[str, str | list[str]] | None:
+        """Get ``data_files`` with relative local paths made absolute.
+
+        Every shape the key accepts is kept: a single path, a list, or a
+        mapping of split name to either. Glob patterns are prefixed with
+        ``root`` rather than expanded, so ``datasets`` still resolves them.
+
+        Args:
+            root: Directory that relative paths resolve against.
+
+        Returns:
+            The files as ``load_dataset`` should see them, or ``None`` when
+            the block names none.
+        """
+        files = self.data_files
+        if files is None or not self.is_local_source(root):
+            return files
+        if isinstance(files, dict):
+            return {
+                split: _resolve_data_files(value, root)
+                for split, value in files.items()
+            }
+        return _resolve_data_files(files, root)
 
 
 class EngineConfig(_StrictBase):
