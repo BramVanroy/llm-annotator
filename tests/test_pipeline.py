@@ -23,6 +23,8 @@ from llm_annotator.clients.base import (
 from llm_annotator.config import ClientConfig, PipelineConfig
 from llm_annotator.pipeline import (
     STEP_ANNOTATE_SUBDIR,
+    STEP_OUTPUT_SUBDIR,
+    _is_complete,
     _load_input_dataset,
     _pool_source_override,
     main,
@@ -241,27 +243,27 @@ def two_step_config(tmp_path: Path, **overrides: Any) -> PipelineConfig:
     return PipelineConfig.model_validate(data)
 
 
-def three_step_config(tmp_path: Path) -> PipelineConfig:
+def three_step_config(tmp_path: Path, **overrides: Any) -> PipelineConfig:
     """Build a three-step pipeline, for testing selection contiguity."""
-    return PipelineConfig.model_validate(
-        {
-            "output_dir": tmp_path / "out",
-            "config_dir": tmp_path,
-            "verbose": False,
-            "dataset": {"path": source_dataset(tmp_path, num_rows=2)},
-            "client": {
-                "provider": "openai",
-                "model": "m",
-                "batch_size": 2,
-                "num_proc": None,
-            },
-            "steps": [
-                {"name": "one", "prompt": "1 {text}"},
-                {"name": "two", "prompt": "2 {text}"},
-                {"name": "three", "prompt": "3 {text}"},
-            ],
-        }
-    )
+    data: dict[str, Any] = {
+        "output_dir": tmp_path / "out",
+        "config_dir": tmp_path,
+        "verbose": False,
+        "dataset": {"path": source_dataset(tmp_path, num_rows=2)},
+        "client": {
+            "provider": "openai",
+            "model": "m",
+            "batch_size": 2,
+            "num_proc": None,
+        },
+        "steps": [
+            {"name": "one", "prompt": "1 {text}"},
+            {"name": "two", "prompt": "2 {text}"},
+            {"name": "three", "prompt": "3 {text}"},
+        ],
+    }
+    data.update(overrides)
+    return PipelineConfig.model_validate(data)
 
 
 def growth_config(
@@ -1470,7 +1472,7 @@ def test_pipeline_growth_selecting_only_the_stale_downstream_step_raises(
     big_source = source_dataset(tmp_path / "growth", num_rows=40)
     run_pipeline(growth_config(tmp_path, big_source, max_num_samples=10))
 
-    with pytest.raises(ValueError, match="finished for another selection"):
+    with pytest.raises(ValueError, match="finished with other settings"):
         run_pipeline(
             growth_config(tmp_path, big_source, max_num_samples=20),
             selected=["rate"],
@@ -1588,7 +1590,7 @@ def test_pipeline_growth_recovers_from_a_crash_during_extension(
     assert len(created[0].seen_prompts) == 10
 
 
-def test_legacy_run_without_a_selection_record_blocks_growth(
+def test_pipeline_refuses_a_step_record_without_components(
     tmp_path: Path, built_clients: list[EchoClient]
 ) -> None:
     config = two_step_config(tmp_path)
@@ -1598,39 +1600,13 @@ def test_legacy_run_without_a_selection_record_blocks_growth(
         config.step_dir(0) / STEP_ANNOTATE_SUBDIR,
         config.steps[0].resolved_task_prefix(),
     )
-    assert record_path.is_file()
-    record_path.unlink()
-
-    grown = two_step_config(
-        tmp_path,
-        dataset={"path": tmp_path / "source", "max_num_samples": 2},
+    record_path.write_text(
+        json.dumps({"max_num_samples": None, "selected_rows": 4}),
+        encoding="utf-8",
     )
-    with pytest.raises(
-        ValueError, match="did not record its sample selection"
-    ):
-        run_pipeline(grown)
 
-    # A second attempt raises again: the failed run must not have rewritten
-    # pipeline.json with the new, unrecorded cap.
-    with pytest.raises(
-        ValueError, match="did not record its sample selection"
-    ):
-        run_pipeline(grown)
-
-    # Restoring the original settings still works: nothing changed relative
-    # to what pipeline.json remembers.
-    restored = run_pipeline(two_step_config(tmp_path))
-    assert len(restored) == 4
-
-    # overwrite=True on a selection that includes step 1 skips the guard.
-    overwritten = run_pipeline(
-        two_step_config(
-            tmp_path,
-            overwrite=True,
-            dataset={"path": tmp_path / "source", "max_num_samples": 2},
-        )
-    )
-    assert len(overwritten) == 2
+    with pytest.raises(ValueError, match="does not describe the settings"):
+        run_pipeline(two_step_config(tmp_path))
 
 
 def test_generate_step_growth_sends_only_new_prompts(
@@ -1659,3 +1635,137 @@ def test_generate_step_editing_a_prompt_raises(
     edited[2] = "A different prompt entirely."
     with pytest.raises(ValueError, match="source dataset changed"):
         run_pipeline(generate_first_config(tmp_path, edited))
+
+
+# --- editing a step's settings --------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("edit", "expected"),
+    [
+        ({"prompt": "Ask something else: {text}"}, "the prompt template"),
+        ({"system_prompt": "Be brief."}, "the system message"),
+        ({"sort_by_length": True}, "'sort_by_length' changed"),
+    ],
+)
+def test_pipeline_rejects_an_edited_step(
+    tmp_path: Path,
+    built_clients: list[EchoClient],
+    edit: dict[str, Any],
+    expected: str,
+) -> None:
+    run_pipeline(two_step_config(tmp_path))
+    built_clients.clear()
+
+    edited = two_step_config(tmp_path)
+    for name, value in edit.items():
+        setattr(edited.steps[0], name, value)
+
+    with pytest.raises(ValueError, match=expected):
+        run_pipeline(edited)
+
+    # Refused before anything is removed, and without a model call.
+    assert built_clients == []
+    assert _is_complete(edited.step_dir(0) / STEP_OUTPUT_SUBDIR)
+    assert _is_complete(edited.step_dir(1) / STEP_OUTPUT_SUBDIR)
+
+
+def test_pipeline_rejects_an_edited_output_schema(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    run_pipeline(two_step_config(tmp_path))
+
+    edited = two_step_config(tmp_path)
+    edited.steps[1].output_schema = {
+        "type": "object",
+        "required": ["score"],
+        "properties": {"score": {"type": "integer"}},
+    }
+
+    with pytest.raises(ValueError, match="the output schema changed"):
+        run_pipeline(edited)
+
+
+def test_pipeline_overwrite_reruns_the_edited_step_and_the_next_one(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    run_pipeline(three_step_config(tmp_path))
+    built_clients.clear()
+
+    edited = three_step_config(tmp_path, overwrite=True)
+    edited.steps[1].prompt = "2! {text}"
+    run_pipeline(edited, selected=["two", "three"])
+
+    seen = [
+        prompt for client in built_clients for prompt in client.seen_prompts
+    ]
+    assert [prompt for prompt in seen if prompt.startswith("2! ")]
+    # The step before the edited one keeps its finished result.
+    assert not [prompt for prompt in seen if prompt.startswith("1 ")]
+
+
+def test_pipeline_step_outside_the_selection_must_match_too(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    run_pipeline(three_step_config(tmp_path))
+
+    edited = three_step_config(tmp_path)
+    edited.steps[1].prompt = "2! {text}"
+
+    with pytest.raises(ValueError, match="finished with other settings"):
+        run_pipeline(edited, selected=["three"])
+
+
+def _edited_write_config(tmp_path: Path, **overrides: Any) -> PipelineConfig:
+    """Build the two-step pipeline with another prompt in its first step."""
+    config = two_step_config(tmp_path, **overrides)
+    config.steps[0].prompt = "Ask something else about: {text}"
+    return config
+
+
+def test_pipeline_refuses_a_step_whose_input_was_annotated_again(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    run_pipeline(two_step_config(tmp_path))
+
+    # The way out of an edited prompt: 'write' is annotated again from
+    # scratch, so the questions that 'rate' judged no longer exist.
+    run_pipeline(_edited_write_config(tmp_path, overwrite=True), ["write"])
+    built_clients.clear()
+
+    with pytest.raises(
+        ValueError, match="annotated again from scratch"
+    ) as exc:
+        run_pipeline(_edited_write_config(tmp_path))
+
+    assert "--steps rate --overwrite" in str(exc.value)
+    assert built_clients == []
+
+    # That command annotates 'rate' against the new questions, and leaves
+    # 'write' alone.
+    result = run_pipeline(
+        _edited_write_config(tmp_path, overwrite=True), ["rate"]
+    )
+    assert [client.model for client in built_clients] == ["judge"]
+    assert all(
+        "Ask something else about" in prompt
+        for prompt in built_clients[0].seen_prompts
+    )
+    assert len(result) == 4
+
+
+def test_pipeline_growth_keeps_a_later_step_on_its_rows(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    # A step that resumes (rather than starting over) leaves the steps after
+    # it on the rows they already annotated.
+    big_source = source_dataset(tmp_path / "growth", num_rows=40)
+    run_pipeline(growth_config(tmp_path, big_source, max_num_samples=10))
+    built_clients.clear()
+
+    grown = run_pipeline(
+        growth_config(tmp_path, big_source, max_num_samples=20)
+    )
+
+    assert len(grown) == 20
+    assert [len(client.seen_prompts) for client in built_clients] == [10, 10]

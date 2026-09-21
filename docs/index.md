@@ -157,6 +157,12 @@ with Annotator(client=client, verbose=True) as anno:
 To force a fresh preparation even when local or Hub artifacts exist, pass
 `force_data_preparation=True` to `prepare_data` (or to `annotate_dataset`).
 
+`prepare_data` records the settings that decide what the prepared data holds (the prompt template,
+the system message, `sort_by_length`, the source dataset and the rest) next to it. A later call
+with an edited prompt template is refused instead of reused, so one output never holds answers to
+two prompts. See [Growing a run](growing-a-run.md) for what may change, what is rejected, and the
+way out.
+
 ### Errors and retries
 
 A client's `on_error` setting (`"raise"`, `"warn"` or `"ignore"`) decides what

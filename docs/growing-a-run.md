@@ -59,10 +59,18 @@ go through `sentiment` and then through `confidence`.
 
 ## What must stay the same
 
-Two things must match the finished run:
+Every setting that decides what a row's prompt and answer mean must match the finished run, or
+the run is rejected (see below):
 
 - `shuffle_seed`, unset or set to the same value.
 - The source dataset, unless it only had rows appended to it (see below).
+- The prompt template.
+- The system message.
+- `sort_by_length`.
+- `idx_column`.
+- `reuse_idx_column`.
+- `preprocess_fn`.
+- The output schema.
 
 `max_num_samples` is the value that changes, and it can only go up.
 
@@ -71,19 +79,63 @@ Two things must match the finished run:
 !!! warning "Nothing is deleted before the check"
 
     Something that would give the finished rows another meaning raises a `ValueError` that names
-    the cause, before any file is touched:
+    every cause, before any file is touched:
 
     - A changed `shuffle_seed`. With another seed the permutation is different, so the rows behind
       a given id are no longer the ones that were judged.
     - A changed source dataset, other than rows appended to a source that has no `shuffle_seed`.
     - A lower `max_num_samples` than the finished run selected. Shrinking the selection would drop
       rows that already have an answer.
+    - An edited prompt template, system message, `sort_by_length`, `idx_column`,
+      `reuse_idx_column` or `preprocess_fn`. The rows that are already annotated answer a question
+      the new request does not ask.
+    - An edited output schema. The columns a finished row has depend on it, so mixing two schemas
+      in one output is refused the same way.
 
-The error message names three ways out: restore the old value, use a new `output_dir` for the
-different run, or pass `--overwrite` (`overwrite: true`) to discard the finished work and start
-over. `--overwrite` deletes the directories of the selected steps, including every finished
-generation in them; it is not needed for a higher cap, since a plain re-run already annotates only
-the new rows.
+The message names every setting that changed, for example:
+
+```text
+The finished rows in 'outputs/run/progress_backup' cannot be reused: the prompt template changed.
+Restore the old value(s), use a new 'output_dir', or overwrite the run ('overwrite=True') to
+discard the finished rows and annotate every sample again. A run can only grow through a higher
+'max_num_samples' with the same settings, or through rows appended to a source that is not
+shuffled.
+```
+
+A pipeline names the command instead of `overwrite=True`, see
+[Editing a step](pipeline.md#editing-a-step).
+
+Three ways out: restore the old value, use a new `output_dir` for the different run, or pass
+`--overwrite` (`overwrite: true`) to discard the finished work and start over. `--overwrite`
+deletes the directories of the selected steps, including every finished generation in them; it is
+not needed for a higher cap, since a plain re-run already annotates only the new rows.
+
+## Editing a prompt mid-run
+
+Prompt development usually means a short run, a look at the answers, an edit, and another run. Stop
+the pilot from above partway through, change the prompt of the `sentiment` step and run the
+identical command again:
+
+```yaml title="pilot.yaml"
+steps:
+  - name: sentiment
+    prompt: "Classify the sentiment as positive, negative or neutral: {text}"   # edited
+```
+
+```bash
+llm-annotate pilot.yaml
+```
+
+The rows that `sentiment` already finished hold answers to the old prompt, so the run stops with the
+`ValueError` above. Pick one of the three ways out: put the old prompt back and keep those answers,
+point `output_dir` somewhere else to keep both versions on disk, or discard the old answers with
+`--overwrite`. In a pipeline the error names the command itself, here
+`llm-annotate pilot.yaml --steps sentiment confidence --overwrite`: the edited step and the steps
+that read it are annotated again, and the steps before it keep their results. See
+[Editing a step](pipeline.md#editing-a-step).
+
+An edit made before any row has been annotated has nothing to conflict with: the prepared data is
+rebuilt from the new prompt and the run continues, with an INFO line that names what changed.
 
 ## Appending rows without a shuffle
 
@@ -116,27 +168,55 @@ of one submission:
 `dataset.shuffle_seed` and any other config key work the same way. Set the cap on the submission
 rather than per job, so that all steps of one run agree about how many rows they select.
 
-## Runs made by an older version
+## Migrating an output directory
 
-A run whose first step finished under llm-annotator 0.16 or older has no selection record. Its
-later steps identified a row by its position in their input, and that position changes when the
-input grows. Such a run cannot grow. `run_pipeline` compares `dataset.max_num_samples` and
-`dataset.shuffle_seed` in the config against the values recorded in `<output_dir>/pipeline.json`
-from the first run, and raises when they differ and the first step has no selection record. An
-unchanged config keeps working as before.
+An `output_dir` from a release whose `selection.json` recorded only the sample selection cannot be
+resumed by this version. Such a record says nothing about the prompt, so a resume could not tell
+whether the finished rows answer the prompt that is asked for now. Reading it raises:
+
+```text
+The record in 'outputs/imdb-sentiment/selection.json' does not describe the settings that its run
+was annotated with, so a resume cannot tell whether the prompt still matches. Finish the run with
+the release that wrote it, annotate it into a new 'output_dir', or overwrite it. See 'Migrating an
+output directory' in docs/growing-a-run.md.
+```
+
+Three ways forward:
+
+- Finish the run with the release that wrote it, and let the next run start under this one.
+- Point `output_dir` at a new directory, which annotates every row again and leaves the old result
+  on disk.
+- Pass `--overwrite` (`overwrite: true`, or `overwrite=True` from Python) to discard the finished
+  rows in place and annotate every row again.
+
+A fourth way keeps the finished rows, at your own risk: delete the `selection.json` files under
+`output_dir` (inside a pipeline, `<NN>-<name>/annotate/<name>_selection.json`). Only the rows that
+never ran are then sent to the model. Nothing is compared, and the settings of that run are
+recorded as the ones the whole directory was annotated with. If the prompt changed since the
+finished rows were written, the output holds answers to both prompts and no later run can tell.
+Use it only when you know the settings did not change.
+
+```bash
+rm outputs/imdb-sentiment/*selection.json
+llm-annotate pilot.yaml
+```
 
 ## Limits
 
 - A source loaded by Hub id (`dataset.name`) is compared only when the prepared data is rebuilt; a
   plain re-run that reuses the local or Hub cache does not download the source to check it.
 - The source signature probes 64 rows. An edit to a row outside that probe is not detected.
-- A prepared-data backup restored from a Hub branch, on a machine with no local selection record,
-  is reused as is; there is nothing to compare it against.
-- `sort_by_length`, `batch_size` and the client settings may change between runs freely.
+- Prepared data reused with no record at all, which is a backup restored from the Hub branch on a
+  machine that never ran the preparation, is taken at face value: a WARNING says it is reused as it
+  is, and the current run's settings are recorded then, so a later edit to them is caught. The
+  record itself is local only; it is not stored on the Hub.
+- `batch_size` and the client settings may change between runs freely; they do not affect what the
+  prepared data holds.
 - A cap given with `--max-num-samples` is compared exactly like one written in the config: the run
   is judged on the resolved value, which `<output_dir>/pipeline.json` records.
-- A changed prompt or a changed `output_schema` is not detected. Finished rows keep the answers
-  they already have.
+- `preprocess_fn` is compared by its qualified name plus a hash of its source. When the source
+  cannot be read (a `functools.partial`, a C callable, a function defined in a REPL), a warning
+  says so and an edit to it is not detected.
 
 ## From Python
 
@@ -172,12 +252,15 @@ instead of numbering its rows again by position.
 [`Annotator.prepare_data`][llm_annotator.annotator.Annotator.prepare_data] writes a
 [`SelectionRecord`][llm_annotator.annotator.SelectionRecord] next to the prepared data, at
 `<output_dir>/<task_prefix>selection.json` (inside a pipeline:
-`<NN>-<name>/annotate/<name>_selection.json`). It holds `max_num_samples`, `shuffle_seed`, a
-signature of the source dataset, the source row count and the number of rows the cap selected. A
+`<NN>-<name>/annotate/<name>_selection.json`). It holds `max_num_samples`, the source row count,
+the number of rows the cap selected, and `components`: one short string per setting listed under
+[What must stay the same](#what-must-stay-the-same), keyed by the setting's name (a hash for a
+long value such as the prompt template, the value itself for a short one such as `shuffle_seed`). A
 later run compares its request against that record through
-[`SelectionRecord.is_stale`][llm_annotator.annotator.SelectionRecord.is_stale]: a higher cap with
-the same seed and source rebuilds the prepared data and resumes the step, and rows already in the
-step's progress files are not sent to the model again.
+[`SelectionRecord.changed_components`][llm_annotator.annotator.SelectionRecord.changed_components],
+which names the settings that differ: a higher cap with the same seed and source rebuilds the
+prepared data and resumes the step, and rows already in the step's progress files are not sent to
+the model again.
 
 The source signature comes from
 [`dataset_signature`][llm_annotator.utils.dataset_signature]: a SHA256 hash of the row count, the

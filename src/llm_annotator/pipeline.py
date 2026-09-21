@@ -25,19 +25,25 @@ point.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import shutil
 from pathlib import Path
 from typing import Any, Sequence
+from uuid import uuid4
 
 import yaml
 from datasets import Dataset
 
 from llm_annotator.annotator import (
+    _COMPONENT_CHANGES,
     PROGRESS_DS_LOCAL_SUBDIR,
     Annotator,
     SelectionRecord,
     VLLMQueueAnnotator,
+    _preparation_components,
+    _reuse_error,
+    _schema_component,
     is_retried_error,
 )
 from llm_annotator.config import (
@@ -80,29 +86,133 @@ def _is_complete(snapshot_dir: Path) -> bool:
     return snapshot_dir.is_dir() and (snapshot_dir / "state.json").is_file()
 
 
-def _selection_request(
-    config: PipelineConfig, dataset: Dataset | None, is_first: bool
-) -> dict[str, Any]:
-    """Build the selection that a step asks for, in the terms of its record.
+def _step_components(
+    config: PipelineConfig,
+    step: StepConfig,
+    dataset: Dataset | None,
+    is_first: bool,
+    upstream_token: str | None,
+) -> dict[str, str]:
+    """Describe the settings that a step's finished rows depend on.
+
+    The values must match what
+    [`prepare_data`][llm_annotator.annotator.Annotator.prepare_data] records
+    for the same step, so this mirrors the arguments that ``_run_step``
+    passes. ``upstream`` is the pipeline's own addition: the columns a step
+    reads are only the ones its input held when it ran.
 
     Args:
         config: The pipeline configuration.
+        step: The step to describe.
         dataset: The step's in-memory input, or ``None`` for a source that the
             annotator loads itself.
         is_first: Whether this is the pipeline's first step.
+        upstream_token: Token of the run of the step that produced the input.
 
     Returns:
-        Keyword arguments for
-        [`SelectionRecord.is_stale`][llm_annotator.annotator.SelectionRecord.is_stale].
+        One short string per setting, keyed by the setting's name.
     """
+    root = config.config_dir
     source = config.dataset if is_first else None
-    return {
-        "max_num_samples": source.max_num_samples if source else None,
-        "shuffle_seed": source.shuffle_seed if source else None,
-        "source_signature": (
+    template = (
+        _generate_template(step, root)
+        if step.type == "generate"
+        else step.resolved_prompt(root)
+    )
+    components = _preparation_components(
+        prompt_template=template or "",
+        system_message=step.resolved_system_prompt(root),
+        sort_by_length=step.sort_by_length,
+        idx_column=config.idx_column,
+        reuse_idx_column=not is_first,
+        shuffle_seed=source.shuffle_seed if source else None,
+        preprocess_fn=None,
+        source_signature=(
             dataset_signature(dataset) if dataset is not None else None
         ),
-    }
+    )
+    components["output_schema"] = _schema_component(
+        step.resolved_output_schema(root)
+    )
+    # The first step reads no other step, and a step whose record was removed
+    # by hand has no token, so an unknown token leaves the key out instead of
+    # reading as a changed one.
+    if upstream_token is not None:
+        components["upstream"] = upstream_token
+    return components
+
+
+def _record_step_run(
+    annotate_dir: Path,
+    task_prefix: str,
+    token: str,
+    upstream_token: str | None,
+) -> str | None:
+    """Add a finished step's own token and its input's token to its record.
+
+    Args:
+        annotate_dir: The directory the annotator wrote its record to.
+        task_prefix: The step's task prefix.
+        token: The token of this run of the step.
+        upstream_token: The token of the step that produced the input.
+
+    Returns:
+        The token that was recorded, or ``None`` when the step has no record
+        to attach it to, so that the next step compares against nothing.
+    """
+    record = SelectionRecord.read(annotate_dir, task_prefix)
+    if record is None:
+        return None
+    components = {**record.components, "run_token": token}
+    if upstream_token is not None:
+        components["upstream"] = upstream_token
+    dataclasses.replace(record, components=components).write(
+        annotate_dir, task_prefix
+    )
+    return token
+
+
+def _conflict_causes(
+    config: PipelineConfig, index: int, conflicting: list[str]
+) -> list[str]:
+    """Name the changes that keep a step from resuming, for its error.
+
+    Args:
+        config: The pipeline configuration.
+        index: Index of the step that cannot resume.
+        conflicting: Names of the components that differ from its record.
+
+    Returns:
+        One phrase per component, in the order they were given.
+    """
+    causes = []
+    for name in conflicting:
+        if name == "upstream":
+            causes.append(
+                f"step '{config.steps[index - 1].name}' was annotated again"
+                " from scratch"
+            )
+        else:
+            causes.append(_COMPONENT_CHANGES[name])
+    return causes
+
+
+def _step_remedy(config: PipelineConfig, index: int) -> str:
+    """Name the command that annotates a step and the ones after it again.
+
+    Args:
+        config: The pipeline configuration.
+        index: Index of the step that cannot resume.
+
+    Returns:
+        A sentence for [`_reuse_error`][llm_annotator.annotator._reuse_error].
+    """
+    names = " ".join(step.name for step in config.steps[index:])
+    return (
+        "Restore the old value(s), use a new 'output_dir', or re-run with"
+        f" '--steps {names} --overwrite' to annotate that step and the ones"
+        " that read it again from scratch."
+    )
 
 
 def _load_input_dataset(config: PipelineConfig) -> Dataset | None:
@@ -348,62 +458,6 @@ def _run_step(
     return annotator.annotate_dataset(**kwargs)
 
 
-def _check_unrecorded_run(
-    config: PipelineConfig, will_overwrite: bool
-) -> None:
-    """Refuse to grow a run whose finished steps carry no sample ids.
-
-    A first step that finished under a version without selection records
-    numbered its rows by position and dropped the ids afterwards. The later
-    steps of such a run cannot be resumed on a larger input, because their
-    progress files would name other rows than before. The previous cap and
-    seed come from ``pipeline.json``, so this check has to run before that
-    file is replaced.
-
-    Args:
-        config: The pipeline configuration.
-        will_overwrite: Whether this run deletes the first step's directory.
-
-    Raises:
-        ValueError: If the first step finished without a record and the
-            config now asks for another cap or seed.
-    """
-    first_dir = config.step_dir(0)
-    record = SelectionRecord.read(
-        first_dir / STEP_ANNOTATE_SUBDIR,
-        config.steps[0].resolved_task_prefix(),
-    )
-    if (
-        will_overwrite
-        or record is not None
-        or not _is_complete(first_dir / STEP_OUTPUT_SUBDIR)
-    ):
-        return
-
-    try:
-        previous = json.loads(
-            (config.output_dir / "pipeline.json").read_text(encoding="utf-8")
-        )
-    except (OSError, json.JSONDecodeError):
-        return
-
-    before = previous.get("dataset") or {}
-    now = config.dataset.model_dump() if config.dataset else {}
-    changed = [
-        key
-        for key in ("max_num_samples", "shuffle_seed")
-        if before.get(key) != now.get(key)
-    ]
-    if changed:
-        raise ValueError(
-            f"Step '{config.steps[0].name}' finished under a version of"
-            " llm-annotator that did not record its sample selection, and"
-            f" {changed} changed since. Such a run cannot grow, because its"
-            " later steps did not keep a stable sample id. Restore the old"
-            " value(s), use a new 'output_dir', or pass --overwrite."
-        )
-
-
 def _resolve_selection(
     config: PipelineConfig, selected: Sequence[str] | None
 ) -> range:
@@ -489,7 +543,6 @@ def run_pipeline(
     chosen = _resolve_selection(config, selected)
 
     config.output_dir.mkdir(parents=True, exist_ok=True)
-    _check_unrecorded_run(config, config.overwrite and 0 in chosen)
     snapshot = config.output_dir / "pipeline.json"
     snapshot.write_text(
         json.dumps(config.model_dump(mode="json"), indent=2, default=str),
@@ -501,6 +554,7 @@ def run_pipeline(
     active_client_key: str | None = None
     runs_last_step = chosen.stop >= len(config.steps)
     retried_idxs: set[Any] = set()
+    upstream_token: str | None = None
 
     try:
         for index, step in enumerate(config.steps):
@@ -509,6 +563,7 @@ def run_pipeline(
 
             step_dir = config.step_dir(index)
             step_output = step_dir / STEP_OUTPUT_SUBDIR
+            task_prefix = step.resolved_task_prefix()
             label = f"Step {index + 1}/{len(config.steps)} '{step.name}'"
 
             # Only wipe what this run is actually going to redo; a step outside
@@ -521,7 +576,6 @@ def run_pipeline(
                 dataset = _generate_dataset(step, config.config_dir)
 
             if retry_errors and index in chosen:
-                task_prefix = step.resolved_task_prefix()
                 retried_rows = drop_jsonl_rows(
                     step_dir
                     / STEP_ANNOTATE_SUBDIR
@@ -543,29 +597,43 @@ def run_pipeline(
                     " again (retry_errors)."
                 )
 
-            is_outdated = False
-            if _is_complete(step_output):
-                request = _selection_request(config, dataset, index == 0)
-                record = SelectionRecord.read(
-                    step_dir / STEP_ANNOTATE_SUBDIR,
-                    step.resolved_task_prefix(),
-                )
-                is_outdated = bool(retried_idxs) or (
-                    record is not None and record.is_stale(**request)
-                )
-                if not is_outdated:
-                    LOGGER.info(
-                        f"{label}: already finished, loading its result from"
-                        f" '{step_output}'."
+            annotate_dir = step_dir / STEP_ANNOTATE_SUBDIR
+            progress_dir = (
+                annotate_dir / f"{task_prefix}{PROGRESS_DS_LOCAL_SUBDIR}"
+            )
+            record = SelectionRecord.read(annotate_dir, task_prefix)
+            changed: list[str] = []
+            is_outdated = bool(retried_idxs)
+            if record is not None:
+                changed = record.changed_components(
+                    _step_components(
+                        config, step, dataset, index == 0, upstream_token
                     )
-                    dataset = Dataset.load_from_disk(str(step_output))
-                    continue
+                )
+                source = config.dataset if index == 0 else None
+                cap = source.max_num_samples if source else None
+                is_outdated = (
+                    is_outdated
+                    or bool(changed)
+                    or record.max_num_samples != cap
+                )
+
+            if _is_complete(step_output) and not is_outdated:
+                LOGGER.info(
+                    f"{label}: already finished, loading its result from"
+                    f" '{step_output}'."
+                )
+                dataset = Dataset.load_from_disk(str(step_output))
+                upstream_token = (
+                    record.components.get("run_token") if record else None
+                )
+                continue
 
             if index not in chosen:
                 reason = (
-                    "finished for another selection of samples than the one"
-                    " that is requested now"
-                    if is_outdated
+                    "finished with other settings than the ones that are"
+                    " requested now"
+                    if _is_complete(step_output)
                     else "not run yet"
                 )
                 raise ValueError(
@@ -574,10 +642,26 @@ def run_pipeline(
                     " or select it too."
                 )
 
-            if is_outdated:
+            # A changed input is what growth looks like from a later step, so
+            # it is resumed. Every other change gives the finished rows
+            # another meaning, and the step's own result is still on disk, so
+            # this is refused before anything is removed.
+            conflicting = [name for name in changed if name != "dataset"]
+            if (
+                conflicting
+                and not config.overwrite
+                and any(progress_dir.glob("*.jsonl"))
+            ):
+                raise _reuse_error(
+                    progress_dir,
+                    _conflict_causes(config, index, conflicting),
+                    _step_remedy(config, index),
+                )
+
+            if _is_complete(step_output):
                 if not retried_idxs:
                     LOGGER.info(
-                        f"{label}: its input or sample selection changed"
+                        f"{label}: its input or its sample selection changed"
                         " since it finished. Resuming it; rows in its"
                         " progress files are not sent to the model again."
                     )
@@ -585,6 +669,13 @@ def run_pipeline(
                 # record, and a crash after that would leave an old result
                 # that passes for a finished one.
                 shutil.rmtree(step_output, ignore_errors=True)
+
+            # A step that starts with nothing in its progress files answers
+            # every row again, so the steps that read it must not keep the
+            # rows they annotated on the previous answers.
+            token = record.components.get("run_token") if record else None
+            if token is None or not any(progress_dir.glob("*.jsonl")):
+                token = uuid4().hex
 
             client_config = config.step_client(step)
             client_key = client_config.cache_key()
@@ -624,10 +715,10 @@ def run_pipeline(
                 step_dir=step_dir,
             )
             dataset = _postprocess_step(
-                dataset,
-                step,
-                step.resolved_task_prefix(),
-                annotator.num_proc,
+                dataset, step, task_prefix, annotator.num_proc
+            )
+            upstream_token = _record_step_run(
+                annotate_dir, task_prefix, token, upstream_token
             )
 
             dataset.save_to_disk(str(step_output))

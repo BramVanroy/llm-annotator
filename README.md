@@ -193,6 +193,9 @@ with Annotator(client=client, verbose=True) as anno:
 
 To force a fresh preparation (ignoring any cached or Hub-stored artifacts),
 pass `force_data_preparation=True` to `prepare_data` or to `annotate_dataset`.
+The settings that produced the prepared data are recorded next to it, so a
+later call with an edited prompt template is refused instead of reused. See
+[docs/growing-a-run.md](docs/growing-a-run.md).
 
 ### Run from a config file
 
