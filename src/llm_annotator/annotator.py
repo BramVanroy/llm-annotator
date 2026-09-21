@@ -2529,7 +2529,7 @@ class Annotator:
                         **{
                             k: v[i]
                             for k, v in batch.items()
-                            if keep_columns is True or k in keep_columns  # type: ignore[operator]
+                            if keep_columns is True or k in keep_columns
                         },
                         **res,
                     }
