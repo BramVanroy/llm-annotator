@@ -69,7 +69,6 @@ from llm_annotator.utils import (
     extract_prompt_prefix,
     get_hash,
     get_lib_versions,
-    read_jsonl_idx,
     remove_empty_jsonl_files,
 )
 
@@ -759,9 +758,7 @@ class Annotator:
         """Get indices of samples that have already been processed.
 
         Scans existing output files to determine which samples can be skipped
-        in resumed processing. Only the id is read out of every line
-        (``read_jsonl_idx``), unless a split or config filter is given, which
-        needs the whole row.
+        in resumed processing.
 
         A hard crash can leave a partially written final line behind. The code here
         is robust so that it can delete the last non-parseable JSON line and still recover.
@@ -782,8 +779,6 @@ class Annotator:
         if not (process_pdout.exists() and process_pdout.is_dir()):
             return ids_done
 
-        with_row = bool(dataset_split or dataset_config)
-
         for pfin in sorted(process_pdout.glob("*.jsonl")):
             # skip and remove empty files
             if pfin.stat().st_size == 0:
@@ -799,9 +794,7 @@ class Annotator:
                         continue
 
                     try:
-                        sample_idx, row = read_jsonl_idx(
-                            raw_line, idx_column, with_row=with_row
-                        )
+                        row = json.loads(raw_line)
                     except (json.JSONDecodeError, UnicodeDecodeError):
                         # Only the very last line can legitimately be broken.
                         # If a "next" line exists, the file is corrupt (mid-file
@@ -810,32 +803,32 @@ class Annotator:
                             raise
                         truncated = True
                         break
-                    except (KeyError, TypeError) as exc:
+
+                    valid_bytes += len(raw_line)
+
+                    if idx_column not in row:
                         raise ValueError(
                             f"Expected index column '{idx_column}' not found in existing output file '{pfin}'."
                             " Cannot determine which samples to skip on resume. Please check your configuration"
                             " and ensure the index column is included in the output."
-                        ) from exc
-
-                    valid_bytes += len(raw_line)
+                        )
 
                     # Filter on dataset split/config
-                    if row is not None:
-                        if (
-                            dataset_split
-                            and "dataset_split" in row
-                            and row["dataset_split"] != dataset_split
-                        ):
-                            continue
+                    if (
+                        dataset_split
+                        and "dataset_split" in row
+                        and row["dataset_split"] != dataset_split
+                    ):
+                        continue
 
-                        if (
-                            dataset_config
-                            and "dataset_config" in row
-                            and row["dataset_config"] != dataset_config
-                        ):
-                            continue
+                    if (
+                        dataset_config
+                        and "dataset_config" in row
+                        and row["dataset_config"] != dataset_config
+                    ):
+                        continue
 
-                    ids_done.add(sample_idx)
+                    ids_done.add(row[idx_column])
 
             if truncated:
                 self._logger.warning(
@@ -2419,11 +2412,8 @@ class Annotator:
         consecutive_failed_batches = 0
         try:
             for batch, results in annotated_batches:
-                # The id comes first so that a resume can read it from the
-                # start of the line instead of parsing the whole row.
                 rows = [
                     {
-                        idx_column: batch[idx_column][i],
                         **{
                             k: v[i]
                             for k, v in batch.items()

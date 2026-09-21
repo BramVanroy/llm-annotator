@@ -2253,8 +2253,8 @@ def test_get_skip_idxs_requires_idx_column(
 def test_get_skip_idxs_reads_rows_with_the_id_in_any_position(
     tmp_path: Path, dummy_annotator: Annotator
 ) -> None:
-    # A progress file from a run started before the id-first writer can hold
-    # rows with the id anywhere, and both must still be counted as done.
+    # The id column can sit anywhere in a row, since the writer emits the
+    # kept source columns in their own order. Both rows count as done.
     p = tmp_path / "out"
     p.mkdir()
     (p / "out.jsonl").write_text(
@@ -3352,41 +3352,6 @@ def test_overwrite_removes_the_final_dataset_of_the_task(
 
     assert not (out_dir / "data-00000-of-00002.arrow").exists()
     assert Dataset.load_from_disk(out_dir)["response"] == ["Q: a"]
-
-
-def test_run_annotation_writes_the_id_first_in_every_progress_row(
-    tmp_path: Path,
-) -> None:
-    # Verifies the on-disk byte layout, not the dataset that is later loaded
-    # from it: the id must be the first key of the raw JSON line.
-    prepared_ds = Dataset.from_dict(
-        {
-            "idx": [0, 1],
-            "text": ["a", "b"],
-            "messages": [
-                [{"role": "user", "content": "Q: a"}],
-                [{"role": "user", "content": "Q: b"}],
-            ],
-        }
-    )
-    out_dir = tmp_path / "out"
-    Annotator(client=DummyClient(), batch_size=2).run_annotation(
-        output_dir=out_dir,
-        prompt_template="Q: {text}",
-        prepared_dataset=prepared_ds,
-        keep_idx_column=True,
-    )
-
-    lines = [
-        line
-        for pfin in sorted((out_dir / "progress_backup").glob("*.jsonl"))
-        for line in pfin.read_bytes().splitlines()
-        if line.strip()
-    ]
-    assert lines
-    for line in lines:
-        pairs = json.loads(line, object_pairs_hook=list)
-        assert pairs[0][0] == "idx"
 
 
 class _BlockingAnnotator:
