@@ -201,6 +201,32 @@ rm outputs/imdb-sentiment/*selection.json
 llm-annotate pilot.yaml
 ```
 
+### A finished step with no record
+
+Inside a pipeline the same rule applies per step, and a step that already
+finished needs one extra move. Its `output/` snapshot is what a re-run loads
+instead of running the step, and with no record next to it nothing can say
+whether that snapshot belongs to the config that is being run now, so the run
+stops:
+
+```text
+Step 'sentiment' finished into 'outputs/imdb-sentiment/01-sentiment/output', but there is no record
+of the settings it was annotated with, so this run cannot tell whether its result still matches the
+config. Remove 'outputs/imdb-sentiment/01-sentiment/output' to run the step again: the rows in its
+progress files are not sent to the model a second time. See 'Migrating an output directory' in
+docs/growing-a-run.md.
+```
+
+Removing the `output/` directory is cheap: the step runs again, reads the ids
+it already finished out of its JSONL progress files, annotates only what is
+missing (nothing, for a step that had finished) and writes the snapshot again,
+this time with a record next to it.
+
+```bash
+rm -r outputs/imdb-sentiment/*/output
+llm-annotate pilot.yaml
+```
+
 ## Limits
 
 - A source loaded by Hub id (`dataset.name`) is compared only when the prepared data is rebuilt; a

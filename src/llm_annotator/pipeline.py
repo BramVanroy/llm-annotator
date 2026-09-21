@@ -218,6 +218,26 @@ def _step_remedy(config: PipelineConfig, index: int) -> str:
     )
 
 
+def _unrecorded_step_error(step_name: str, step_output: Path) -> ValueError:
+    """Build the error for a finished step that has no record of its settings.
+
+    Args:
+        step_name: Name of the step.
+        step_output: The step's ``output`` directory.
+
+    Returns:
+        The error to raise.
+    """
+    return ValueError(
+        f"Step '{step_name}' finished into '{step_output}', but there is no"
+        " record of the settings it was annotated with, so this run cannot"
+        " tell whether its result still matches the config. Remove"
+        f" '{step_output}' to run the step again: the rows in its progress"
+        " files are not sent to the model a second time. See 'Migrating an"
+        " output directory' in docs/growing-a-run.md."
+    )
+
+
 def _load_input_dataset(config: PipelineConfig) -> Dataset | None:
     """Load the pipeline's source dataset when it lives on disk.
 
@@ -552,7 +572,7 @@ def run_pipeline(
         encoding="utf-8",
     )
 
-    dataset: Dataset | None = _load_input_dataset(config)
+    dataset: Dataset | None = None
     annotator: Annotator | None = None
     active_client_key: str | None = None
     runs_last_step = chosen.stop >= len(config.steps)
@@ -574,6 +594,12 @@ def run_pipeline(
             if config.overwrite and index in chosen and step_dir.is_dir():
                 LOGGER.info(f"{label}: removing '{step_dir}' (overwrite).")
                 shutil.rmtree(step_dir, ignore_errors=True)
+
+            # The source belongs to the first step, so a run that starts at a
+            # later one never touches it: it reads the output of the step
+            # before it instead.
+            if index == 0 and index in chosen:
+                dataset = _load_input_dataset(config)
 
             if step.type == "generate":
                 dataset = _generate_dataset(step, config.config_dir)
@@ -620,6 +646,15 @@ def run_pipeline(
                     or bool(changed)
                     or record.max_num_samples != cap
                 )
+
+            # Without a record there is nothing to compare this run against,
+            # so the snapshot cannot be taken for the result of this config.
+            if (
+                _is_complete(step_output)
+                and record is None
+                and not is_outdated
+            ):
+                raise _unrecorded_step_error(step.name, step_output)
 
             if _is_complete(step_output) and not is_outdated:
                 LOGGER.info(

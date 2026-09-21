@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -1740,6 +1741,60 @@ def test_pipeline_refuses_a_step_record_without_components(
 
     with pytest.raises(ValueError, match="does not describe the settings"):
         run_pipeline(two_step_config(tmp_path))
+
+
+@pytest.mark.parametrize("step_index", [0, 1])
+def test_pipeline_refuses_a_finished_step_without_a_record(
+    tmp_path: Path, built_clients: list[EchoClient], step_index: int
+) -> None:
+    # A step that finished under a release that wrote no record must not pass
+    # for up to date, in the first step and in every later one.
+    config = two_step_config(tmp_path)
+    run_pipeline(config)
+
+    SelectionRecord.path(
+        config.step_dir(step_index) / STEP_ANNOTATE_SUBDIR,
+        config.steps[step_index].resolved_task_prefix(),
+    ).unlink()
+
+    with pytest.raises(ValueError, match="no record of the settings"):
+        run_pipeline(two_step_config(tmp_path))
+
+
+def test_a_step_without_a_record_rebuilds_from_its_progress_files(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    # What the error tells the user to do: remove the snapshot, keep the
+    # finished rows.
+    config = two_step_config(tmp_path)
+    run_pipeline(config)
+    SelectionRecord.path(
+        config.step_dir(1) / STEP_ANNOTATE_SUBDIR,
+        config.steps[1].resolved_task_prefix(),
+    ).unlink()
+    shutil.rmtree(config.step_dir(1) / STEP_OUTPUT_SUBDIR)
+    built_clients.clear()
+
+    dataset = run_pipeline(two_step_config(tmp_path))
+
+    assert len(dataset) == 4
+    # The step ran again, but every row was already in its progress files.
+    assert [client.seen_prompts for client in built_clients] == [[]]
+
+
+def test_a_later_step_runs_without_the_source_dataset(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    # '--steps rate' reads step 1's output, so the source it was built from
+    # does not have to exist any more.
+    config = two_step_config(tmp_path)
+    run_pipeline(config, selected=["write"])
+    shutil.rmtree(tmp_path / "source")
+
+    dataset = run_pipeline(two_step_config(tmp_path), selected=["rate"])
+
+    assert len(dataset) == 4
+    assert "rating" in dataset.column_names
 
 
 def test_generate_step_growth_sends_only_new_prompts(
