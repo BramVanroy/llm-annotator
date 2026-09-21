@@ -395,4 +395,6 @@ Local docs preview with mike:
 make serve-docs
 ```
 
-The API reference section is generated from source code docstrings.
+The "User API" and "Internals" sections are generated from source code
+docstrings. "User API" covers what the documented workflow uses; "Internals"
+covers the modules that the package builds on.

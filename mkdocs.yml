@@ -155,18 +155,19 @@ nav:
   - Growing a run: growing-a-run.md
   - SLURM: slurm.md
   - Provider setup: provider-info.md
-  - API reference:
+  - User API:
       - Annotator: api/annotator.md
       - Pipeline: api/pipeline.md
       - Config: api/config.md
       - Hub restore: api/hub.md
-      - Pool: api/pool.md
       - Clients:
-          - Base: api/clients/base.md
           - Claude: api/clients/claude.md
           - OpenAI: api/clients/openai.md
           - vLLM (online): api/clients/vllm_online_client.md
           - vLLM (offline): api/clients/vllm_offline_client.md
           - Exceptions: api/clients/exceptions.md
+  - Internals:
+      - Client base: api/clients/base.md
+      - Pool: api/pool.md
       - Utils: api/utils.md
       - Logging: api/logging_utils.md
