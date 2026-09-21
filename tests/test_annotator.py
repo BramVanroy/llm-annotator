@@ -2910,3 +2910,124 @@ def test_run_annotation_overwrite_keeps_the_selection_record(
     )
 
     assert record_path.is_file()
+
+
+class CrashingClient(DummyClient):
+    """A DummyClient that fails every request with a RuntimeError."""
+
+    def batch_generate(
+        self,
+        *,
+        messages: list[list[dict[str, str]]],
+        options: ProviderRuntimeOptions | None = None,
+        gen_kwargs: dict[str, Any] | None = None,
+    ) -> list[Response]:
+        _ = messages
+        _ = options
+        _ = gen_kwargs
+        raise RuntimeError("backend down")
+
+
+def test_overwrite_keeps_the_prepared_data_of_a_crashed_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Verifies a crashed overwrite run leaves its prepared data on disk and
+    # that the next run reuses it instead of preparing it again.
+    out_dir = tmp_path / "out"
+    ds = Dataset.from_dict({"text": ["a", "b"]})
+    kwargs: dict[str, Any] = {
+        "output_dir": out_dir,
+        "prompt_template": "Q: {text}",
+        "dataset": ds,
+        "upload_every_n_samples": 0,
+        "overwrite": True,
+    }
+
+    with pytest.raises(RuntimeError, match="backend down"):
+        Annotator(client=CrashingClient()).annotate_dataset(**kwargs)
+
+    assert (out_dir / "prepared_dataset").is_dir()
+    assert SelectionRecord.path(out_dir).is_file()
+
+    def _no_rebuild(self: Annotator, **_kwargs: Any) -> Dataset:
+        raise AssertionError("the prepared data was rebuilt")
+
+    monkeypatch.setattr(Annotator, "_load_dataset", _no_rebuild)
+    result = Annotator(client=DummyClient()).annotate_dataset(**kwargs)
+
+    assert result["response"] == ["Q: a", "Q: b"]
+
+
+def test_overwrite_spares_the_artifacts_of_another_task(
+    tmp_path: Path,
+) -> None:
+    # Verifies two tasks can share one output_dir: overwriting the second
+    # leaves the first task's progress files, prepared data, record and
+    # metadata file in place.
+    out_dir = tmp_path / "out"
+    annotator = Annotator(client=DummyClient())
+    ds = Dataset.from_dict({"text": ["a", "b"]})
+
+    annotator.annotate_dataset(
+        output_dir=out_dir,
+        prompt_template="Q: {text}",
+        dataset=ds,
+        task_prefix="first_",
+        keep_idx_column=True,
+        upload_every_n_samples=0,
+    )
+    # A finished run removes its own prepared data, so put a file back that
+    # stands for the prepared data of a task that is still running.
+    (out_dir / "first_prepared_dataset").mkdir()
+    (out_dir / "first_prepared_dataset" / "state.json").write_text(
+        "{}", encoding="utf-8"
+    )
+    first_rows = sorted((out_dir / "first_progress_backup").glob("*.jsonl"))
+    assert first_rows
+
+    annotator.annotate_dataset(
+        output_dir=out_dir,
+        prompt_template="A: {text}",
+        dataset=ds,
+        task_prefix="second_",
+        keep_idx_column=True,
+        upload_every_n_samples=0,
+        overwrite=True,
+    )
+
+    assert sorted((out_dir / "first_progress_backup").glob("*.jsonl")) == (
+        first_rows
+    )
+    assert (out_dir / "first_prepared_dataset" / "state.json").is_file()
+    assert SelectionRecord.path(out_dir, "first_").is_file()
+    assert (out_dir / "metadata" / "first_annotation_metadata.json").is_file()
+    assert (out_dir / "metadata" / "second_annotation_metadata.json").is_file()
+    assert (out_dir / "metadata" / "_version.json").is_file()
+
+
+def test_overwrite_removes_the_final_dataset_of_the_task(
+    tmp_path: Path,
+) -> None:
+    # Verifies the shared final dataset in the root is replaced rather than
+    # merged with the shards of the run before it.
+    out_dir = tmp_path / "out"
+    annotator = Annotator(client=DummyClient())
+
+    annotator.annotate_dataset(
+        output_dir=out_dir,
+        prompt_template="Q: {text}",
+        dataset=Dataset.from_dict({"text": ["a", "b", "c"]}),
+        upload_every_n_samples=0,
+    )
+    (out_dir / "data-00000-of-00002.arrow").write_bytes(b"stale")
+
+    annotator.annotate_dataset(
+        output_dir=out_dir,
+        prompt_template="Q: {text}",
+        dataset=Dataset.from_dict({"text": ["a"]}),
+        upload_every_n_samples=0,
+        overwrite=True,
+    )
+
+    assert not (out_dir / "data-00000-of-00002.arrow").exists()
+    assert Dataset.load_from_disk(out_dir)["response"] == ["Q: a"]

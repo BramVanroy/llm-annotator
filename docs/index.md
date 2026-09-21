@@ -163,6 +163,38 @@ with an edited prompt template is refused instead of reused, so one output never
 two prompts. See [Growing a run](growing-a-run.md) for what may change, what is rejected, and the
 way out.
 
+### Several tasks in one output directory
+
+`task_prefix` is put in front of every column that the annotator writes and in front of every
+artifact it stores, so two tasks can annotate the same data into one `output_dir` (and one
+`hub_id`) without reading each other's progress files:
+
+```python
+for task, prompt in (("sentiment_", "Sentiment: {text}"), ("topic_", "Topic: {text}")):
+    ds = anno.annotate_dataset(
+        output_dir="outputs/imdb",
+        prompt_template=prompt,
+        dataset=ds,
+        task_prefix=task,
+        keep_columns=True,
+    )
+```
+
+Each task gets its own `<task_prefix>prepared_dataset/`, `<task_prefix>progress_backup/`,
+`<task_prefix>selection.json` and `metadata/<task_prefix>annotation_metadata.json`, and its own
+pair of Hub branches.
+
+The final dataset is shared: it is written to the root of `output_dir` and pushed to the `main`
+branch of `hub_id`, and the task that finishes last replaces it. That is the point of the example
+above. Each call reads the previous result and, with `keep_columns=True`, carries its columns
+along, so the dataset that stays behind holds the columns of every task. Two tasks that must end in
+two datasets need two `output_dir` values.
+
+`overwrite=True` discards the finished rows of one task: its progress files, its Hub progress
+branch, its metadata file and the shared final dataset in the root, which the run writes again. It
+keeps that task's prepared data (so a crashed run does not prepare it a second time) and everything
+that belongs to another `task_prefix`.
+
 ### Errors and retries
 
 A client's `on_error` setting (`"raise"`, `"warn"` or `"ignore"`) decides what
@@ -204,7 +236,7 @@ it to 0 to disable both the abort and the hold-back.
 Every run ends with a log line that says how many samples finished with an
 error (with a count per `error_type`, which are the names that `retry_errors`
 takes) and how many have invalid fields. The same counts are written to
-`<output_dir>/metadata/annotation_metadata.json`.
+`<output_dir>/metadata/<task_prefix>annotation_metadata.json`.
 
 ### Many vLLM servers at once
 
