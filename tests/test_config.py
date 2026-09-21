@@ -1042,6 +1042,115 @@ def test_step_client_switching_provider_drops_stale_options() -> None:
     assert merged.options == {}
 
 
+def test_step_client_switching_provider_drops_inherited_init() -> None:
+    # The reproduction of issue #22: an inherited 'init' sent the OpenAI key
+    # and base URL to Anthropic.
+    config = PipelineConfig.model_validate(
+        minimal_config(
+            client={
+                "provider": "openai",
+                "model": "gpt-4o-mini",
+                "init": {
+                    "api_key": "sk-openai",
+                    "base_url": "https://api.openai.com/v1",
+                },
+            },
+            steps=[
+                {
+                    "name": "a",
+                    "prompt": "x",
+                    "client": {
+                        "provider": "claude",
+                        "model": "claude-haiku-4-5",
+                    },
+                }
+            ],
+        )
+    )
+
+    assert config.step_client(config.steps[0]).init == {}
+
+
+def test_step_client_switching_provider_keeps_its_own_init() -> None:
+    config = PipelineConfig.model_validate(
+        minimal_config(
+            client={
+                "provider": "openai",
+                "model": "gpt-4o-mini",
+                "init": {"api_key": "sk-openai"},
+            },
+            steps=[
+                {
+                    "name": "a",
+                    "prompt": "x",
+                    "client": {
+                        "provider": "claude",
+                        "model": "claude-haiku-4-5",
+                        "init": {"api_key": "sk-anthropic"},
+                    },
+                }
+            ],
+        )
+    )
+
+    assert config.step_client(config.steps[0]).init == {
+        "api_key": "sk-anthropic"
+    }
+
+
+def test_step_client_switching_provider_drops_the_pool_blocks() -> None:
+    # 'base_urls' is rejected outright on a hosted provider, so inheriting it
+    # made the whole config fail to load.
+    config = PipelineConfig.model_validate(
+        minimal_config(
+            client={
+                "provider": "vllm_online",
+                "model": "Qwen/Qwen3-8B",
+                "base_urls": ["http://node01:8000/v1"],
+                "queue_size": 16,
+                "wait_for_servers": 300,
+                "pool": {"servers": 4, "min_servers": 2},
+                "engine": {"tensor_parallel_size": 2},
+            },
+            steps=[
+                {
+                    "name": "a",
+                    "prompt": "x",
+                    "client": {
+                        "provider": "claude",
+                        "model": "claude-haiku-4-5",
+                    },
+                }
+            ],
+        )
+    )
+    merged = config.step_client(config.steps[0])
+
+    assert merged.base_urls == []
+    assert merged.queue_size is None
+    assert merged.pool == PoolConfig()
+    assert merged.engine == EngineConfig()
+    assert merged.wait_for_servers == 60.0
+
+
+def test_step_client_keeps_the_pool_blocks_within_one_provider() -> None:
+    config = PipelineConfig.model_validate(
+        minimal_config(
+            client={
+                "provider": "vllm_online",
+                "model": "Qwen/Qwen3-8B",
+                "base_urls": ["http://node01:8000/v1"],
+                "pool": {"servers": 4, "min_servers": 2},
+            },
+            steps=[{"name": "a", "prompt": "x", "client": {"batch_size": 8}}],
+        )
+    )
+    merged = config.step_client(config.steps[0])
+
+    assert merged.base_urls == ["http://node01:8000/v1"]
+    assert merged.pool == PoolConfig(servers=4, min_servers=2)
+
+
 def test_step_client_switching_provider_keeps_only_its_own_options() -> None:
     # Setting an option of its own must not drag the previous provider's
     # options along with it: `top_k` and `seed` mean nothing to Claude.

@@ -267,10 +267,20 @@ Changing only `options` never triggers a reload, because options are per
 request.
 
 One exception to the merging above: a step that names a *different* `provider`
-than the top-level block inherits no `options` from it at all. They name fields
-of the previous provider's runtime-options dataclass — `top_k` means nothing to
-Claude — and would be rejected as unknown. The step's own `options` are kept
-exactly as written:
+than the top-level block inherits nothing that was written for the old one.
+`options` name fields of the previous provider's runtime-options dataclass
+(`top_k` means nothing to Claude) and `init` names arguments of its
+constructor, so an inherited `api_key` would send one provider's key to
+another. Both are dropped, and so is every block that belongs to a provider the
+step no longer uses:
+
+| Key | Dropped when the step switches to |
+| --- | --- |
+| `init`, `options` | any other provider |
+| `engine` | `openai`, `claude` |
+| `base_urls`, `hosts_file`, `url_glob`, `pool`, `queue_size`, `max_concurrent_batches_per_client`, `wait_for_servers` | anything but `vllm_online` |
+
+What the step writes itself is always kept, exactly as written:
 
 ```yaml
 client:

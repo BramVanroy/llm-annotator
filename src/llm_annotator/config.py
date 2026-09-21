@@ -205,6 +205,42 @@ def _options_class(provider: ProviderName) -> type[ProviderRuntimeOptions]:
     raise ValueError(f"Unknown provider '{provider}'.")
 
 
+def _provider_bound_keys(provider: ProviderName) -> set[str]:
+    """Name the client keys that a step must not inherit across a switch.
+
+    These are the keys whose value only makes sense for the provider it was
+    written for: ``init`` names constructor arguments, ``options`` names fields
+    of a runtime-options dataclass, and the rest describe a vLLM engine or a
+    pool of vLLM servers.
+
+    Args:
+        provider: The provider the step switched to.
+
+    Returns:
+        The names of the keys that provider cannot take over.
+
+    Examples:
+        >>> sorted(_provider_bound_keys("vllm_offline"))
+        ['base_urls', 'hosts_file', 'init', 'max_concurrent_batches_per_client', 'options', 'pool', 'queue_size', 'url_glob', 'wait_for_servers']
+        >>> sorted(_provider_bound_keys("vllm_online"))
+        ['init', 'options']
+    """
+    keys = {"init", "options"}
+    if not provider.startswith("vllm"):
+        keys.add("engine")
+    if provider != "vllm_online":
+        keys |= {
+            "base_urls",
+            "hosts_file",
+            "url_glob",
+            "pool",
+            "queue_size",
+            "max_concurrent_batches_per_client",
+            "wait_for_servers",
+        }
+    return keys
+
+
 def _client_class(provider: ProviderName) -> type[Client[Any]]:
     """Get the client class belonging to a provider.
 
@@ -1447,12 +1483,15 @@ class PipelineConfig(_StrictBase):
         key-by-key so a step can change a single option without repeating the
         whole block, while other keys are replaced outright.
 
-        The one exception is a step that names a *different* ``provider``: it
-        inherits neither ``options``, which name fields of the previous
-        provider's runtime-options dataclass, nor any block the new provider
-        cannot act on (``engine`` outside the vLLM providers, ``queue_size``
-        and ``max_concurrent_batches_per_client`` outside ``vllm_online``).
-        All of those are kept when the step writes them itself.
+        The one exception is a step that names a *different* ``provider``. It
+        inherits no key whose value belongs to the provider it was written
+        for: ``init`` and ``options`` on every switch, plus ``engine`` outside
+        the vLLM providers and the pool keys (``base_urls``, ``hosts_file``,
+        ``url_glob``, ``pool``, ``queue_size``,
+        ``max_concurrent_batches_per_client``, ``wait_for_servers``) outside
+        ``vllm_online``. Dropping ``init`` is what keeps one provider's
+        credentials and base URL from reaching another. A key the step writes
+        itself is kept.
 
         The step's block is only validated here, after merging, because on its
         own it is a fragment that need not name a ``provider`` or ``model``.
@@ -1485,32 +1524,17 @@ class PipelineConfig(_StrictBase):
         else:
             base = self.client.model_dump()
             merged = {**base, **override}
-            if "init" in override:
-                merged["init"] = {**base["init"], **override["init"]}
-
-            # A step that switches provider must not inherit the previous
-            # provider's options: they belong to a different dataclass and
-            # would fail validation for a reason the user cannot act on. Its
-            # own options still stand -- only the inherited ones are dropped,
-            # which is why this replaces rather than skipping the merge.
             if merged["provider"] != base["provider"]:
-                merged["options"] = dict(override.get("options") or {})
-                # Same reasoning for the blocks the new provider cannot act
-                # on at all: they were written for the inherited provider,
-                # and keeping them would fail validation for a reason the
-                # user cannot act on. A block the step writes itself stands.
-                unusable = {
-                    "engine": not merged["provider"].startswith("vllm"),
-                    "queue_size": merged["provider"] != "vllm_online",
-                    "max_concurrent_batches_per_client": (
-                        merged["provider"] != "vllm_online"
-                    ),
-                }
-                for key, drop in unusable.items():
-                    if drop and key not in override:
+                for key in _provider_bound_keys(merged["provider"]):
+                    if key not in override:
                         merged.pop(key, None)
-            elif "options" in override:
-                merged["options"] = {**base["options"], **override["options"]}
+            else:
+                for key in ("init", "options"):
+                    if key in override:
+                        merged[key] = {
+                            **base[key],
+                            **(override[key] or {}),
+                        }
 
         try:
             return ClientConfig.model_validate(merged)
