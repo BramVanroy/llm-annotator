@@ -315,9 +315,10 @@ step states its GPU count once, in `engine.tensor_parallel_size`. `batch_size` d
 not size the GPU work for `vllm_offline`: vLLM schedules that itself from
 `engine.max_num_seqs` and `engine.max_num_batched_tokens`.
 
-Steps whose provider, model, `init` and `engine` all match share one live
-client, so a pipeline that uses the same local model twice loads it only once.
-Changing only `options` never triggers a reload, because options are per
+Steps whose `provider`, `model`, `init`, `engine` and server source
+(`base_urls`, `hosts_file`, `url_glob`) all match share one live client, so a
+pipeline that uses the same local model twice loads it only once. Changing only
+`options` or `gen_kwargs` never triggers a reload, because those are per
 request.
 
 One exception to the merging above: a step that names a *different* `provider`
@@ -780,7 +781,7 @@ and the command exits with status 2:
 
 ```console
 $ llm-annotate cfg.yaml
-error: client: Unknown 'init' keys for provider 'openai': ['on_eror']. OpenAIClient takes ['api_key', 'base_url', 'max_workers', 'on_error'].
+error: client: Unknown 'init' keys for provider 'openai': ['on_eror']. OpenAIClient takes ['api_key', 'base_url', 'batch_poll_interval', 'max_retries', 'max_workers', 'on_error', 'timeout', 'use_batch_api'].
 ```
 
 The location before the message is the key that the problem belongs to, or the

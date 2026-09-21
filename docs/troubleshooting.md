@@ -10,7 +10,7 @@ A config that does not load is reported as one line per problem on stderr, and
 
 ```console
 $ llm-annotate cfg.yaml
-error: client: Unknown 'init' keys for provider 'openai': ['on_eror']. OpenAIClient takes ['api_key', 'base_url', 'max_retries', 'max_workers', 'on_error', 'timeout'].
+error: client: Unknown 'init' keys for provider 'openai': ['on_eror']. OpenAIClient takes ['api_key', 'base_url', 'batch_poll_interval', 'max_retries', 'max_workers', 'on_error', 'timeout', 'use_batch_api'].
 ```
 
 The part before the message is the key the problem belongs to, or the config
@@ -433,6 +433,12 @@ Fix: run the restore command that the message prints, then start the run again.
 python scripts/restore_progress_from_hub.py --hub-id user/my-dataset --output-dir outputs/qa/02-judge/annotate --task-prefix judge_
 ```
 
+Without `--force` the restore refuses a progress directory that is not empty:
+
+```text
+'<path>' already holds <n> progress file(s). Pass force=True ('--force' on the command line) to merge the backup into them, or restore into an output directory that has none.
+```
+
 `--force` merges the backup into a progress directory that already holds files;
 rows are merged per sample id and a local row wins. Pass `overwrite=True`
 (`--overwrite`) instead to delete the branch and annotate every row again. See
@@ -479,6 +485,21 @@ Thread limit (ulimit -u): 4096
 
 Fix: lower `batch_size`, or set `init.max_workers` to cap how many requests of
 one batch go out at once. Raising the limit works too where the site allows it.
+
+### The servers never come up
+
+```text
+Only <n> of <n> required vLLM server(s) became ready within <n>s.
+```
+
+Cause: `wait_for_servers` polled `/health` on the configured URLs and fewer than
+`pool.min_servers` of them answered in time.
+
+Fix: on SLURM, read the `vllm-<step>_*.err` logs of the server array; the usual
+reasons are a model that does not fit the GPUs the step asked for, a port that
+stayed taken, and an array element that never left the queue. Raise
+`client.wait_for_servers` (seconds) when the model simply takes longer to load
+than the current value allows.
 
 ### The run stops on failed batches
 
