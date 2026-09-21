@@ -28,12 +28,14 @@ from __future__ import annotations
 import dataclasses
 import json
 import shutil
+import sys
 from pathlib import Path
 from typing import Any, Sequence
 from uuid import uuid4
 
 import yaml
 from datasets import Dataset
+from pydantic import ValidationError
 
 from llm_annotator.annotator import (
     _COMPONENT_CHANGES,
@@ -1011,8 +1013,42 @@ def _cli_overrides(
     return overrides
 
 
+def _config_problems(
+    exc: ValueError, config_path: Path
+) -> list[tuple[str, str]]:
+    """Describe a failure to load a config, one problem per line.
+
+    Args:
+        exc: The error that loading the config raised.
+        config_path: Path of the config file, which is the location of a
+            problem that names no key.
+
+    Returns:
+        One pair of location and message per problem, in the order pydantic
+        reports them.
+
+    Examples:
+        >>> _config_problems(ValueError("no such step"), Path("cfg.yaml"))
+        [('cfg.yaml', 'no such step')]
+    """
+    if not isinstance(exc, ValidationError):
+        return [(str(config_path), str(exc))]
+
+    problems = []
+    for error in exc.errors():
+        location = ".".join(str(part) for part in error["loc"])
+        message = str(error["msg"]).removeprefix("Value error, ")
+        problems.append((location or str(config_path), message))
+    return problems
+
+
 def main(args: list[str] | None = None) -> None:
     """Run an annotation pipeline described by a JSON or YAML config file.
+
+    A config that does not load is reported as one ``error:`` line per
+    problem, and the process exits with status 2. ``--debug`` keeps the
+    traceback instead. An error raised while the pipeline runs keeps its
+    traceback either way.
 
     Args:
         args: Optional argument list; defaults to ``sys.argv``.
@@ -1123,6 +1159,12 @@ def main(args: list[str] | None = None) -> None:
         " profile lives in the config.",
     )
     parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Show the full traceback when the config does not load, instead"
+        " of one 'error:' line per problem.",
+    )
+    parser.add_argument(
         "--describe-steps",
         action="store_true",
         help="Print one JSON object per step describing what it needs to run"
@@ -1140,24 +1182,30 @@ def main(args: list[str] | None = None) -> None:
         else None
     )
 
-    overrides = _cli_overrides(
-        config_path=parsed.config,
-        output_dir=parsed.output_dir,
-        hub_id=parsed.hub_id,
-        log_level=parsed.log_level,
-        overwrite=parsed.overwrite,
-        max_num_samples=parsed.max_num_samples,
-        shuffle_seed=parsed.shuffle_seed,
-        settings=parsed.settings,
-    )
-
-    config = load_pipeline_config(
-        parsed.config,
-        overrides=overrides,
-        step_client_overrides=_pool_source_override(
-            parsed.config, parsed.hosts_file, parsed.url_glob, selected
-        ),
-    )
+    try:
+        overrides = _cli_overrides(
+            config_path=parsed.config,
+            output_dir=parsed.output_dir,
+            hub_id=parsed.hub_id,
+            log_level=parsed.log_level,
+            overwrite=parsed.overwrite,
+            max_num_samples=parsed.max_num_samples,
+            shuffle_seed=parsed.shuffle_seed,
+            settings=parsed.settings,
+        )
+        config = load_pipeline_config(
+            parsed.config,
+            overrides=overrides,
+            step_client_overrides=_pool_source_override(
+                parsed.config, parsed.hosts_file, parsed.url_glob, selected
+            ),
+        )
+    except ValueError as exc:
+        if parsed.debug:
+            raise
+        for location, message in _config_problems(exc, parsed.config):
+            print(f"error: {location}: {message}", file=sys.stderr)
+        sys.exit(2)
     configure_logging(level=config.log_level)
     if overrides:
         applied = ", ".join(f"{k}={v}" for k, v in overrides.items())

@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 from datasets import Dataset
+from pydantic import ValidationError
 
 import llm_annotator.pipeline as pipeline_mod
 from llm_annotator.annotator import (
@@ -1032,15 +1033,22 @@ def test_cli_set_reaches_any_key(
     assert snapshot["client"]["options"] == {"temperature": 0.25}
 
 
-def test_cli_set_rejects_a_malformed_assignment(tmp_path: Path) -> None:
+def test_cli_set_rejects_a_malformed_assignment(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     config_path = _write_cli_config(tmp_path)
-    with pytest.raises(ValueError, match="expects 'key=value'"):
+    with pytest.raises(SystemExit) as excinfo:
         main([str(config_path), "--set", "dataset.max_num_samples"])
 
+    assert excinfo.value.code == 2
+    assert "expects 'key=value'" in capsys.readouterr().err
 
-def test_cli_set_rejects_a_key_given_twice(tmp_path: Path) -> None:
+
+def test_cli_set_rejects_a_key_given_twice(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     config_path = _write_cli_config(tmp_path)
-    with pytest.raises(ValueError, match="set twice"):
+    with pytest.raises(SystemExit):
         main(
             [
                 str(config_path),
@@ -1051,8 +1059,12 @@ def test_cli_set_rejects_a_key_given_twice(tmp_path: Path) -> None:
             ]
         )
 
+    assert "set twice" in capsys.readouterr().err
 
-def test_cli_dataset_flags_need_a_dataset_block(tmp_path: Path) -> None:
+
+def test_cli_dataset_flags_need_a_dataset_block(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     import yaml
 
     config_path = tmp_path / "generate.yaml"
@@ -1069,8 +1081,69 @@ def test_cli_dataset_flags_need_a_dataset_block(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="no 'dataset' block"):
+    with pytest.raises(SystemExit):
         main([str(config_path), "--max-num-samples", "2"])
+
+    assert "no 'dataset' block" in capsys.readouterr().err
+
+
+def _write_invalid_config(tmp_path: Path) -> Path:
+    """Write a config with two problems in it and return its path."""
+    import yaml
+
+    config_path = tmp_path / "broken.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "output_dir": str(tmp_path / "out"),
+                "dataset": {"name": "stanfordnlp/imdb", "split": "test"},
+                "client": {
+                    "provider": "openai",
+                    "model": "m",
+                    "init": {"on_eror": "warn"},
+                },
+                "steps": [{"name": "one", "prompt": "x {text}"}],
+                "unknown_key": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return config_path
+
+
+def test_cli_reports_an_invalid_config_without_a_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        main([str(_write_invalid_config(tmp_path))])
+
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    lines = [line for line in err.splitlines() if line.startswith("error: ")]
+    assert len(lines) == 2
+    assert any("client: Unknown 'init' keys" in line for line in lines)
+    assert any("unknown_key" in line for line in lines)
+    assert "Traceback" not in err
+
+
+def test_cli_debug_keeps_the_traceback(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError):
+        main([str(_write_invalid_config(tmp_path)), "--debug"])
+
+
+def test_cli_reports_a_problem_that_names_no_key(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # An override that does not fit the config raises a plain ValueError, so
+    # the config file itself is the location.
+    config_path = _write_cli_config(tmp_path)
+    with pytest.raises(SystemExit):
+        main([str(config_path), "--set", "steps.9.name=nope"])
+
+    assert (
+        f"error: {config_path}: Override 'steps.9.name'"
+        in capsys.readouterr().err
+    )
 
 
 def _write_mixed_config(tmp_path: Path) -> Path:

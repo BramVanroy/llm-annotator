@@ -665,7 +665,8 @@ llm-annotate [-h] [--output-dir OUTPUT_DIR] [--hub-id HUB_ID]
              [--max-num-samples MAX_NUM_SAMPLES] [--shuffle-seed SHUFFLE_SEED]
              [--set KEY=VALUE] [--steps STEPS]
              [--retry-errors [ERROR_TYPE ...]] [--hosts-file HOSTS_FILE]
-             [--url-glob URL_GLOB] [--serve-args STEP] [--describe-steps]
+             [--url-glob URL_GLOB] [--serve-args STEP] [--debug]
+             [--describe-steps]
              config
 ```
 
@@ -674,6 +675,19 @@ config keys, which is handy for pointing one config at a scratch directory or
 resuming with a different log level without editing the file. `--steps`,
 `--hosts-file`, `--url-glob`, `--serve-args` and `--describe-steps` are
 described under [Running one step at a time](#running-one-step-at-a-time).
+
+A config that does not load is reported as one line per problem, on stderr,
+and the command exits with status 2:
+
+```console
+$ llm-annotate cfg.yaml
+error: client: Unknown 'init' keys for provider 'openai': ['on_eror']. OpenAIClient takes ['api_key', 'base_url', 'max_workers', 'on_error'].
+```
+
+The location before the message is the key that the problem belongs to, or the
+config file itself when the problem names no key. `--debug` prints the full
+traceback instead, which is what a bug report needs. Only config loading is
+reported this way: an error raised while the pipeline runs keeps its traceback.
 
 `--retry-errors` without a value annotates every errored row of the selected
 steps again. With one or more `ERROR_TYPE` values only the rows with that
