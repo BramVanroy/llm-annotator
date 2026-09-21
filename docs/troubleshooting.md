@@ -291,11 +291,11 @@ Schema file '<path>' must contain a JSON object, got <type>.
 ```
 
 ```text
-Prompts file '<path>' is not valid JSON: <problem>. A '.json' prompts file holds a list of strings, one per prompt.
+Prompts file '<path>' is not valid JSON: <problem>. <expected>
 ```
 
 ```text
-Prompts file '<path>' holds a <type>. A '.json' prompts file holds a list of strings, one per prompt.
+Prompts file '<path>' holds a <type>. <expected>
 ```
 
 ```text
@@ -303,7 +303,13 @@ Prompts file '<path>' holds an empty list.
 ```
 
 ```text
-Prompts file '<path>' holds entries that are not strings, at position(s) <positions>. A '.json' prompts file holds a list of strings, one per prompt.
+Prompts file '<path>' holds entries that are not strings, at position(s) <positions>. <expected>
+```
+
+Where `<expected>` is:
+
+```text
+A '.json' prompts file holds a list of strings, one per prompt.
 ```
 
 ```text

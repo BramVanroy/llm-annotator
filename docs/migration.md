@@ -202,6 +202,7 @@ from the module that defines it:
 | `build_annotator`, `build_client`, `wait_for_servers` | `llm_annotator.pool` |
 | `extract_prompt_prefix`, `get_hash` | `llm_annotator.utils` |
 
+<!-- docs-test: fragment -->
 ```python
 # before
 from llm_annotator import ClientConfig
