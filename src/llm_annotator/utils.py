@@ -4,13 +4,11 @@ import re
 import sys
 from collections.abc import Callable
 from importlib.metadata import version
-from os import PathLike
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 from datasets import Dataset
 from huggingface_hub import whoami
-from tqdm import tqdm
 
 from llm_annotator.logging_utils import get_logger
 
@@ -82,120 +80,6 @@ def dataset_signature(dataset: Dataset, num_probe_rows: int = 64) -> str:
         "probes": probes,
     }
     return get_hash(json.dumps(payload, sort_keys=True, default=repr))
-
-
-def convert_int_to_annotated_str(num: int) -> str:
-    """Convert an integer to a concise string approximating its magnitude.
-
-    Args:
-        num: Non-negative integer to format.
-
-    Returns:
-        A compact string representation such as ``"1B"``, ``"1.2M"``, or ``"1.2K"``.
-
-    Examples:
-        >>> convert_int_to_annotated_str(1_000_000_000)
-        '1B'
-        >>> convert_int_to_annotated_str(1_234_567)
-        '1.2M'
-        >>> convert_int_to_annotated_str(1_234)
-        '1.2K'
-        >>> convert_int_to_annotated_str(42)
-        '42'
-    """
-    if num >= 1_000_000_000:
-        numstr = f"{num / 1_000_000_000:.1f}".rstrip("0").rstrip(
-            "."
-        )  # remove trailing '.0' if exactly 1 billion
-        return f"{numstr}B"
-    elif num >= 1_000_000:
-        numstr = f"{num / 1_000_000:.1f}".rstrip("0").rstrip(".")
-        return f"{numstr}M"
-    elif num >= 1_000:
-        numstr = f"{num / 1_000:.1f}".rstrip("0").rstrip(".")
-        return f"{numstr}K"
-    else:
-        return str(num)
-
-
-def yield_jsonl_robust(
-    pfiles: list[Path | str],
-    keep_columns: list[str] | None = None,
-    disable_tqdm: bool = False,
-    deduplicate_on: str | None = None,
-) -> Generator[dict, None, None]:
-    """Read a set of ``.jsonl`` files robustly, skipping corrupt lines, and yield one sample at a time.
-
-    Args:
-        pfiles: List of ``.jsonl`` file paths to read.
-        keep_columns: Columns to retain in each yielded sample. ``None`` keeps all columns.
-        disable_tqdm: Whether to suppress the file-level progress bar.
-        deduplicate_on: Column name whose value is hashed for deduplication. When
-            provided, only the first occurrence of each unique value is yielded.
-
-    Yields:
-        One parsed JSON record (``dict``) per non-corrupt line across all files.
-    """
-    _paths: list[Path] = [Path(pfile) for pfile in pfiles]
-    seen = set()
-    num_duplicates_removed = 0
-    with tqdm(
-        total=len(_paths), desc="Reading", unit="file", disable=disable_tqdm
-    ) as pbar:
-        for pfin in _paths:
-            if pfin.stat().st_size == 0:
-                continue
-
-            with pfin.open(encoding="utf-8") as fhin:
-                num_failures = 0
-                while True:
-                    try:
-                        line = fhin.readline()
-                        if not line:
-                            break
-                        data = json.loads(line)
-                        if deduplicate_on:
-                            hashed_col = get_hash(data[deduplicate_on])
-                            if hashed_col in seen:
-                                num_duplicates_removed += 1
-                                continue
-                            seen.add(hashed_col)
-
-                        if keep_columns:
-                            data = {
-                                k: v
-                                for k, v in data.items()
-                                if k in keep_columns
-                            }
-
-                        yield data
-                    except json.JSONDecodeError:
-                        # Handle partial or malformed JSON (incomplete writes)
-                        num_failures += 1
-                    except EOFError:
-                        # Handle unexpected EOF in gzip
-                        num_failures += 1
-                        break
-                if num_failures:
-                    print(
-                        f"Skipped {num_failures:,} corrupt line(s) in {pfin}"
-                    )
-            pbar.update(1)
-
-    if deduplicate_on:
-        print(f"Removed {num_duplicates_removed:,} duplicates")
-
-
-def count_lines(fname: str | PathLike) -> int:
-    """Count the number of lines in a file.
-
-    Args:
-        fname: Path to the file to count lines in.
-    Returns:
-        The total number of lines in the file.
-    """
-    with open(fname, "r", encoding="utf-8") as fhin:
-        return sum([1 for _ in fhin])
 
 
 def remove_empty_jsonl_files(pdout: Path) -> list[Path]:
@@ -411,51 +295,8 @@ def add_schema_additional_properties_false(schema: Any) -> Any:
     return schema
 
 
-def is_in_range(
-    value: int | float,
-    min_value: int | float | None,
-    max_value: int | float | None,
-) -> bool:
-    """Check if a numeric value falls within an optional range (inclusive). Utility function
-    that models can use for validation.
-
-    Args:
-        value: The numeric value to check.
-        min_value: The minimum allowed value (inclusive), or None for no minimum.
-        max_value: The maximum allowed value (inclusive), or None for no maximum.
-
-    Returns:
-        True if the value is within the range, False otherwise.
-    """
-    if min_value is not None and value < min_value:
-        return False
-    if max_value is not None and value > max_value:
-        return False
-    return True
-
-
-def is_length(
-    text: str, min_length: int | None, max_length: int | None
-) -> bool:
-    """Check if the length of a text string falls within an optional range. Utility function
-    that models can use for validation.
-
-    Args:
-        text: The text string to check.
-        min_length: The minimum allowed length (inclusive), or None for no minimum.
-        max_length: The maximum allowed length (inclusive), or None for no maximum.
-    Returns:
-        True if the text length is within the range, False otherwise.
-    """
-    length = len(text)
-    return is_in_range(length, min_length, max_length)
-
-
 __all__ = [
     "add_schema_additional_properties_false",
-    "convert_int_to_annotated_str",
-    "is_in_range",
-    "count_lines",
     "dataset_signature",
     "drop_jsonl_rows",
     "ensure_returns_bool",
@@ -465,5 +306,4 @@ __all__ = [
     "get_hf_username",
     "get_lib_versions",
     "remove_empty_jsonl_files",
-    "yield_jsonl_robust",
 ]

@@ -17,64 +17,13 @@ def test_get_hash_is_stable_and_hex() -> None:
     int(value, 16)
 
 
-@pytest.mark.parametrize(
-    ("num", "expected"),
-    [
-        (1_000_000_000, "1B"),
-        (1_250_000_000, "1.2B"),
-        (1_000_000, "1M"),
-        (1_234_000, "1.2M"),
-        (1_000, "1K"),
-        (1_234, "1.2K"),
-        (42, "42"),
-    ],
-)
-def test_convert_int_to_annotated_str(num: int, expected: str) -> None:
-    # Verifies compact numeric formatting for each magnitude bucket.
-    assert utils.convert_int_to_annotated_str(num) == expected
-
-
-def test_yield_jsonl_robust_handles_keep_columns_dedup_and_corrupt_lines(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    # Verifies robust reader handles deduplication, field filtering, and corrupt lines.
-    p = tmp_path / "data.jsonl"
-    p.write_text(
-        "\n".join(
-            [
-                json.dumps({"id": 1, "txt": "a", "extra": 1}),
-                json.dumps({"id": 2, "txt": "a", "extra": 2}),
-                "{bad-json",
-                json.dumps({"id": 3, "txt": "b", "extra": 3}),
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    rows = list(
-        utils.yield_jsonl_robust(
-            [p],
-            keep_columns=["id", "txt"],
-            disable_tqdm=True,
-            deduplicate_on="txt",
-        )
-    )
-
-    assert rows == [{"id": 1, "txt": "a"}, {"id": 3, "txt": "b"}]
-    out = capsys.readouterr().out
-    assert "Skipped 1 corrupt line(s)" in out
-    assert "Removed 1 duplicates" in out
-
-
-def test_count_lines_and_remove_empty_jsonl_files(tmp_path: Path) -> None:
-    # Verifies line counting and cleanup of empty jsonl files.
+def test_remove_empty_jsonl_files(tmp_path: Path) -> None:
+    # Verifies cleanup of empty jsonl files.
     p_non_empty = tmp_path / "a.jsonl"
     p_non_empty.write_text('{"x": 1}\n{"x": 2}\n', encoding="utf-8")
     p_empty = tmp_path / "b.jsonl"
     p_empty.write_text("", encoding="utf-8")
 
-    assert utils.count_lines(p_non_empty) == 2
     removed = utils.remove_empty_jsonl_files(tmp_path)
     assert removed == [p_empty]
     assert p_non_empty.exists()
@@ -274,19 +223,6 @@ def test_dataset_signature_is_stable_for_a_bytes_column() -> None:
     assert utils.dataset_signature(first) != utils.dataset_signature(other)
 
 
-def test_yield_jsonl_robust_skips_a_zero_byte_file(tmp_path: Path) -> None:
-    # A zero-byte file is left alone (never opened for reading), and a
-    # normal file next to it still yields its rows.
-    empty = tmp_path / "empty.jsonl"
-    empty.write_text("", encoding="utf-8")
-    normal = tmp_path / "normal.jsonl"
-    normal.write_text(json.dumps({"id": 1}) + "\n", encoding="utf-8")
-
-    rows = list(utils.yield_jsonl_robust([empty, normal], disable_tqdm=True))
-
-    assert rows == [{"id": 1}]
-
-
 def test_get_lib_versions_marks_a_library_not_installed_when_version_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -318,35 +254,3 @@ def test_get_lib_versions_falls_back_to_unknown_for_its_own_version(
     versions = utils.get_lib_versions()
 
     assert versions["llm_annotator"] == "unknown"
-
-
-@pytest.mark.parametrize(
-    ("value", "min_value", "max_value", "expected"),
-    [
-        (1, 5, 10, False),
-        (15, 5, 10, False),
-        (7, 5, 10, True),
-        (7, None, None, True),
-    ],
-)
-def test_is_in_range(
-    value: int, min_value: int | None, max_value: int | None, expected: bool
-) -> None:
-    # Verifies the inclusive range check for a value below, above, and
-    # inside the bounds, and with both bounds absent.
-    assert utils.is_in_range(value, min_value, max_value) is expected
-
-
-@pytest.mark.parametrize(
-    ("text", "min_length", "max_length", "expected"),
-    [
-        ("ab", 3, 10, False),
-        ("abcdefghijk", 3, 10, False),
-        ("abcde", 3, 10, True),
-    ],
-)
-def test_is_length(
-    text: str, min_length: int | None, max_length: int | None, expected: bool
-) -> None:
-    # Verifies text length validation for too short, too long, and inside.
-    assert utils.is_length(text, min_length, max_length) is expected
