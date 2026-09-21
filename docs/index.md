@@ -122,16 +122,18 @@ anno.annotate_dataset(output_dir=out, prompt_template="Q: {text}")
 `str.replace` at the call site:
 
 ```python
+template = "Summarize this document: {content}"
+
 # before
 anno.prepare_data(
     output_dir=out,
-    prompt_template="Q: {content}",
+    prompt_template=template,
     prompt_field_swapper={"content": "body"},
 )
 # after
 anno.prepare_data(
     output_dir=out,
-    prompt_template="Q: {content}".replace("{content}", "{body}"),
+    prompt_template=template.replace("{content}", "{body}"),
 )
 ```
 
