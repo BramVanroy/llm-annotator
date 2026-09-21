@@ -87,11 +87,11 @@ def vllm_server(test_model_id: str) -> Generator[str, None, None]:
     try:
         while not server_is_healthy(base_url, timeout=2.0):
             if process.poll() is not None:
-                pytest.skip(
+                pytest.fail(
                     f"'vllm serve' exited with code {process.returncode}."
                 )
             if time.monotonic() > deadline:
-                pytest.skip(
+                pytest.fail(
                     "'vllm serve' did not answer /health within"
                     f" {SERVER_STARTUP_TIMEOUT:g}s."
                 )
