@@ -1289,8 +1289,9 @@ class StepConfig(_StrictBase):
     def resolved_prompts(self, root: Path) -> list[str]:
         """Get the prompt list for a ``generate`` step.
 
-        A path is read as a file with one prompt per line; blank lines are
-        skipped. A single prompt is repeated ``num_samples`` times, mirroring
+        A ``.json`` path is read as a list of strings; any other path is read
+        as a file with one prompt per line, where blank lines are skipped. A
+        single prompt is repeated ``num_samples`` times, mirroring
         [`generate_dataset`][llm_annotator.annotator.Annotator.generate_dataset].
 
         Args:
@@ -1300,11 +1301,15 @@ class StepConfig(_StrictBase):
             The prompts, one per sample to generate.
 
         Raises:
-            ValueError: If no prompt could be resolved.
+            ValueError: If no prompt could be resolved, or if a ``.json`` file
+                does not hold a non-empty list of strings.
         """
         if isinstance(self.prompts, Path):
-            text = _read_text(self.prompts, root)
-            prompts = [line for line in text.splitlines() if line.strip()]
+            if self.prompts.suffix.lower() == ".json":
+                prompts = _read_json_prompts(self.prompts, root)
+            else:
+                text = _read_text(self.prompts, root)
+                prompts = [line for line in text.splitlines() if line.strip()]
         else:
             prompts = list(self.prompts or [])
 
@@ -1633,73 +1638,11 @@ def _resolve_path(path: str | Path, root: Path) -> Path:
     return (root / candidate).resolve()
 
 
-def _render_json_catalog(payload: Any, path: str | Path) -> str:
-    """Turn a JSON persona or taxonomy catalog into prompt-readable text."""
-    if isinstance(payload, list):
-        entries = payload
-        intro = None
-    elif isinstance(payload, dict):
-        intro = payload.get("instruction")
-        for key in (
-            "professional",
-            "profession",
-            "social",
-            "categories",
-            "personas",
-            "items",
-            "codes",
-        ):
-            if key in payload:
-                entries = payload[key]
-                break
-        else:
-            entries = []
-            for value in payload.values():
-                if isinstance(value, list):
-                    entries = value
-                    break
-    else:
-        raise ValueError(
-            "JSON system prompt catalogs must decode to a list or mapping."
-        )
-
-    if not isinstance(entries, list):
-        raise ValueError(
-            "JSON system prompt catalogs must contain a list of entries."
-        )
-
-    lines: list[str] = []
-    if isinstance(intro, str) and intro.strip():
-        lines.append(intro.strip())
-
-    for item in entries:
-        if isinstance(item, str):
-            lines.append(f"- `{item.strip()}`")
-        elif isinstance(item, dict):
-            code = (
-                item.get("code")
-                or item.get("name")
-                or item.get("persona")
-                or item.get("label")
-            )
-            description = item.get("description") or item.get("detail")
-            if code is None:
-                continue
-            code = str(code).strip()
-            if description is None or str(description).strip() == "":
-                lines.append(f"- `{code}`")
-            else:
-                lines.append(f"- `{code}` — {str(description).strip()}")
-
-    if not lines:
-        raise ValueError(
-            f"JSON catalog file '{path}' did not contain any catalog entries."
-        )
-    return "\n".join(lines)
-
-
 def _read_text(path: str | Path, root: Path) -> str:
     """Read a UTF-8 text file referenced from a config file.
+
+    The file is used exactly as it is on disk, whatever its suffix, so a prompt
+    is what the file says.
 
     Args:
         path: Path as written in the config file.
@@ -1719,14 +1662,60 @@ def _read_text(path: str | Path, root: Path) -> str:
             f" (resolved to '{pfin}')."
         )
 
-    if pfin.suffix.lower() == ".json":
-        try:
-            payload = json.loads(pfin.read_text(encoding="utf-8"))
-            return _render_json_catalog(payload, pfin)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"JSON catalog '{pfin}' is invalid.") from exc
-
     return pfin.read_text(encoding="utf-8")
+
+
+def _read_json_prompts(path: str | Path, root: Path) -> list[str]:
+    """Read a ``.json`` prompts file of a ``generate`` step.
+
+    Args:
+        path: Path as written in the config file.
+        root: Directory that relative paths resolve against.
+
+    Returns:
+        The prompts, in file order.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        ValueError: If the file is not valid JSON, or does not hold a non-empty
+            list of strings.
+    """
+    pfin = _resolve_path(path, root)
+    if not pfin.is_file():
+        raise FileNotFoundError(
+            f"File '{path}' referenced from the config does not exist"
+            f" (resolved to '{pfin}')."
+        )
+
+    expected = (
+        "A '.json' prompts file holds a list of strings, one per prompt."
+    )
+    try:
+        payload = json.loads(pfin.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"Prompts file '{pfin}' is not valid JSON: {exc}. {expected}"
+        ) from exc
+
+    if not isinstance(payload, list):
+        raise ValueError(
+            f"Prompts file '{pfin}' holds a"
+            f" {type(payload).__name__}. {expected}"
+        )
+    if not payload:
+        raise ValueError(f"Prompts file '{pfin}' holds an empty list.")
+
+    wrong = [
+        index
+        for index, entry in enumerate(payload)
+        if not isinstance(entry, str)
+    ]
+    if wrong:
+        raise ValueError(
+            f"Prompts file '{pfin}' holds entries that are not strings, at"
+            f" position(s) {wrong}. {expected}"
+        )
+    return payload
 
 
 __all__ = [

@@ -71,6 +71,12 @@ an error, so there is never any doubt about which one won:
 Short prompts read well inline; anything longer belongs in a `.md` file next to
 the config, which also keeps the prompt reviewable in a diff.
 
+`prompt_file` and `system_prompt_file` are read verbatim, whatever the suffix:
+the file's bytes are the prompt, including its trailing newline. Nothing is
+stripped, rendered or reformatted, so a `.json` file used as a prompt reaches
+the model as the JSON text it holds. `output_schema_file` is the one file that
+is parsed, and it has to hold a JSON object.
+
 ## How steps see each other's output
 
 Each step writes several kinds of column:
@@ -594,10 +600,27 @@ steps:
     output_schema_file: schemas/qa.json
 ```
 
-`prompts` may be a list, or a path to a file with one prompt per line. A single
-prompt with `num_samples` is repeated that many times; a list is truncated to
-`num_samples` when both are given. To wrap every prompt in a shared prefix, add
-a template containing the `{prompt}` placeholder:
+`prompts` is a list, or a path to a file. Two file formats are accepted, chosen
+by the suffix:
+
+- `.json`: a JSON list of strings. An object, a list with a non-string entry or
+  an empty list is rejected at load time, with the file named.
+
+  ```json title="prompts/questions.json"
+  ["Write a short geography quiz question.", "Write a short history question."]
+  ```
+
+- Anything else: one prompt per line, blank lines skipped. A prompt that spans
+  several lines needs the `.json` form.
+
+  ```text title="prompts/questions.txt"
+  Write a short geography quiz question.
+  Write a short history question.
+  ```
+
+A single prompt with `num_samples` is repeated that many times; a list is
+truncated to `num_samples` when both are given. To wrap every prompt in a shared
+prefix, add a template containing the `{prompt}` placeholder:
 
 ```yaml
     prompt: "Answer in Dutch.\n\n{prompt}"

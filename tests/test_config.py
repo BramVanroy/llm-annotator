@@ -115,49 +115,19 @@ def test_example_config_resolves_its_files() -> None:
     assert "{answer_v1}" in prompt
 
 
-def test_json_catalog_system_prompt_is_rendered_to_text(
-    tmp_path: Path,
-) -> None:
-    """JSON catalog files should be converted to prompt-readable text."""
+def test_json_system_prompt_file_is_read_verbatim(tmp_path: Path) -> None:
+    """A '.json' prompt file reaches the model as the text it holds."""
+    payload = {"instruction": "Use only the code.", "codes": ["alpha"]}
     catalog_path = tmp_path / "taxonomy.json"
-    catalog_path.write_text(
-        json.dumps(
-            {
-                "instruction": "Use only the code.",
-                "categories": [
-                    {"code": "alpha", "description": "First category."},
-                    {"code": "beta", "description": "Second category."},
-                ],
-            }
-        ),
-        encoding="utf-8",
+    catalog_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    step = StepConfig(
+        name="classify",
+        prompt="Classify: {text}",
+        system_prompt_file=catalog_path,
     )
 
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(
-        json.dumps(
-            minimal_config(
-                steps=[
-                    {
-                        "name": "classify",
-                        "prompt": "Classify: {text}",
-                        "system_prompt_file": str(catalog_path),
-                    }
-                ]
-            )
-        ),
-        encoding="utf-8",
-    )
-    rendered = (
-        load_pipeline_config(config_path)
-        .steps[0]
-        .resolved_system_prompt(tmp_path)
-    )
-
-    assert rendered is not None
-    assert "Use only the code." in rendered
-    assert "- `alpha` — First category." in rendered
-    assert "- `beta` — Second category." in rendered
+    assert step.resolved_system_prompt(tmp_path) == json.dumps(payload)
 
 
 # --- provider handling -------------------------------------------------------
@@ -715,6 +685,43 @@ def test_resolved_prompts_from_file(tmp_path: Path) -> None:
         name="gen", type="generate", prompts=tmp_path / "prompts.txt"
     )
     assert step.resolved_prompts(tmp_path) == ["one", "two"]
+
+
+def test_resolved_prompts_from_a_json_file(tmp_path: Path) -> None:
+    """A '.json' prompts file is a plain list of strings."""
+    prompts = ["Write a geography question.", "Write a math question."]
+    (tmp_path / "prompts.json").write_text(
+        json.dumps(prompts), encoding="utf-8"
+    )
+    step = StepConfig(
+        name="gen", type="generate", prompts=Path("prompts.json")
+    )
+
+    assert step.resolved_prompts(tmp_path) == prompts
+
+
+@pytest.mark.parametrize(
+    "payload, message",
+    [
+        ('{"a": "b"}', "holds a dict"),
+        ("[1, 2]", "position(s) [0, 1]"),
+        ("[]", "holds an empty list"),
+        ("[not json", "is not valid JSON"),
+    ],
+)
+def test_json_prompts_file_rejects_other_shapes(
+    tmp_path: Path, payload: str, message: str
+) -> None:
+    (tmp_path / "prompts.json").write_text(payload, encoding="utf-8")
+    step = StepConfig(
+        name="gen", type="generate", prompts=Path("prompts.json")
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        step.resolved_prompts(tmp_path)
+
+    assert message in str(excinfo.value)
+    assert str(tmp_path / "prompts.json") in str(excinfo.value)
 
 
 def test_missing_referenced_file_reports_resolved_path(tmp_path: Path) -> None:
