@@ -259,15 +259,6 @@ def test_claude_batch_generate_handles_worker_failures(
             warning=lambda _msg: None, debug=lambda _msg: None
         ),
     )
-    client._client = cast(
-        Any,
-        types.SimpleNamespace(
-            messages=types.SimpleNamespace(
-                batches=types.SimpleNamespace(cancel=lambda _batch_id: None)
-            )
-        ),
-    )
-    client._running_batch_ids = set()
 
     def _generate(
         self: ClaudeClient,
@@ -346,22 +337,3 @@ def test_claude_handle_stop_reason_error_branches(stop_reason: str) -> None:
         client._handle_stop_reason(
             stop_reason=stop_reason, num_output_tokens=3
         )
-
-
-def test_claude_destroy_cancels_running_batches() -> None:
-    # Verifies Claude destroy cancels all tracked running batch ids.
-    cancelled: list[str] = []
-    client = object.__new__(ClaudeClient)
-    client._client = cast(
-        Any,
-        types.SimpleNamespace(
-            messages=types.SimpleNamespace(
-                batches=types.SimpleNamespace(
-                    cancel=lambda batch_id: cancelled.append(batch_id)
-                )
-            )
-        ),
-    )
-    client._running_batch_ids = {"a", "b"}
-    client.destroy()
-    assert sorted(cancelled) == ["a", "b"]

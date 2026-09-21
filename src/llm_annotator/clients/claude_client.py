@@ -84,7 +84,9 @@ class ClaudeClient(Client[ClaudeRuntimeOptions]):
 
         Args:
             model: Claude model identifier.
-            max_workers: Maximum number of concurrent worker threads for ``batch_generate``.
+            max_workers: Maximum number of concurrent worker threads for
+                ``batch_generate``. ``None``, ``0`` and ``1`` send the requests
+                of a batch one after another.
             api_key: Anthropic API key. If not provided, the client will attempt to read from the environment variable `ANTHROPIC_API_KEY`.
             on_error: Error behavior when generation fails.
         """
@@ -96,8 +98,6 @@ class ClaudeClient(Client[ClaudeRuntimeOptions]):
 
         self._api_key = api_key
         self._client = Anthropic(api_key=self._api_key)
-
-        self._running_batch_ids: set[str] = set()
 
     def _process_response(self, response: ClaudeMessage) -> Response:
         num_output_tokens = getattr(response.usage, "output_tokens", None)
@@ -256,48 +256,65 @@ class ClaudeClient(Client[ClaudeRuntimeOptions]):
             f"Claude stopped for an unexpected reason {stop_reason!r}{token_suffix}."
         )
 
-    def destroy(self) -> None:
-        """Clean up any resources used by the client."""
-
-        if self._client is not None and self._running_batch_ids:
-            for batch_id in self._running_batch_ids:
-                self._client.messages.batches.cancel(batch_id)
-
 
 def _extract_system_instruction(
     messages: list[dict[str, str]],
 ) -> tuple[list[dict[str, str]], str]:
-    """Convert OpenAI-style messages to Claude input text and instruction.
+    """Split a leading system message off an OpenAI-style message list.
+
+    The Messages API rejects a ``system`` role inside ``messages``, so the
+    system message is removed from the list whatever its content is. An empty
+    system message therefore leaves an empty instruction, and
+    [`ClaudeClient.generate`][llm_annotator.clients.claude_client.ClaudeClient.generate]
+    then sends no ``system`` argument at all.
 
     Args:
         messages: List of message dictionaries with 'role' and 'content' keys.
+
     Returns:
-        A tuple of (list[dict[str, str]], system_instruction) to be used for Claude generation.
+        The messages without the system message, and the system instruction
+        (``""`` when there is none).
+
+    Raises:
+        ProviderError: If more than one system message is present.
+        ValueError: If a system message is not first, or a role is one Claude
+            does not take.
+
+    Examples:
+        >>> _extract_system_instruction(
+        ...     [
+        ...         {"role": "system", "content": ""},
+        ...         {"role": "user", "content": "hi"},
+        ...     ]
+        ... )
+        ([{'role': 'user', 'content': 'hi'}], '')
     """
     system_instruction = ""
+    has_system = False
+    remaining: list[dict[str, str]] = []
+
     for msg_idx, message in enumerate(messages):
         role = message["role"]
-        content = message["content"]
 
         if role == "system":
-            if system_instruction:
+            if has_system:
                 raise ProviderError(
                     "For Claude, only a single system message is supported."
                 )
-
             if msg_idx != 0:
                 raise ValueError(
                     "Make sure that the system message is the first message in the list."
                 )
-            system_instruction = content
+            has_system = True
+            system_instruction = message["content"]
         elif role not in {"user", "assistant"}:
             raise ValueError(
                 f"Unsupported message role {role!r} for Claude client. Only 'system', 'assistant', and 'user' roles are supported."
             )
+        else:
+            remaining.append(message)
 
-    messages = messages[1:] if system_instruction else messages
-
-    return messages, system_instruction
+    return remaining, system_instruction
 
 
 def _sanitize_schema(schema: dict[str, Any]) -> dict[str, Any]:

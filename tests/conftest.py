@@ -373,9 +373,6 @@ def fake_anthropic_module(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     }
 
     class FakeMessagesAPI:
-        def __init__(self):
-            self.batches = types.SimpleNamespace(cancel=lambda _batch_id: None)
-
         def create(self, **kwargs: object) -> object:
             state["last_create_kwargs"] = kwargs
             if state["create_raises"] is not None:
