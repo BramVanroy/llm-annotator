@@ -185,7 +185,15 @@ def test_unknown_init_key_names_the_accepted_ones() -> None:
     [
         ("openai", {"api_key": "k", "base_url": "u", "max_workers": 2}),
         ("claude", {"api_key": "k", "on_error": "raise"}),
-        ("vllm_online", {"base_url": "http://a:8000/v1"}),
+        (
+            "vllm_online",
+            {
+                "base_url": "http://a:8000/v1",
+                "timeout": 7200.0,
+                "max_retries": 0,
+                "max_workers": 64,
+            },
+        ),
         ("vllm_offline", {"language_model_only": False, "on_error": "raise"}),
     ],
 )

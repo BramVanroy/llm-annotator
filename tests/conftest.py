@@ -186,10 +186,13 @@ def fake_openai_module(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
     state: dict[str, Any] = {
         "last_create_kwargs": None,
-        "last_post_url": None,
-        "last_post_json": None,
+        "create_calls": [],
         "create_raises": None,
-        "post_json": {"choices": []},
+        # One response spec per last-user-message content, so a concurrent
+        # batch stays deterministic. A spec may set "content", "reasoning",
+        # "finish_reason", "completion_tokens" or "raises".
+        "create_responses": {},
+        "openai_init_kwargs": [],
         "model_list": ["served-model"],
         # Batch API state
         "batch_output_content": _default_batch_output,
@@ -203,28 +206,33 @@ def fake_openai_module(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "delete_raises": None,
     }
 
-    class FakeHTTPResponse:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict[str, object]:
-            return cast(dict[str, object], state["post_json"])
-
-    class FakeHTTPClient:
-        def post(self, url: str, json: dict[str, object]) -> FakeHTTPResponse:
-            state["last_post_url"] = url
-            state["last_post_json"] = json
-            return FakeHTTPResponse()
+    def response_spec(kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Look up the spec for one create() call by its last message."""
+        messages = cast(list[Any], kwargs.get("messages") or [])
+        content = messages[-1].get("content") if messages else None
+        specs = cast(dict[Any, Any], state["create_responses"])
+        return cast(dict[str, Any], specs.get(content, {}))
 
     class FakeCompletions:
-        def create(self, **kwargs: object) -> object:
+        def create(self, **kwargs: Any) -> object:
             state["last_create_kwargs"] = kwargs
+            cast(list[Any], state["create_calls"]).append(kwargs)
             if state["create_raises"] is not None:
                 raise cast(Exception, state["create_raises"])
-            usage = types.SimpleNamespace(completion_tokens=7)
+            spec = response_spec(kwargs)
+            if spec.get("raises") is not None:
+                raise cast(Exception, spec["raises"])
+            usage = types.SimpleNamespace(
+                completion_tokens=spec.get("completion_tokens", 7)
+            )
+            message_fields: dict[str, Any] = {
+                "content": spec.get("content", " hello ")
+            }
+            if spec.get("reasoning") is not None:
+                message_fields["reasoning"] = spec["reasoning"]
             choice = types.SimpleNamespace(
-                finish_reason="stop",
-                message=types.SimpleNamespace(content=" hello "),
+                finish_reason=spec.get("finish_reason", "stop"),
+                message=types.SimpleNamespace(**message_fields),
             )
             return types.SimpleNamespace(
                 choices=[choice],
@@ -290,12 +298,18 @@ def fake_openai_module(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         def cancel(self, batch_id: str) -> None:
             state["cancelled_batches"].append(batch_id)
 
+    class FakeDefaultHttpxClient:
+        def __init__(self, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+
     class FakeOpenAI:
-        def __init__(
-            self, api_key: str | None = None, base_url: str | None = None
-        ):
-            self.api_key = api_key
-            self.base_url = base_url
+        def __init__(self, **kwargs: Any):
+            cast(list[Any], state["openai_init_kwargs"]).append(kwargs)
+            self.api_key = kwargs.get("api_key")
+            self.base_url = kwargs.get("base_url")
+            self.timeout = kwargs.get("timeout")
+            self.max_retries = kwargs.get("max_retries")
+            self.http_client = kwargs.get("http_client")
             self.chat = types.SimpleNamespace(completions=FakeCompletions())
             self.models = types.SimpleNamespace(
                 list=lambda: types.SimpleNamespace(
@@ -305,12 +319,12 @@ def fake_openai_module(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
                     ]
                 )
             )
-            self._client = FakeHTTPClient()
             self.files = FakeFiles()
             self.batches = FakeBatches()
 
     fake_openai = types.ModuleType("openai")
     fake_openai.OpenAI = FakeOpenAI  # type: ignore[attr-defined]
+    fake_openai.DefaultHttpxClient = FakeDefaultHttpxClient  # type: ignore[attr-defined]
 
     types_mod = types.ModuleType("openai.types")
     chat_mod = types.ModuleType("openai.types.chat")
