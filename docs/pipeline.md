@@ -510,10 +510,10 @@ workflow, what is allowed to change, and what is rejected.
 A step with its own `hub_id` backs its data up to two branches of that
 repository: `<task_prefix>prepared_dataset` and `<task_prefix>progress_backup`.
 A re-run of the identical command restores the prepared data from the first
-branch on its own, and nothing restores the JSONL progress files on the second
-one. A machine without local progress files (a purged scratch directory, or a
-run that moves to another cluster) therefore annotates every row of that step
-again unless the backup is restored first.
+branch on its own. The JSONL progress files on the second branch are restored
+by a separate command, which a machine without local progress files (a purged
+scratch directory, or a run that moves to another cluster) runs before the
+re-run.
 
 A step's directory is `<output_dir>/<NN>-<name>/annotate/` and its prefix is
 `<name>_`, so the step `judge`, the second one of a pipeline whose `output_dir`
@@ -521,6 +521,19 @@ is `outputs/qa`, restores with:
 
 ```sh
 python scripts/restore_progress_from_hub.py --hub-id user/my-dataset --output-dir outputs/qa/02-judge/annotate --task-prefix judge_
+```
+
+The script is part of a checkout of the repository. With an installed package,
+call the function that it wraps:
+
+```python
+from llm_annotator import restore_progress_from_hub
+
+restore_progress_from_hub(
+    hub_id="user/my-dataset",
+    output_dir="outputs/qa/02-judge/annotate",
+    task_prefix="judge_",
+)
 ```
 
 The selection record (`<task_prefix>selection.json`) travels with the progress
