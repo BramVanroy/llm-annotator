@@ -8,7 +8,6 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-import llm_annotator.config as config_mod
 from llm_annotator.config import (
     ClientConfig,
     DatasetConfig,
@@ -1088,9 +1087,9 @@ def test_pool_block_defaults_and_round_trip() -> None:
     assert (sized.pool.servers, sized.engine.tensor_parallel_size) == (4, 2)
 
 
-def test_pool_gpus_per_vllm_server_points_at_engine() -> None:
-    """The old spelling names its replacement instead of "unknown key"."""
-    with pytest.raises(ValueError, match="engine.tensor_parallel_size"):
+def test_pool_rejects_an_unknown_key() -> None:
+    """A key the pool block does not define is reported by name."""
+    with pytest.raises(ValueError, match="gpus_per_vllm_server"):
         ClientConfig.model_validate(
             {
                 "provider": "vllm_online",
@@ -1682,27 +1681,6 @@ def test_is_local_source_is_false_without_a_name() -> None:
     """A dataset addressed by 'path' rather than 'name' is not local."""
     config = DatasetConfig(path=Path("/tmp/prepared"))
     assert config.is_local_source(Path(".")) is False
-
-
-class _KwargsOnlyClient:
-    """Stand-in client whose constructor accepts any keyword argument."""
-
-    def __init__(self, model: str, **kwargs: Any) -> None:
-        self.model = model
-        self.kwargs = kwargs
-
-
-def test_init_keys_are_unchecked_when_the_client_takes_kwargs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A client constructor with '**kwargs' accepts any 'init' key."""
-    monkeypatch.setattr(
-        config_mod, "_client_class", lambda provider: _KwargsOnlyClient
-    )
-    client = ClientConfig(
-        provider="openai", model="m", init={"anything_goes": True}
-    )
-    assert client.init == {"anything_goes": True}
 
 
 # --- resolving vLLM server pool sources --------------------------------------

@@ -117,6 +117,9 @@ FINAL_DS_SHARD_GLOB = "data-*-of-*.arrow"
 # being dispatched.
 QUEUE_BATCHES_PER_SLOT = 4
 
+DEFAULT_MAX_CONCURRENT_BATCHES = 4
+"""Simultaneous batches per vLLM server unless a step says otherwise."""
+
 # "auto" writes one progress file per this fraction of the run, so the number
 # of files stays bounded no matter how large the dataset is.
 AUTO_OUTPUT_FILE_FRACTION = 0.01
@@ -3350,7 +3353,7 @@ class VLLMQueueAnnotator(Annotator):
     clients: Sequence[Client[Any]]
     queue_size: int | None = None
     max_workers: int | None = None
-    max_concurrent_batches_per_client: int = 4
+    max_concurrent_batches_per_client: int = DEFAULT_MAX_CONCURRENT_BATCHES
     # Required in the base class but set to init=False here
     # since we derive it from the first client in the pool
     client: Client = field(init=False, repr=False)

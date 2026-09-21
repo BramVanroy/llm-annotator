@@ -33,6 +33,7 @@ from pydantic import (
 
 from llm_annotator.annotator import (
     DEFAULT_CPU_COUNT,
+    DEFAULT_MAX_CONCURRENT_BATCHES,
     QUEUE_BATCHES_PER_SLOT,
     VLLMQueueAnnotator,
 )
@@ -44,9 +45,6 @@ StepType = Literal["annotate", "generate"]
 
 StepKind = Literal["vllm_pool", "vllm_online", "vllm_offline", "api"]
 """What a step needs in order to run, as reported by ``--describe-steps``."""
-
-DEFAULT_MAX_CONCURRENT_BATCHES = 4
-"""Simultaneous batches per vLLM server unless a step says otherwise."""
 
 LOCAL_DATASET_BUILDERS = frozenset(
     {
@@ -615,18 +613,6 @@ class PoolConfig(_StrictBase):
             )
         return self
 
-    @model_validator(mode="before")
-    @classmethod
-    def _moved_gpus_per_server(cls, data: Any) -> Any:
-        """Point the old ``gpus_per_vllm_server`` key at its new home."""
-        if isinstance(data, dict) and "gpus_per_vllm_server" in data:
-            raise ValueError(
-                "'pool.gpus_per_vllm_server' moved to"
-                " 'engine.tensor_parallel_size', which both vLLM providers"
-                " read, so a step states its GPU count once."
-            )
-        return data
-
 
 class ClientConfig(_StrictBase):
     """Provider, model and execution settings for one step.
@@ -808,8 +794,6 @@ class ClientConfig(_StrictBase):
             return
 
         parameters = inspect.signature(client_cls.__init__).parameters
-        if any(p.kind is p.VAR_KEYWORD for p in parameters.values()):
-            return
         accepted = {
             name
             for name, parameter in parameters.items()
@@ -1146,7 +1130,9 @@ class StepConfig(_StrictBase):
             batches in a row come back with every sample errored, instead
             of continuing to burn compute against an unresponsive backend.
             0 disables the check.
-        upload_every_n_samples: Hub progress-backup cadence. Needs ``hub_id``.
+        upload_every_n_samples: Hub progress-backup cadence, 10000 rows by
+            default. Needs ``hub_id``; without one nothing is uploaded. Set
+            it to 0 to switch the backup off.
         hub_id: Optional Hub dataset id for this step's prepared-data and
             progress backup, which makes a crashed step resumable from the Hub.
         rename: Mapping from produced column name to its final name.
@@ -1176,7 +1162,7 @@ class StepConfig(_StrictBase):
         Annotated[int, Field(ge=0)] | Literal["auto"]
     ) = "auto"
     max_consecutive_failed_batches: int = Field(default=10, ge=0)
-    upload_every_n_samples: int | None = None
+    upload_every_n_samples: int | None = 10_000
     hub_id: str | None = None
     rename: dict[str, str] = Field(default_factory=dict)
     drop_columns: list[str] = Field(default_factory=list)
@@ -1285,6 +1271,7 @@ class StepConfig(_StrictBase):
             The schema mapping, or ``None`` when the step has none.
 
         Raises:
+            FileNotFoundError: If the schema file does not exist.
             ValueError: If the schema file does not decode to a mapping.
         """
         if self.output_schema is not None:
@@ -1293,7 +1280,7 @@ class StepConfig(_StrictBase):
             return None
 
         pfin = _resolve_path(self.output_schema_file, root)
-        schema = json.loads(pfin.read_text(encoding="utf-8"))
+        schema = json.loads(_read_text(self.output_schema_file, root))
         if not isinstance(schema, dict):
             raise ValueError(
                 f"Schema file '{pfin}' must contain a JSON object, got"
@@ -1701,17 +1688,11 @@ def _read_json_prompts(path: str | Path, root: Path) -> list[str]:
             list of strings.
     """
     pfin = _resolve_path(path, root)
-    if not pfin.is_file():
-        raise FileNotFoundError(
-            f"File '{path}' referenced from the config does not exist"
-            f" (resolved to '{pfin}')."
-        )
-
     expected = (
         "A '.json' prompts file holds a list of strings, one per prompt."
     )
     try:
-        payload = json.loads(pfin.read_text(encoding="utf-8"))
+        payload = json.loads(_read_text(path, root))
     except json.JSONDecodeError as exc:
         raise ValueError(
             f"Prompts file '{pfin}' is not valid JSON: {exc}. {expected}"
