@@ -263,10 +263,10 @@ client:
 
 `init` and `options` are passed straight through to the matching client
 constructor and `*RuntimeOptions` dataclass, so every provider-specific setting
-is reachable. Both are checked when the config loads, against the constructor's
-signature and against the dataclass's fields, and an unknown name is reported
-with the accepted ones listed, so `init: {on_eror: warn}` fails in the second
-before the run starts rather than when the client is built. `model` is not an
+is reachable. Both are checked when the config loads: `init` against the
+constructor's signature and `options` against the dataclass's fields. An unknown
+name is reported with the accepted ones listed, so `init: {on_eror: warn}` fails
+at load time, before any step has run. `model` is not an
 `init` key: it has its own key next to `provider`. When a dataclass does not
 name what you need, `options.extra_body` (vLLM) and `gen_kwargs` (any provider)
 are merged into the request as written.
