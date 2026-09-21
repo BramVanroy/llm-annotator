@@ -216,6 +216,67 @@ def remove_empty_jsonl_files(pdout: Path) -> list[Path]:
     return sorted(files_removed)
 
 
+def read_jsonl_idx(
+    raw_line: bytes, idx_column: str, *, with_row: bool = False
+) -> tuple[Any, dict[str, Any] | None]:
+    """Read the sample id out of one line of a progress file.
+
+    The annotator writes ``idx_column`` as the first key of every row, so the
+    id can be read from the start of the line instead of from a parse of the
+    whole row, which for a long response is most of the work. Three kinds of
+    line are parsed in full instead: one that starts with another key, one
+    whose id is a string that holds a comma, and one that does not end with
+    a closing brace and a newline. The last of those keeps an interrupted
+    write detectable, since the writer emits one whole row per line and an
+    interrupted write ends mid-row. Pass ``with_row`` when the caller needs
+    the other fields too.
+
+    Args:
+        raw_line: One line of a ``.jsonl`` progress file, as bytes.
+        idx_column: Column that holds the sample id.
+        with_row: Whether to parse the whole line and return the row.
+
+    Returns:
+        The sample id, and the parsed row when the line was parsed in full.
+
+    Raises:
+        json.JSONDecodeError: If the line is not valid JSON.
+        UnicodeDecodeError: If the line is not valid UTF-8.
+        TypeError: If the line is not a JSON object.
+        KeyError: If the row has no ``idx_column``.
+
+    Examples:
+        >>> read_jsonl_idx(b'{"idx": 7, "response": "ok"}\\n', "idx")
+        (7, None)
+        >>> read_jsonl_idx(b'{"response": "ok", "idx": 7}\\n', "idx")
+        (7, {'response': 'ok', 'idx': 7})
+        >>> read_jsonl_idx(b'{"idx": "a,b", "n": 1}\\n', "idx")
+        ('a,b', {'idx': 'a,b', 'n': 1})
+
+        An interrupted write is reported instead of read past:
+
+        >>> read_jsonl_idx(b'{"idx": 7, "respo', "idx")
+        Traceback (most recent call last):
+        json.decoder.JSONDecodeError: Unterminated string starting at: line 1 column 12 (char 11)
+    """
+    if not with_row and raw_line.endswith((b"}\n", b"}\r\n")):
+        prefix = b"{" + json.dumps(idx_column).encode("utf-8") + b": "
+        if raw_line.startswith(prefix):
+            end = raw_line.find(b",", len(prefix))
+            if end != -1:
+                try:
+                    return json.loads(raw_line[len(prefix) : end]), None
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    pass
+
+    row = json.loads(raw_line)
+    if not isinstance(row, dict):
+        raise TypeError(
+            f"a progress row must be a JSON object, got {type(row).__name__}"
+        )
+    return row[idx_column], row
+
+
 def drop_jsonl_rows(
     pdout: Path, should_drop: Callable[[dict[str, Any]], bool]
 ) -> list[dict[str, Any]]:

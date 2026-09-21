@@ -17,6 +17,7 @@ from llm_annotator.annotator import (
     SELECTION_RECORD_FILE,
 )
 from llm_annotator.logging_utils import get_logger
+from llm_annotator.utils import read_jsonl_idx
 
 
 LOGGER = get_logger("hub")
@@ -30,8 +31,8 @@ def _read_idxs(files: list[Path], idx_column: str) -> set[Any]:
         idx_column: Column that holds the sample id.
 
     Returns:
-        Every id that the files hold. A line that is not valid JSON is
-        skipped, since an interrupted write can leave a partial last line.
+        Every id that the files hold. A line that is not a valid JSON object
+        is skipped, since an interrupted write can leave a partial last line.
 
     Raises:
         ValueError: If a row has no ``idx_column``.
@@ -41,19 +42,21 @@ def _read_idxs(files: list[Path], idx_column: str) -> set[Any]:
         with pfin.open("rb") as fhin:
             for raw_line in fhin:
                 try:
-                    row = json.loads(raw_line)
-                except (json.JSONDecodeError, UnicodeDecodeError):
+                    sample_idx, _ = read_jsonl_idx(raw_line, idx_column)
+                except (
+                    json.JSONDecodeError,
+                    UnicodeDecodeError,
+                    TypeError,
+                ):
                     continue
-                if not isinstance(row, dict):
-                    continue
-                if idx_column not in row:
+                except KeyError as exc:
                     raise ValueError(
                         f"The progress file '{pfin}' has a row without the"
                         f" index column '{idx_column}', so the backup cannot"
                         " be merged into it. Pass the 'idx_column' that the"
                         " run was annotated with."
-                    )
-                idxs.add(row[idx_column])
+                    ) from exc
+                idxs.add(sample_idx)
     return idxs
 
 
