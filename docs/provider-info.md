@@ -118,6 +118,46 @@ client = OpenAIClient(
 )
 ```
 
+`use_batch_api=True` submits a batch to the OpenAI Batch API instead of
+sending one request per sample over a thread pool. It has a completion window
+of up to 24 hours and costs less, at the price of latency.
+`batch_poll_interval` sets how many seconds pass between two status polls of a
+running job. Both are constructor settings, so a config enables them under
+`init`:
+
+```yaml
+client:
+  provider: openai
+  model: gpt-4o-mini
+  init:
+    use_batch_api: true
+    batch_poll_interval: 30
+```
+
+`timeout` and `max_retries` are constructor settings too, on `OpenAIClient` and
+on `ClaudeClient`. Both default to the value their SDK uses (600 seconds, two
+retries).
+
+#### Migration
+
+`use_batch_api` and `poll_interval` are gone from `batch_generate`. Pass
+`use_batch_api` and `batch_poll_interval` to the constructor instead:
+
+```python
+# before
+client.batch_generate(messages=messages, use_batch_api=True, poll_interval=30)
+# after
+client = OpenAIClient(
+    model="gpt-4o-mini", use_batch_api=True, batch_poll_interval=30
+)
+client.batch_generate(messages=messages)
+```
+
+Every client's `batch_generate` now takes the same three arguments
+(`messages`, `options`, `gen_kwargs`). `VLLMOnlineClient` does not accept
+`use_batch_api` at all, so the `ConfigurationError` it raised for
+`use_batch_api=True` is gone with it.
+
 ### Anthropic Claude
 
 ```python

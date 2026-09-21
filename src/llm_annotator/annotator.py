@@ -2517,7 +2517,13 @@ class Annotator:
         for callers that prefer a single entry point.
 
         Args:
-            output_dir: Directory where annotation output is written.
+            output_dir: Directory where annotation output is written. Every
+                argument below is passed straight through, so the full
+                description of each is in
+                [`prepare_data`][llm_annotator.annotator.Annotator.prepare_data]
+                (data selection and prompting) or in
+                [`run_annotation`][llm_annotator.annotator.Annotator.run_annotation]
+                (inference and output).
             prompt_template: Prompt template with dataset fields.
             dataset_name: Name or path of the dataset to load.
             dataset: Pre-loaded dataset to annotate instead of loading one.
@@ -2529,48 +2535,30 @@ class Annotator:
             shuffle_seed: Seed for dataset shuffling.
             preprocess_fn: Optional preprocessing callback.
             idx_column: Column name used as the stable sample identifier.
-            task_prefix: Prefix for the internal column names and for the
-                artifacts of this task inside ``output_dir``, so that several
-                tasks can share one directory and one ``hub_id``. The final
-                dataset in the root of ``output_dir`` and on Hub ``main`` is
-                shared by design: the task that finishes last replaces it, and
-                with ``keep_columns=True`` it holds the columns of the tasks
-                that ran before it.
+            task_prefix: Prefix for this task's columns and artifacts.
             sort_by_length: Whether to sort prompts by length.
             system_message: Optional system message for the chat prompt.
             hub_id: Optional Hub dataset ID for prepared-data cache and
                 JSONL progress backup.
             force_data_preparation: Rebuild prepared data even if cached.
             overwrite: Whether to discard the finished rows of this task and
-                annotate every sample again, see
-                [`run_annotation`][llm_annotator.annotator.Annotator.run_annotation].
-                The prepared data, and the artifacts of every other
-                ``task_prefix`` in the same directory, are kept.
+                annotate every sample again.
             keep_columns: Columns to keep in the final dataset.
             options: Runtime options passed to the client.
-            gen_kwargs: Extra request parameters merged over ``options``,
-                for anything the options dataclass does not name.
+            gen_kwargs: Extra request parameters merged over ``options``.
             output_schema: Optional JSON schema for structured output.
             upload_every_n_samples: Upload checkpoint cadence.
-            max_samples_per_output_file: Samples per JSONL progress
-                file. ``"auto"`` is one percent of the rows with a floor
-                of 1000, so at most 100 files are written and a resume
-                stays cheap. A fixed number trades the samples lost at a
-                crash against the cost of rescanning the files on every
-                resume; 0 writes a single file of unlimited size.
+            max_samples_per_output_file: Samples per JSONL progress file.
             validate_fn: Optional validation callback.
             postprocess_fn: Optional postprocessing callback.
             num_retries_invalid: Number of retries for invalid outputs.
             keep_idx_column: Whether to keep the index column in the result.
             max_consecutive_failed_batches: Abort the run once this many
                 batches in a row come back with every sample errored.
-                Set to 0 to disable.
             reuse_idx_column: Whether an ``idx_column`` that already exists in
-                the dataset is kept as the sample id, see
-                [`prepare_data`][llm_annotator.annotator.Annotator.prepare_data].
+                the dataset is kept as the sample id.
             retry_errors: Annotate rows again that finished with an error in
-                an earlier run, see
-                [`run_annotation`][llm_annotator.annotator.Annotator.run_annotation].
+                an earlier run.
 
         Returns:
             The concatenated annotation dataset.
@@ -2657,45 +2645,36 @@ class Annotator:
         """Generate a new dataset from prompts.
 
         Args:
-            output_dir: Directory where annotation output is written.
+            output_dir: Directory where annotation output is written. Every
+                argument below is passed straight through, so the full
+                description of each is in
+                [`prepare_data`][llm_annotator.annotator.Annotator.prepare_data]
+                (data selection and prompting) or in
+                [`run_annotation`][llm_annotator.annotator.Annotator.run_annotation]
+                (inference and output).
             prompts: A single prompt or a sequence of prompts.
             prompt_prefix: Optional shared prefix used for prefix caching.
             hub_id: Optional Hub dataset ID for prepared-data cache and
                 JSONL progress backup.
             force_data_preparation: Rebuild prepared data even if cached.
             overwrite: Whether to discard the finished rows of this task and
-                annotate every sample again, see
-                [`run_annotation`][llm_annotator.annotator.Annotator.run_annotation].
-                The prepared data, and the artifacts of every other
-                ``task_prefix`` in the same directory, are kept.
+                annotate every sample again.
             options: Runtime options passed to the client.
-            gen_kwargs: Extra request parameters merged over ``options``,
-                for anything the options dataclass does not name.
+            gen_kwargs: Extra request parameters merged over ``options``.
             max_num_samples: Number of times to repeat a single prompt.
             output_schema: Optional JSON schema for structured output.
             idx_column: Column name used as the stable sample identifier.
             upload_every_n_samples: Upload checkpoint cadence.
-            max_samples_per_output_file: Samples per JSONL progress
-                file. ``"auto"`` is one percent of the rows with a floor
-                of 1000, so at most 100 files are written and a resume
-                stays cheap. A fixed number trades the samples lost at a
-                crash against the cost of rescanning the files on every
-                resume; 0 writes a single file of unlimited size.
-            task_prefix: Prefix for the internal column names and for the
-                artifacts of this task inside ``output_dir``, so that several
-                tasks can share one directory and one ``hub_id``. The final
-                dataset in the root of ``output_dir`` and on Hub ``main`` is
-                shared by design: the task that finishes last replaces it.
+            max_samples_per_output_file: Samples per JSONL progress file.
+            task_prefix: Prefix for this task's columns and artifacts.
             validate_fn: Optional validation callback.
             postprocess_fn: Optional postprocessing callback.
             num_retries_invalid: Number of retries for invalid outputs.
             keep_idx_column: Whether to keep the index column in the result.
             max_consecutive_failed_batches: Abort the run once this many
                 batches in a row come back with every sample errored.
-                Set to 0 to disable.
             retry_errors: Annotate rows again that finished with an error in
-                an earlier run, see
-                [`run_annotation`][llm_annotator.annotator.Annotator.run_annotation].
+                an earlier run.
 
         Returns:
             The concatenated annotation dataset.
