@@ -271,3 +271,77 @@ def test_dataset_signature_is_stable_for_a_bytes_column() -> None:
 
     other = Dataset.from_dict({"data": [b"abc", b"xyz"]})
     assert utils.dataset_signature(first) != utils.dataset_signature(other)
+
+
+def test_read_jsonl_idx_fast_path_returns_id_only_when_id_is_first() -> None:
+    # The fast path reads the id straight from the start of the line and
+    # does not parse the rest of the row.
+    line = json.dumps({"idx": 7, "response": "ok"}).encode() + b"\n"
+    assert utils.read_jsonl_idx(line, "idx") == (7, None)
+
+
+def test_read_jsonl_idx_fallback_returns_the_row_when_id_is_not_first() -> (
+    None
+):
+    # A row whose id is not the first key falls back to a full parse and
+    # returns that row instead of None.
+    line = json.dumps({"response": "ok", "idx": 7}).encode() + b"\n"
+    assert utils.read_jsonl_idx(line, "idx") == (
+        7,
+        {"response": "ok", "idx": 7},
+    )
+
+
+def test_read_jsonl_idx_fallback_handles_a_comma_inside_the_id_string() -> (
+    None
+):
+    # A string id that holds a comma cannot be located by scanning for the
+    # first comma, so this case must fall back to a full parse.
+    line = json.dumps({"idx": "a,b", "n": 1}).encode() + b"\n"
+    assert utils.read_jsonl_idx(line, "idx") == (
+        "a,b",
+        {"idx": "a,b", "n": 1},
+    )
+
+
+def test_read_jsonl_idx_fast_path_handles_a_crlf_line_ending() -> None:
+    line = json.dumps({"idx": 3, "response": "ok"}).encode() + b"\r\n"
+    assert utils.read_jsonl_idx(line, "idx") == (3, None)
+
+
+def test_read_jsonl_idx_truncated_line_raises_json_decode_error() -> None:
+    # A line with no closing brace and newline is an interrupted write, even
+    # when it starts with the id key, and must be reported, not read past.
+    line = b'{"idx": 7, "respo'
+    with pytest.raises(json.JSONDecodeError):
+        utils.read_jsonl_idx(line, "idx")
+
+
+def test_read_jsonl_idx_array_line_raises_type_error() -> None:
+    line = b"[1, 2]\n"
+    with pytest.raises(TypeError):
+        utils.read_jsonl_idx(line, "idx")
+
+
+def test_read_jsonl_idx_missing_id_column_raises_key_error() -> None:
+    line = json.dumps({"response": "ok"}).encode() + b"\n"
+    with pytest.raises(KeyError):
+        utils.read_jsonl_idx(line, "idx")
+
+
+def test_read_jsonl_idx_with_row_true_always_returns_the_parsed_row() -> None:
+    # with_row=True skips the fast path even when the id is first, since the
+    # caller needs the rest of the row.
+    line = json.dumps({"idx": 7, "response": "ok"}).encode() + b"\n"
+    idx, row = utils.read_jsonl_idx(line, "idx", with_row=True)
+    assert idx == 7
+    assert row == {"idx": 7, "response": "ok"}
+
+
+def test_read_jsonl_idx_handles_an_id_column_name_needing_escaping() -> None:
+    # The id column name is JSON-encoded before it is matched against the
+    # start of the line, so a name that needs escaping still hits the fast
+    # path.
+    idx_column = 'my"idx'
+    line = json.dumps({idx_column: 5, "response": "ok"}).encode() + b"\n"
+    assert utils.read_jsonl_idx(line, idx_column) == (5, None)
