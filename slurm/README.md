@@ -459,10 +459,12 @@ Two levels, both automatic:
 - **Between steps**, a finished step writes `<output_dir>/<NN>-<step>/output/`,
   which a later run loads instead of recomputing.
 
-So after a crash, a timeout or a preemption you run **the same
-`submit_pipeline.sh` command again**. Finished steps are skipped, and the step
-that died continues where it stopped. To resubmit only part of a pipeline, name
-the steps:
+So after a crash, a timeout or a preemption you run the same
+`submit_pipeline.sh` command again. Finished steps are skipped, and the step
+that died continues where it stopped. Resubmitting with a higher
+`dataset.max_num_samples` extends a finished run the same way, which
+`docs/growing-a-run.md` describes in full. To resubmit only part of a pipeline,
+name the steps:
 
 ```sh
 ./slurm/submit_pipeline.sh --steps rate-qa my-pipeline.yaml

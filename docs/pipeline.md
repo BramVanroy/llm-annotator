@@ -13,10 +13,44 @@ or, from a checkout that is not installed:
 python scripts/annotate.py my-pipeline.yaml
 ```
 
-A config describes one or more **steps**. Steps run in order, and each one
-annotates the dataset the previous step produced, so a later prompt can read
-columns that an earlier model wrote. That is what makes generate-then-judge
-workflows possible: one model writes question-answer pairs, another rates them.
+A config describes one or more steps. Steps run in order, and each one annotates
+the dataset the previous step produced, so a later prompt can read columns that
+an earlier model wrote. That is what makes generate-then-judge workflows
+possible: one model writes question-answer pairs, another rates them.
+
+## The smallest config that runs
+
+A first run needs four things: where the output goes, which dataset to read,
+which model to ask, and what to ask it. Inside the `client` block, `provider`
+plus `model` is enough; every other key there has a default.
+
+```yaml title="my-pipeline.yaml"
+output_dir: outputs/imdb-sentiment
+
+dataset:
+  name: stanfordnlp/imdb
+  split: test
+  max_num_samples: 20
+
+client:
+  provider: vllm_offline
+  model: HuggingFaceTB/SmolLM2-135M-Instruct
+
+steps:
+  - name: sentiment
+    prompt: "Classify the sentiment: {text}"
+```
+
+```bash
+llm-annotate my-pipeline.yaml
+```
+
+That writes a `sentiment_response` column next to the original `text` and saves
+the dataset under `outputs/imdb-sentiment/`. `{text}` is filled in from the
+column of that name, so a prompt can name any column of the dataset. The rest of
+this page is what to add to that config, and
+[Choosing a provider](choosing-a-provider.md) covers the `client` block for
+hardware other than one local GPU.
 
 !!! note "What a config cannot express"
 
@@ -760,7 +794,7 @@ steps again. With one or more `ERROR_TYPE` values only the rows with that
 is redone in one step is also redone in every selected step after it, because
 those steps read what it produces. Finished steps that are affected are
 resumed: every other row keeps its result. See
-[Errors and retries](index.md#errors-and-retries) for when a row counts as
+[Errors and retries](python-api.md#errors-and-retries) for when a row counts as
 errored.
 
 ### Overriding config keys

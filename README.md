@@ -43,7 +43,9 @@ uv add "llm-annotator[anthropic]"  # claude
 
 The online vLLM client speaks the OpenAI protocol, so it takes the `openai`
 extra rather than the much heavier `vllm` one. Authentication variables and
-per-provider notes are in [docs/provider-info.md](docs/provider-info.md).
+per-provider notes are in [docs/provider-info.md](docs/provider-info.md), which
+also has the two FlashInfer wheels to install next to the `vllm` extra wherever
+you serve models, so that vLLM does not JIT-compile its kernels at start-up.
 
 ## Quickstart
 

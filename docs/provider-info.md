@@ -12,11 +12,11 @@ configure authentication for each provider.
 | OpenAI | `openai` | `llm-annotator[openai]` | `OpenAIClient` | `OPENAI_API_KEY` |
 | Anthropic Claude | `claude` | `llm-annotator[anthropic]` | `ClaudeClient` | `ANTHROPIC_API_KEY` |
 
-The **config name** column is the exact spelling `provider:` takes in a
-[config file](pipeline.md); no other spelling is accepted. Note that the online
-vLLM client speaks the OpenAI protocol, so it needs the `openai` extra rather
-than the (much heavier) `vllm` one — that extra is only needed where the model
-weights are actually loaded.
+The config name column is the exact spelling `provider:` takes in a
+[config file](pipeline.md); no other spelling is accepted. The online vLLM
+client speaks the OpenAI protocol, so it needs the `openai` extra rather than
+the much heavier `vllm` one, which is only needed where the model weights are
+loaded.
 
 ## Install extras
 
@@ -138,32 +138,17 @@ client:
 on `ClaudeClient`. Both default to the value their SDK uses (600 seconds, two
 retries).
 
-#### Migration
-
-`use_batch_api` and `poll_interval` are gone from `batch_generate`. Pass
-`use_batch_api` and `batch_poll_interval` to the constructor instead:
-
-```python
-# before
-client.batch_generate(messages=messages, use_batch_api=True, poll_interval=30)
-# after
-client = OpenAIClient(
-    model="gpt-4o-mini", use_batch_api=True, batch_poll_interval=30
-)
-client.batch_generate(messages=messages)
-```
-
-Every client's `batch_generate` now takes the same three arguments
-(`messages`, `options`, `gen_kwargs`). `VLLMOnlineClient` does not accept
-`use_batch_api`: as an `init` key of a `vllm_online` step it fails when the
-config loads, as an unknown key.
+`VLLMOnlineClient` does not accept `use_batch_api`: as an `init` key of a
+`vllm_online` step it fails when the config loads, as an unknown key. Both
+settings moved here from `batch_generate`, see
+[Migrating from 0.16](migration.md#batch_generate-takes-three-arguments).
 
 ### Anthropic Claude
 
 ```python
 from llm_annotator import Annotator, ClaudeClient
 
-client = ClaudeClient(model="claude-sonnet-4-20250514")
+client = ClaudeClient(model="claude-sonnet-4-5")
 with Annotator(client=client) as anno:
     ...
 ```
@@ -174,7 +159,7 @@ with Annotator(client=client) as anno:
 from llm_annotator import Annotator, VLLMOnlineClient
 
 client = VLLMOnlineClient(
-    model="meta-llama/Llama-3.2-3B-Instruct",
+    model="Qwen/Qwen3-8B",
     base_url="http://localhost:8000/v1",
 )
 with Annotator(client=client) as anno:
@@ -182,7 +167,9 @@ with Annotator(client=client) as anno:
 ```
 
 A batch is one `/v1/chat/completions` request per sample, and the whole batch
-is sent at once. vLLM schedules the requests it holds as one continuous batch,
+is sent at once (0.16 used vLLM's own batch route, see
+[Migrating from 0.16](migration.md#a-vllm-server-batch-is-one-request-per-sample)).
+vLLM schedules the requests it holds as one continuous batch,
 so the GPU sees the same workload that a single combined request would give
 it, while the result stays per sample: each response carries its own token
 count, and a sample that fails (a prompt over the context length, say) is the
@@ -210,24 +197,11 @@ From a config file they are `init` keys:
 ```yaml
 client:
   provider: vllm_online
-  model: meta-llama/Llama-3.2-3B-Instruct
+  model: Qwen/Qwen3-8B
   init:
     timeout: 7200
     max_retries: 2
 ```
-
-#### Migration
-
-The client no longer posts to vLLM's own `/v1/chat/completions/batch` route.
-Nothing in a config or in the Python API names that route, so no setting
-changes, but two behaviours do:
-
-- `{prefix}num_tokens` is filled on a `vllm_online` step. It used to be
-  `None`, because the batch route reported one `usage` block for the whole
-  batch. Code that treated the column as always empty on this provider (a
-  filter, a throughput report) now gets real numbers.
-- A failing sample no longer takes its batch down with it. A batch in which
-  one prompt is too long used to write errors for every row of that batch.
 
 ### vLLM offline (in-process)
 
@@ -235,7 +209,7 @@ changes, but two behaviours do:
 from llm_annotator import Annotator, VLLMOfflineClient
 
 client = VLLMOfflineClient(
-    model="meta-llama/Llama-3.2-3B-Instruct",
+    model="Qwen/Qwen3-8B",
     max_model_len=4096,
 )
 with Annotator(client=client) as anno:
@@ -245,7 +219,8 @@ with Annotator(client=client) as anno:
 #### Sizing GPU throughput
 
 `VLLMOfflineClient.batch_generate` hands every conversation it receives to one
-`vllm.LLM.chat` call; there is no client-side batch size. vLLM profiles the model at
+`vllm.LLM.chat` call; there is no client-side batch size (0.16 had one, see
+[Migrating from 0.16](migration.md#keys-that-no-longer-load)). vLLM profiles the model at
 start-up and reserves the KV cache from `gpu_memory_utilization` (vLLM's own default is
 0.92; this client's default is 0.90) before any request runs. Once requests are queued,
 the scheduler decides how many run in one iteration, bounded by `max_num_seqs` (maximum
@@ -276,13 +251,3 @@ itself. What is left to set:
   tokens. Lower `max_model_len` to what your prompts and outputs need.
 - An out-of-memory error means that too little memory is left next to the KV cache.
   Lower `gpu_memory_utilization`.
-
-#### Migration
-
-`VLLMOfflineClient(batch_size=..., min_batch_size=...)` and `init: {batch_size: ...}` in
-a config are gone, together with the decorator `auto_reduce_batch_size` that halved a
-chunk on a CUDA out-of-memory error. Remove those arguments and set the annotator's own
-`batch_size` instead. A config with `min_batch_size` under a `vllm_offline` step's `init`
-fails at load time with "Unknown 'init' keys for provider 'vllm_offline'", and one with
-`batch_size` there with "'init' sets 'batch_size'. A run has one batch size, the client
-block's own 'batch_size', which decides how many samples go to the provider per call."

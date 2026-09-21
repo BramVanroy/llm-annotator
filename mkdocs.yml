@@ -151,10 +151,14 @@ markdown_extensions:
 # Navigation structure for the generated docs site
 nav:
   - Home: index.md
+  - Choosing a provider: choosing-a-provider.md
   - Config pipeline: pipeline.md
+  - Python API guide: python-api.md
   - Growing a run: growing-a-run.md
+  - Troubleshooting: troubleshooting.md
   - SLURM: slurm.md
   - Provider setup: provider-info.md
+  - Migrating from 0.16: migration.md
   - User API:
       - Annotator: api/annotator.md
       - Pipeline: api/pipeline.md
