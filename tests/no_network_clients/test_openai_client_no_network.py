@@ -327,11 +327,13 @@ def test_batch_api_happy_path(
             id="batch-fake",
             status="in_progress",
             output_file_id="file-output-fake",
+            error_file_id=None,
         ),
         types.SimpleNamespace(
             id="batch-fake",
             status="completed",
             output_file_id="file-output-fake",
+            error_file_id=None,
         ),
     ]
 
@@ -510,6 +512,7 @@ def test_batch_api_batch_failure_returns_all_error_responses(
             id="batch-fake",
             status="failed",
             output_file_id=None,
+            error_file_id=None,
         ),
     ]
 
@@ -562,12 +565,15 @@ def test_batch_api_build_request_includes_json_schema(
     assert body["response_format"]["json_schema"]["strict"] is True
 
 
-def test_destroy_cancels_active_batches(
+def test_destroy_cancels_active_batches_and_deletes_files(
     fake_openai_module: dict[str, Any],
 ) -> None:
-    # Verifies destroy() calls cancel for each tracked batch id.
+    # Verifies destroy() cancels each tracked batch and deletes its files.
     client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(model="gpt-test")
-    client._active_batch_ids = ["batch-1", "batch-2"]
+    client._active_batches = {
+        "batch-1": ["file-in-1"],
+        "batch-2": ["file-in-2", "file-out-2"],
+    }
 
     client.destroy()
 
@@ -575,14 +581,19 @@ def test_destroy_cancels_active_batches(
         "batch-1",
         "batch-2",
     }
-    assert client._active_batch_ids == []
+    assert set(fake_openai_module["deleted_files"]) == {
+        "file-in-1",
+        "file-in-2",
+        "file-out-2",
+    }
+    assert client._active_batches == {}
 
 
-def test_destroy_swallows_cancel_errors(
+def test_destroy_logs_cancel_and_delete_errors(
     fake_openai_module: dict[str, Any],
 ) -> None:
-    # Verifies destroy() does not propagate exceptions from cancellation.
-    _ = fake_openai_module
+    # Verifies a failed cancellation or deletion does not stop the clean-up.
+    fake_openai_module["delete_raises"] = RuntimeError("delete failed")
 
     client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(model="gpt-test")
 
@@ -590,17 +601,18 @@ def test_destroy_swallows_cancel_errors(
         raise RuntimeError("cancel failed")
 
     client._client.batches.cancel = _raising_cancel  # type: ignore[assignment]
-    client._active_batch_ids = ["batch-x"]
+    client._active_batches = {"batch-x": ["file-x"]}
 
     client.destroy()  # Must not raise.
-    assert client._active_batch_ids == []
+
+    assert fake_openai_module["deleted_files"] == ["file-x"]
+    assert client._active_batches == {}
 
 
-def test_batch_api_batch_id_removed_after_completion(
+def test_batch_api_deletes_files_and_stops_tracking(
     fake_openai_module: dict[str, Any],
 ) -> None:
-    # Verifies the batch id is removed from _active_batch_ids after the job completes.
-    _ = fake_openai_module
+    # Verifies the input and output files are deleted once results are read.
     client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(model="gpt-test")
 
     client.batch_generate(
@@ -609,4 +621,144 @@ def test_batch_api_batch_id_removed_after_completion(
         poll_interval=0.0,
     )
 
-    assert client._active_batch_ids == []
+    assert client._active_batches == {}
+    assert fake_openai_module["deleted_files"] == [
+        "file-fake",
+        "file-output-fake",
+    ]
+
+
+def test_batch_api_deletes_files_when_reading_fails(
+    fake_openai_module: dict[str, Any],
+) -> None:
+    # Verifies a failed download still deletes the files of the batch.
+    def _raising_content(file_id: str) -> object:
+        raise RuntimeError("download failed")
+
+    client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(
+        model="gpt-test", on_error="ignore"
+    )
+    client._client.files.content = _raising_content  # type: ignore[assignment]
+
+    responses = client.batch_generate(
+        messages=[[{"role": "user", "content": "hi"}]],
+        use_batch_api=True,
+        poll_interval=0.0,
+    )
+
+    assert responses[0].error is not None
+    assert "download failed" in responses[0].error
+    assert client._active_batches == {}
+    assert fake_openai_module["deleted_files"] == [
+        "file-fake",
+        "file-output-fake",
+    ]
+
+
+def test_batch_api_expired_keeps_finished_requests(
+    fake_openai_module: dict[str, Any],
+) -> None:
+    # Verifies an expired batch keeps the requests its output file holds and
+    # marks only the missing ones as errors, naming the status.
+    fake_openai_module["batch_retrieve_responses"] = [
+        types.SimpleNamespace(
+            id="batch-fake",
+            status="expired",
+            output_file_id="file-output-fake",
+            error_file_id=None,
+        ),
+    ]
+    fake_openai_module["batch_output_content"] = _make_batch_output(
+        ("request-0", "first")
+    )
+
+    client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(
+        model="gpt-test", on_error="ignore"
+    )
+    responses = client.batch_generate(
+        messages=[
+            [{"role": "user", "content": "msg0"}],
+            [{"role": "user", "content": "msg1"}],
+        ],
+        use_batch_api=True,
+        poll_interval=0.0,
+    )
+
+    assert responses[0].text == "first"
+    assert responses[0].error is None
+    assert responses[1].error is not None
+    assert "expired" in responses[1].error
+
+
+def test_batch_api_reads_the_error_file(
+    fake_openai_module: dict[str, Any],
+) -> None:
+    # Verifies entries of the error file are read alongside the output file.
+    fake_openai_module["batch_retrieve_responses"] = [
+        types.SimpleNamespace(
+            id="batch-fake",
+            status="completed",
+            output_file_id="file-output-fake",
+            error_file_id="file-error-fake",
+        ),
+    ]
+    fake_openai_module["file_contents"] = {
+        "file-output-fake": _make_batch_output(("request-1", "second")),
+        "file-error-fake": json.dumps(
+            {
+                "id": "resp-r0",
+                "custom_id": "request-0",
+                "response": None,
+                "error": {"code": "invalid_request", "message": "too long"},
+            }
+        ),
+    }
+
+    client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(
+        model="gpt-test", on_error="ignore"
+    )
+    responses = client.batch_generate(
+        messages=[
+            [{"role": "user", "content": "msg0"}],
+            [{"role": "user", "content": "msg1"}],
+        ],
+        use_batch_api=True,
+        poll_interval=0.0,
+    )
+
+    assert responses[0].error is not None
+    assert "too long" in responses[0].error
+    assert responses[1].text == "second"
+    assert fake_openai_module["deleted_files"] == [
+        "file-fake",
+        "file-output-fake",
+        "file-error-fake",
+    ]
+
+
+def test_batch_api_keeps_tracking_an_interrupted_batch(
+    fake_openai_module: dict[str, Any],
+) -> None:
+    # Verifies an interrupted poll leaves the batch and its input file for
+    # destroy() instead of deleting the file of a running job.
+    def _raising_retrieve(batch_id: str) -> object:
+        raise KeyboardInterrupt
+
+    fake_openai_module["batch_initial_status"] = "in_progress"
+    client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(model="gpt-test")
+    client._client.batches.retrieve = _raising_retrieve  # type: ignore[assignment]
+
+    with pytest.raises(KeyboardInterrupt):
+        client.batch_generate(
+            messages=[[{"role": "user", "content": "hi"}]],
+            use_batch_api=True,
+            poll_interval=0.0,
+        )
+
+    assert client._active_batches == {"batch-fake": ["file-fake"]}
+    assert fake_openai_module["deleted_files"] == []
+
+    client.destroy()
+
+    assert fake_openai_module["cancelled_batches"] == ["batch-fake"]
+    assert fake_openai_module["deleted_files"] == ["file-fake"]

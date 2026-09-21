@@ -198,6 +198,9 @@ def fake_openai_module(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "created_batches": [],
         "cancelled_batches": [],
         "uploaded_files": [],
+        "deleted_files": [],
+        "file_contents": {},
+        "delete_raises": None,
     }
 
     class FakeHTTPResponse:
@@ -235,8 +238,22 @@ def fake_openai_module(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             return types.SimpleNamespace(id="file-fake")
 
         def content(self, file_id: str) -> object:
-            _ = file_id
+            """Return the JSONL of one file id.
+
+            ``file_contents`` holds a body per file id, for a batch that wrote
+            both an output and an error file. A file id it does not name falls
+            back to ``batch_output_content``.
+            """
+            contents: dict[str, str] = state["file_contents"]
+            if file_id in contents:
+                return types.SimpleNamespace(text=contents[file_id])
             return types.SimpleNamespace(text=state["batch_output_content"])
+
+        def delete(self, file_id: str) -> object:
+            state["deleted_files"].append(file_id)
+            if state["delete_raises"] is not None:
+                raise cast(Exception, state["delete_raises"])
+            return types.SimpleNamespace(id=file_id, deleted=True)
 
     class FakeBatches:
         def create(
@@ -256,6 +273,7 @@ def fake_openai_module(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
                 id="batch-fake",
                 status=state["batch_initial_status"],
                 output_file_id="file-output-fake",
+                error_file_id=None,
             )
 
         def retrieve(self, batch_id: str) -> object:
@@ -266,6 +284,7 @@ def fake_openai_module(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
                 id=batch_id,
                 status="completed",
                 output_file_id="file-output-fake",
+                error_file_id=None,
             )
 
         def cancel(self, batch_id: str) -> None:
