@@ -2645,9 +2645,10 @@ class Annotator:
         """Generate a new dataset from prompts.
 
         Args:
-            output_dir: Directory where annotation output is written. Every
-                argument below is passed straight through, so the full
-                description of each is in
+            output_dir: Directory where annotation output is written.
+                ``prompts`` and ``prompt_prefix`` build the prompt dataset and
+                its template; every other argument below is passed straight
+                through, so the full description of each is in
                 [`prepare_data`][llm_annotator.annotator.Annotator.prepare_data]
                 (data selection and prompting) or in
                 [`run_annotation`][llm_annotator.annotator.Annotator.run_annotation]
