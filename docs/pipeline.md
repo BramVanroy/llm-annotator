@@ -635,7 +635,8 @@ steps:
 by the suffix:
 
 - `.json`: a JSON list of strings. An object, a list with a non-string entry or
-  an empty list is rejected at load time, with the file named.
+  an empty list is rejected when the step starts, before anything is sent to
+  the model, with the file named.
 
   ```json title="prompts/questions.json"
   ["Write a short geography quiz question.", "Write a short history question."]

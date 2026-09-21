@@ -532,9 +532,9 @@ class EngineConfig(_StrictBase):
         Unset fields are dropped rather than passed as ``None``, so vLLM's own
         defaults apply to anything the config does not mention.
         ``reasoning_parser`` rides along here because
-        [`build_client`][llm_annotator.config.ClientConfig.build_client] feeds
-        this dict to the offline client's constructor, which keeps it rather
-        than forwarding it: ``vllm.LLM`` does not take it.
+        [`build_client`][llm_annotator.pool.build_client] feeds this dict to
+        the offline client's constructor, which keeps it rather than
+        forwarding it: ``vllm.LLM`` does not take it.
 
         Returns:
             Keyword arguments, with ``extra`` merged in.
