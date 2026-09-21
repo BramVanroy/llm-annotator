@@ -257,3 +257,5 @@ make quality
 make typecheck
 make test
 ```
+
+AI note: development of this repository is AI-assisted since v0.16.0.
