@@ -167,6 +167,16 @@ local progress directory is empty, so a forgotten restore cannot replace the
 backup with a run that starts from zero. Pass `overwrite=True` to delete the
 backup and annotate every row again.
 
+Every `upload_every_n_samples` rows the progress files are pushed to the
+`<task_prefix>progress_backup` branch. That upload runs on a background
+thread, so the next batch is dispatched while it is in flight. A cycle that
+comes due while the previous upload still runs is skipped, since the next one
+carries the same rows and the ones after them. An upload that fails is logged
+at warning level and the run continues, because the progress files on disk are
+the copy that a resume reads. The upload at the end of the run waits for the
+background one and is not skipped: a failure there ends the run, since that is
+the upload a restore on another machine depends on.
+
 To force a fresh preparation even when local or Hub artifacts exist, pass
 `force_data_preparation=True` to `prepare_data` (or to `annotate_dataset`).
 
@@ -260,6 +270,26 @@ Every run ends with a log line that says how many samples finished with an
 error (with a count per `error_type`, which are the names that `retry_errors`
 takes) and how many have invalid fields. The same counts are written to
 `<output_dir>/metadata/<task_prefix>annotation_metadata.json`.
+
+A second log line gives the throughput, and the same numbers go to the
+`run_summary` key of that file:
+
+```json
+"run_summary": {
+    "num_rows": 8000,
+    "num_output_tokens": 1536000,
+    "elapsed_seconds": 412.7,
+    "rows_per_second": 19.39,
+    "output_tokens_per_second": 3721.83
+}
+```
+
+Those numbers cover the invocation that wrote them and nothing else: the rows
+that it annotated, the output tokens that they hold, and the seconds from the
+warm-up to its last written row. A run that resumes another one therefore
+reports its own throughput, not the average over every attempt, and a run that
+finds every row already annotated writes `"run_summary": null`. An errored row
+has no token count and adds 0 to `num_output_tokens`.
 
 ### Many vLLM servers at once
 

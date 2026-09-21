@@ -220,6 +220,18 @@ itself. What is left to set:
   and therefore how often results reach the progress files. It does not decide how much
   work runs on the GPU at once, but a call cannot run more sequences than it holds, so
   keep `batch_size` at or above `max_num_seqs` (256 by default in this client).
+- A value of several times `max_num_seqs` keeps the GPU fuller near the end of a call.
+  `LLM.chat` adds every conversation of the call as a request before it steps the engine
+  and returns only once all of them finished
+  (`vllm/entrypoints/offline_utils.py`, `_render_and_add_requests` and `_run_engine`), and
+  the scheduler admits a waiting request as soon as a running one finishes, up to
+  `max_num_seqs` (`vllm/v1/core/sched/scheduler.py`). With `batch_size == max_num_seqs`
+  nothing is left to admit once the first sequences finish, so the last iterations of
+  every call run on the few sequences with the longest outputs. With a larger
+  `batch_size` the waiting queue refills those slots. Two costs: a crash loses the rows
+  of the call that was in flight, and the progress files (and the Hub backup) are written
+  once per call rather than more often. `sort_by_length` does not help here, since it
+  sorts on prompt length and the barrier is set by output length.
 - vLLM refuses to start when the KV cache cannot hold one sequence of `max_model_len`
   tokens. Lower `max_model_len` to what your prompts and outputs need.
 - An out-of-memory error means that too little memory is left next to the KV cache.

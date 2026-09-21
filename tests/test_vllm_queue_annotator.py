@@ -1019,8 +1019,10 @@ def test_progress_files_are_chunked_and_uploaded(
         hub_id: str | None = None,
         *,
         task_prefix: str = "",
+        active_path: Path | None = None,
+        active_bytes: int = 0,
     ) -> None:
-        _ = self, hub_id, task_prefix
+        _ = self, hub_id, task_prefix, active_path, active_bytes
         uploads.append(Path(dir_path))
 
     monkeypatch.setattr(Annotator, "push_progress_to_hub", _fake_push)
@@ -1350,3 +1352,39 @@ def test_set_max_concurrent_batches_per_client_works_after_an_eviction(
     annotator.set_max_concurrent_batches_per_client(3)
 
     assert annotator.max_concurrent_batches_per_client == 3
+
+
+def test_run_summary_is_written_for_a_pool_workload(tmp_path: Path) -> None:
+    # VLLMQueueAnnotator does not override run_annotation, so it must inherit
+    # the same run_summary writer as the base Annotator.
+    n_samples = 5
+    dataset = _make_dataset(n_samples)
+    annotator = VLLMQueueAnnotator(
+        clients=[
+            FakeVLLMOnlineClient(base_url="http://w0"),
+            FakeVLLMOnlineClient(base_url="http://w1"),
+        ],
+        batch_size=2,
+    )
+
+    out_dir = tmp_path / "out"
+    annotator.run_annotation(
+        output_dir=out_dir,
+        prepared_dataset=dataset,
+        keep_idx_column=True,
+    )
+
+    metadata_path = out_dir / "metadata" / "annotation_metadata.json"
+    summary = json.loads(metadata_path.read_text(encoding="utf-8"))[
+        "run_summary"
+    ]
+
+    assert summary is not None
+    assert set(summary) == {
+        "num_rows",
+        "num_output_tokens",
+        "elapsed_seconds",
+        "rows_per_second",
+        "output_tokens_per_second",
+    }
+    assert summary["num_rows"] == n_samples

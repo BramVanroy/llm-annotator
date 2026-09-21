@@ -3,6 +3,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import threading
 import types
 from dataclasses import replace
 from pathlib import Path
@@ -12,10 +13,13 @@ import pytest
 from datasets import Dataset, load_dataset
 
 from llm_annotator.annotator import (
+    PROGRESS_UPLOAD_FILE,
     Annotator,
     SelectionRecord,
     _callable_component,
+    _copy_file_prefix,
     _create_messages,
+    _ProgressUploader,
     _resolve_samples_per_output_file,
     destroy_on_error,
 )
@@ -1134,7 +1138,7 @@ def test_push_dir_to_hub_calls_hf_helpers(
         lambda *args, **kwargs: called.append("branch"),
     )
     monkeypatch.setattr(
-        "llm_annotator.annotator.upload_large_folder",
+        "llm_annotator.annotator.upload_folder",
         lambda *args, **kwargs: called.append("upload"),
     )
     monkeypatch.setattr(
@@ -1163,7 +1167,7 @@ def test_push_progress_to_hub_uploads_the_selection_record(
         "llm_annotator.annotator.create_branch", lambda *a, **kw: None
     )
     monkeypatch.setattr(
-        "llm_annotator.annotator.upload_large_folder", lambda *a, **kw: None
+        "llm_annotator.annotator.upload_folder", lambda *a, **kw: None
     )
     monkeypatch.setattr(
         "llm_annotator.annotator.upload_file",
@@ -1187,6 +1191,83 @@ def test_push_progress_to_hub_uploads_the_selection_record(
     assert uploads[0]["path_in_repo"] == "qa_selection.json"
     assert uploads[0]["revision"] == "qa_progress_backup"
     assert uploads[0]["repo_type"] == "dataset"
+
+
+def test_copy_file_prefix_copies_exactly_n_bytes(tmp_path: Path) -> None:
+    src = tmp_path / "src.jsonl"
+    src.write_bytes(b"0123456789")
+    dest = tmp_path / "dest.jsonl"
+
+    _copy_file_prefix(src=src, dest=dest, num_bytes=4)
+
+    assert dest.read_bytes() == b"0123"
+
+
+def test_copy_file_prefix_copies_a_shorter_source_whole(
+    tmp_path: Path,
+) -> None:
+    src = tmp_path / "src.jsonl"
+    src.write_bytes(b"abc")
+    dest = tmp_path / "dest.jsonl"
+
+    _copy_file_prefix(src=src, dest=dest, num_bytes=100)
+
+    assert dest.read_bytes() == b"abc"
+
+
+def test_push_progress_to_hub_uploads_only_a_prefix_of_the_active_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The writer keeps growing the active file, so the backup must upload a
+    # byte-exact copy of the prefix that was written when the cycle was
+    # requested, not the file itself.
+    folder_calls: list[dict[str, Any]] = []
+    file_calls: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        "llm_annotator.annotator.create_repo", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        "llm_annotator.annotator.create_branch", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        "llm_annotator.annotator.upload_folder",
+        lambda *a, **kw: folder_calls.append(kw),
+    )
+
+    def _fake_upload_file(**kwargs: Any) -> None:
+        content = Path(kwargs["path_or_fileobj"]).read_bytes()
+        file_calls.append({**kwargs, "content": content})
+
+    monkeypatch.setattr(
+        "llm_annotator.annotator.upload_file", _fake_upload_file
+    )
+
+    progress_dir = tmp_path / "progress_backup"
+    progress_dir.mkdir()
+    active_path = progress_dir / "active.jsonl"
+    full_content = b'{"idx": 0}\n{"idx": 1}\n{"idx": 2}\n'
+    active_path.write_bytes(full_content)
+    active_bytes = len(b'{"idx": 0}\n')
+
+    Annotator(client=DummyClient()).push_progress_to_hub(
+        progress_dir,
+        hub_id="me/test",
+        active_path=active_path,
+        active_bytes=active_bytes,
+    )
+
+    assert len(folder_calls) == 1
+    assert folder_calls[0]["allow_patterns"] == ["*.jsonl"]
+    assert folder_calls[0]["ignore_patterns"] == ["active.jsonl"]
+
+    assert len(file_calls) == 1
+    assert file_calls[0]["path_in_repo"] == "active.jsonl"
+    assert file_calls[0]["content"] == full_content[:active_bytes]
+    assert file_calls[0]["content"] != full_content
+
+    staged = progress_dir.parent / PROGRESS_UPLOAD_FILE
+    assert not staged.exists()
 
 
 def test_run_annotation_refuses_to_overwrite_a_hub_backup(
@@ -1234,16 +1315,13 @@ def test_run_annotation_starts_when_the_backup_branch_is_absent(
         "llm_annotator.annotator.create_branch", lambda *a, **kw: None
     )
     monkeypatch.setattr(
-        "llm_annotator.annotator.upload_large_folder", lambda *a, **kw: None
+        "llm_annotator.annotator.upload_folder", lambda *a, **kw: None
     )
     monkeypatch.setattr(
         "llm_annotator.annotator.upload_file", lambda *a, **kw: None
     )
     monkeypatch.setattr(
         "llm_annotator.annotator.delete_branch", lambda *a, **kw: None
-    )
-    monkeypatch.setattr(
-        "llm_annotator.annotator.upload_folder", lambda *a, **kw: None
     )
     monkeypatch.setattr(Dataset, "push_to_hub", lambda *a, **kw: None)
 
@@ -1300,16 +1378,18 @@ def test_run_annotation_pushes_progress_to_the_prefixed_branch(
         "llm_annotator.annotator.create_branch",
         lambda *a, **kw: branches.append(kw["branch"]),
     )
+
+    def _record_upload(*args: Any, **kwargs: Any) -> None:
+        # The metadata upload shares this helper and has no revision.
+        if "revision" in kwargs:
+            revisions.append(kwargs["revision"])
+
     monkeypatch.setattr(
-        "llm_annotator.annotator.upload_large_folder",
-        lambda *a, **kw: revisions.append(kw["revision"]),
+        "llm_annotator.annotator.upload_folder", _record_upload
     )
     monkeypatch.setattr(
         "llm_annotator.annotator.delete_branch",
         lambda *a, **kw: deleted.append(kw["branch"]),
-    )
-    monkeypatch.setattr(
-        "llm_annotator.annotator.upload_folder", lambda *a, **kw: None
     )
     monkeypatch.setattr(
         "llm_annotator.annotator.upload_file", lambda *a, **kw: None
@@ -2168,6 +2248,66 @@ def test_get_skip_idxs_requires_idx_column(
 
     with pytest.raises(ValueError, match="not found in existing output file"):
         dummy_annotator._get_skip_idxs(process_pdout=p, idx_column="idx")
+
+
+def test_get_skip_idxs_reads_rows_with_the_id_in_any_position(
+    tmp_path: Path, dummy_annotator: Annotator
+) -> None:
+    # The id column can sit anywhere in a row, since the writer emits the
+    # kept source columns in their own order. Both rows count as done.
+    p = tmp_path / "out"
+    p.mkdir()
+    (p / "out.jsonl").write_text(
+        json.dumps({"idx": 0, "response": "a"})
+        + "\n"
+        + json.dumps({"response": "b", "idx": 1})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert dummy_annotator._get_skip_idxs(
+        process_pdout=p, idx_column="idx"
+    ) == {0, 1}
+
+
+def test_run_annotation_resumes_past_rows_with_the_id_in_any_position(
+    tmp_path: Path,
+) -> None:
+    # End-to-end version of the above: a resumed run must only annotate the
+    # row that is missing, and the final dataset must hold every row.
+    out_dir = tmp_path / "out"
+    progress_dir = out_dir / "progress_backup"
+    progress_dir.mkdir(parents=True)
+    (progress_dir / "old.jsonl").write_text(
+        json.dumps({"idx": 0, "response": "old-0"})
+        + "\n"
+        + json.dumps({"response": "old-1", "idx": 1})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": [0, 1, 2],
+            "text": ["a", "b", "c"],
+            "messages": [
+                [{"role": "user", "content": f"Q: {t}"}] for t in "abc"
+            ],
+        }
+    )
+
+    done = Annotator(client=DummyClient(), batch_size=2).run_annotation(
+        output_dir=out_dir,
+        prompt_template="Q: {text}",
+        prepared_dataset=prepared_ds,
+        keep_idx_column=True,
+    )
+
+    assert sorted(done["idx"]) == [0, 1, 2]
+    by_idx = dict(zip(done["idx"], done["response"]))
+    assert by_idx[0] == "old-0"
+    assert by_idx[1] == "old-1"
+    assert by_idx[2] == "Q: c"
 
 
 def test_process_batch_rejects_short_response_list(
@@ -3212,3 +3352,317 @@ def test_overwrite_removes_the_final_dataset_of_the_task(
 
     assert not (out_dir / "data-00000-of-00002.arrow").exists()
     assert Dataset.load_from_disk(out_dir)["response"] == ["Q: a"]
+
+
+class _BlockingAnnotator:
+    """Stand-in for the ``Annotator`` a ``_ProgressUploader`` calls back.
+
+    ``push_progress_to_hub`` blocks on ``release`` and sets ``started`` right
+    before blocking, so a test can wait for the upload to begin and then
+    control exactly when it finishes.
+    """
+
+    def __init__(self, *, release: threading.Event) -> None:
+        self.release = release
+        self.started = threading.Event()
+        self.finished = threading.Event()
+        self.calls = 0
+
+    def push_progress_to_hub(self, *args: Any, **kwargs: Any) -> None:
+        _ = args
+        _ = kwargs
+        self.calls += 1
+        self.started.set()
+        assert self.release.wait(timeout=5), "test did not release in time"
+        self.finished.set()
+
+
+def test_progress_uploader_drops_a_request_while_one_is_running(
+    tmp_path: Path,
+) -> None:
+    release = threading.Event()
+    fake = _BlockingAnnotator(release=release)
+    uploader = _ProgressUploader(
+        annotator=cast(Any, fake),
+        process_pdout=tmp_path,
+        hub_id="me/test",
+        task_prefix="",
+    )
+    active_path = tmp_path / "active.jsonl"
+    active_path.write_text('{"idx": 0}\n', encoding="utf-8")
+
+    uploader.request(active_path=active_path, active_bytes=1)
+    assert fake.started.wait(timeout=5)
+    # The first upload is still running (blocked on the event), so this
+    # second request must be dropped rather than queued.
+    uploader.request(active_path=active_path, active_bytes=1)
+
+    release.set()
+    uploader.close()
+
+    assert fake.calls == 1
+
+
+def test_progress_uploader_close_waits_for_an_in_flight_upload(
+    tmp_path: Path,
+) -> None:
+    release = threading.Event()
+    fake = _BlockingAnnotator(release=release)
+    uploader = _ProgressUploader(
+        annotator=cast(Any, fake),
+        process_pdout=tmp_path,
+        hub_id="me/test",
+        task_prefix="",
+    )
+    active_path = tmp_path / "active.jsonl"
+    active_path.write_text('{"idx": 0}\n', encoding="utf-8")
+
+    uploader.request(active_path=active_path, active_bytes=1)
+    assert fake.started.wait(timeout=5)
+    assert not fake.finished.is_set()
+
+    release.set()
+    uploader.close()
+
+    assert fake.finished.is_set()
+
+
+def test_progress_uploader_logs_a_warning_and_swallows_the_exception(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    class _FailingAnnotator:
+        def push_progress_to_hub(self, *args: Any, **kwargs: Any) -> None:
+            _ = args
+            _ = kwargs
+            raise RuntimeError("boom")
+
+    uploader = _ProgressUploader(
+        annotator=cast(Any, _FailingAnnotator()),
+        process_pdout=tmp_path,
+        hub_id="me/test",
+        task_prefix="",
+    )
+    active_path = tmp_path / "active.jsonl"
+    active_path.write_text('{"idx": 0}\n', encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING, logger="llm_annotator.annotator"):
+        uploader.request(active_path=active_path, active_bytes=1)
+        uploader.close()
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("boom" in r.message for r in warnings)
+
+
+def _leftover_upload_threads() -> list[threading.Thread]:
+    return [
+        t
+        for t in threading.enumerate()
+        if t.name.startswith("progress-upload")
+    ]
+
+
+def test_run_annotation_joins_the_uploader_when_it_aborts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The circuit breaker must not leave the backup thread running behind it.
+    monkeypatch.setattr(
+        "llm_annotator.annotator.list_repo_refs",
+        lambda *a, **kw: types.SimpleNamespace(branches=[]),
+    )
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": list(range(3)),
+            "text": [str(i) for i in range(3)],
+            "messages": [
+                [{"role": "user", "content": f"Q: {i}"}] for i in range(3)
+            ],
+        }
+    )
+
+    def _always_failing_batch(
+        self: Annotator, **kwargs: Any
+    ) -> list[dict[str, Any]]:
+        batch = kwargs["batch"]
+        return [
+            {
+                "response": None,
+                "finish_reason": None,
+                "num_tokens": None,
+                "error": "boom",
+                "error_type": "ProviderError",
+            }
+            for _ in batch["idx"]
+        ]
+
+    monkeypatch.setattr(Annotator, "_process_batch", _always_failing_batch)
+    annotator = Annotator(
+        client=DummyClient(on_error="ignore"), batch_size=1, verbose=False
+    )
+
+    with pytest.raises(TooManyConsecutiveFailedBatchesError):
+        annotator.run_annotation(
+            output_dir=tmp_path / "out",
+            prompt_template="Q: {text}",
+            prepared_dataset=prepared_ds,
+            num_retries_invalid=0,
+            max_consecutive_failed_batches=2,
+            hub_id="me/test",
+            upload_every_n_samples=1,
+        )
+
+    assert _leftover_upload_threads() == []
+
+
+class _RaisingClient(DummyClient):
+    """A DummyClient whose batch_generate raises instead of answering."""
+
+    def __init__(self, exc: BaseException, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._exc = exc
+
+    def batch_generate(
+        self,
+        *,
+        messages: list[list[dict[str, str]]],
+        options: ProviderRuntimeOptions | None = None,
+        gen_kwargs: dict[str, Any] | None = None,
+    ) -> list[Response]:
+        raise self._exc
+
+
+def test_run_annotation_joins_the_uploader_on_keyboard_interrupt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "llm_annotator.annotator.list_repo_refs",
+        lambda *a, **kw: types.SimpleNamespace(branches=[]),
+    )
+    prepared_ds = Dataset.from_dict(
+        {"idx": [0], "messages": [[{"role": "user", "content": "Q"}]]}
+    )
+    client = _RaisingClient(KeyboardInterrupt())
+    annotator = Annotator(client=client, batch_size=1, verbose=False)
+
+    with pytest.raises(KeyboardInterrupt):
+        annotator.run_annotation(
+            output_dir=tmp_path / "out",
+            prompt_template="Q: {text}",
+            prepared_dataset=prepared_ds,
+            hub_id="me/test",
+            upload_every_n_samples=1,
+        )
+
+    assert _leftover_upload_threads() == []
+    assert client.destroy_called == 1
+
+
+def test_run_summary_counts_only_this_invocations_rows(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # run_summary must report the rows and tokens this invocation produced,
+    # not the rows a previous invocation already left on disk, and it must
+    # treat an errored row's None token count as 0.
+    out_dir = tmp_path / "out"
+    _write_progress_rows(
+        out_dir,
+        [
+            {
+                "idx": 0,
+                "response": "old",
+                "num_tokens": 99,
+                "error": None,
+                "error_type": None,
+            }
+        ],
+    )
+
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": [0, 1, 2],
+            "text": ["a", "b", "c"],
+            "messages": [
+                [{"role": "user", "content": f"Q: {t}"}] for t in "abc"
+            ],
+        }
+    )
+
+    def _mixed_batch(self: Annotator, **kwargs: Any) -> list[dict[str, Any]]:
+        batch = kwargs["batch"]
+        return [
+            {
+                "response": None if idx == 2 else "ok",
+                "finish_reason": None if idx == 2 else "stop",
+                "num_tokens": None if idx == 2 else 4,
+                "error": "boom" if idx == 2 else None,
+                "error_type": "ProviderError" if idx == 2 else None,
+            }
+            for idx in batch["idx"]
+        ]
+
+    monkeypatch.setattr(Annotator, "_process_batch", _mixed_batch)
+    annotator = Annotator(
+        client=DummyClient(on_error="ignore"), batch_size=2, verbose=False
+    )
+
+    annotator.run_annotation(
+        output_dir=out_dir,
+        prompt_template="Q: {text}",
+        prepared_dataset=prepared_ds,
+        num_retries_invalid=0,
+    )
+
+    metadata_path = out_dir / "metadata" / "annotation_metadata.json"
+    summary = json.loads(metadata_path.read_text(encoding="utf-8"))[
+        "run_summary"
+    ]
+
+    assert summary is not None
+    assert set(summary) == {
+        "num_rows",
+        "num_output_tokens",
+        "elapsed_seconds",
+        "rows_per_second",
+        "output_tokens_per_second",
+    }
+    # Only idx 1 and 2 were annotated by this invocation; idx 0 was already
+    # on disk and must not be counted.
+    assert summary["num_rows"] == 2
+    # idx 1 contributes 4 tokens, idx 2 errored and contributes 0.
+    assert summary["num_output_tokens"] == 4
+
+
+def test_run_summary_is_null_when_nothing_new_is_annotated(
+    tmp_path: Path,
+) -> None:
+    out_dir = tmp_path / "out"
+    _write_progress_rows(
+        out_dir,
+        [
+            {
+                "idx": 0,
+                "response": "old",
+                "num_tokens": 1,
+                "error": None,
+                "error_type": None,
+            }
+        ],
+    )
+    prepared_ds = Dataset.from_dict(
+        {
+            "idx": [0],
+            "text": ["a"],
+            "messages": [[{"role": "user", "content": "Q: a"}]],
+        }
+    )
+
+    Annotator(client=DummyClient(), verbose=False).run_annotation(
+        output_dir=out_dir,
+        prompt_template="Q: {text}",
+        prepared_dataset=prepared_ds,
+    )
+
+    metadata_path = out_dir / "metadata" / "annotation_metadata.json"
+    summary = json.loads(metadata_path.read_text(encoding="utf-8"))[
+        "run_summary"
+    ]
+    assert summary is None
