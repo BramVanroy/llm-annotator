@@ -6,6 +6,7 @@ from typing import Any, cast
 
 import pytest
 
+from llm_annotator.clients.exceptions import ProviderError
 from llm_annotator.clients.openai_client import (
     OpenAIClient,
     OpenAIRuntimeOptions,
@@ -156,17 +157,64 @@ def test_openai_process_response_without_reasoning_content(
     assert response.reasoning is None
 
 
-def test_openai_generate_request_error_raises(
+def test_openai_generate_request_error_follows_on_error(
     fake_openai_module: dict[str, Any],
 ) -> None:
-    # Verifies provider request failures are re-raised directly.
+    # Verifies a failed request is an error Response unless on_error is raise.
     fake_openai_module["create_raises"] = RuntimeError("api down")
     client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(
         model="gpt-test", on_error="ignore"
     )
 
-    with pytest.raises(RuntimeError, match="api down"):
+    response = client.generate(messages=[{"role": "user", "content": "hi"}])
+
+    assert response.text == ""
+    assert response.error is not None
+    assert "api down" in response.error
+    assert response.error_type == "ProviderError"
+
+
+def test_openai_generate_request_error_raises(
+    fake_openai_module: dict[str, Any],
+) -> None:
+    # Verifies on_error="raise" turns a failed request into a ProviderError.
+    fake_openai_module["create_raises"] = RuntimeError("api down")
+    client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(
+        model="gpt-test", on_error="raise"
+    )
+
+    with pytest.raises(ProviderError, match="api down"):
         client.generate(messages=[{"role": "user", "content": "hi"}])
+
+
+def test_openai_generate_rejects_multiple_responses(
+    fake_openai_module: dict[str, Any],
+) -> None:
+    # Verifies a request for more than one response per sample is rejected.
+    _ = fake_openai_module
+    client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(
+        model="gpt-test", on_error="ignore"
+    )
+
+    with pytest.raises(ValueError, match="one response per sample"):
+        client.generate(
+            messages=[{"role": "user", "content": "hi"}],
+            gen_kwargs={"n": 4},
+        )
+
+
+def test_openai_batch_generate_keeps_max_workers(
+    fake_openai_module: dict[str, Any],
+) -> None:
+    # Verifies a batch smaller than max_workers leaves the client's own value.
+    _ = fake_openai_module
+    client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(
+        model="gpt-test", max_workers=16
+    )
+
+    client.batch_generate(messages=[[{"role": "user", "content": "one"}]])
+
+    assert client.max_workers == 16
 
 
 def test_openai_batch_generate_preserves_input_order(

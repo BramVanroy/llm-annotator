@@ -11,6 +11,7 @@ from llm_annotator.clients.claude_client import (
     ClaudeRuntimeOptions,
     _extract_system_instruction,
 )
+from llm_annotator.clients.exceptions import ProviderError
 
 
 pytestmark = pytest.mark.usefixtures("block_network")
@@ -167,15 +168,81 @@ def test_claude_process_response_collects_thinking_blocks(
     assert parsed.text == "the answer"
 
 
-def test_claude_generate_request_error_raises(
+def test_claude_generate_request_error_follows_on_error(
     fake_anthropic_module: dict[str, Any],
 ) -> None:
-    # Verifies Claude request failures are re-raised directly.
+    # Verifies a failed request is an error Response unless on_error is raise.
     fake_anthropic_module["create_raises"] = RuntimeError("api down")
     client = ClaudeClient(model="claude-test", on_error="ignore")
 
-    with pytest.raises(RuntimeError, match="api down"):
+    response = client.generate(messages=[{"role": "user", "content": "hi"}])
+
+    assert response.text == ""
+    assert response.error is not None
+    assert "api down" in response.error
+    assert response.error_type == "ProviderError"
+
+
+def test_claude_generate_request_error_raises(
+    fake_anthropic_module: dict[str, Any],
+) -> None:
+    # Verifies on_error="raise" turns a failed request into a ProviderError.
+    fake_anthropic_module["create_raises"] = RuntimeError("api down")
+    client = ClaudeClient(model="claude-test", on_error="raise")
+
+    with pytest.raises(ProviderError, match="api down"):
         client.generate(messages=[{"role": "user", "content": "hi"}])
+
+
+def test_claude_extract_system_instruction_drops_empty_system() -> None:
+    # Verifies an empty system message is removed from the message list.
+    messages, system = _extract_system_instruction(
+        [
+            {"role": "system", "content": ""},
+            {"role": "user", "content": "question"},
+        ]
+    )
+
+    assert system == ""
+    assert messages == [{"role": "user", "content": "question"}]
+
+
+def test_claude_generate_omits_empty_system(
+    fake_anthropic_module: dict[str, Any],
+) -> None:
+    # Verifies an empty system message reaches neither 'messages' nor 'system'.
+    client = ClaudeClient(model="claude-test")
+
+    client.generate(
+        messages=[
+            {"role": "system", "content": ""},
+            {"role": "user", "content": "Summarize"},
+        ]
+    )
+
+    request = fake_anthropic_module["last_create_kwargs"]
+    assert "system" not in request
+    assert request["messages"] == [{"role": "user", "content": "Summarize"}]
+
+
+@pytest.mark.parametrize("max_workers", [0, None])
+def test_claude_batch_generate_runs_sequentially(
+    fake_anthropic_module: dict[str, Any],
+    max_workers: int | None,
+) -> None:
+    # Verifies a worker count of 0 or None answers every input sequentially.
+    _ = fake_anthropic_module
+    client = ClaudeClient(model="claude-test", max_workers=max_workers)
+
+    responses = client.batch_generate(
+        messages=[
+            [{"role": "user", "content": "first"}],
+            [{"role": "user", "content": "second"}],
+        ]
+    )
+
+    assert len(responses) == 2
+    assert all(r.text == "first line\nsecond line" for r in responses)
 
 
 def test_claude_batch_generate_handles_worker_failures(

@@ -157,105 +157,59 @@ class ClaudeClient(Client[ClaudeRuntimeOptions]):
                 Has precedence over ``options``.
 
         Returns:
-            A Response object containing the generated response.
+            A Response object containing the generated response. A failed
+            request is an error Response when ``on_error`` is ``"warn"`` or
+            ``"ignore"``.
 
         Raises:
-            ProviderError: If the provider call fails.
+            ProviderError: If the request fails and ``on_error`` is
+                ``"raise"``, or if ``messages`` holds more than one system
+                message.
+            ValueError: If a message has a role Claude does not take, or a
+                system message is not the first message.
         """
         options = options or ClaudeRuntimeOptions()
 
+        # The Messages API takes the system prompt as its own argument rather
+        # than as a message.
+        messages, system_instruction = _extract_system_instruction(messages)
+
+        request_payload: dict[str, Any] = options.to_payload()
+        request_payload.update(
+            {
+                "model": self.model,
+                "messages": messages,
+            }
+        )
+
+        if system_instruction:
+            request_payload["system"] = system_instruction
+
+        if options.json_schema is not None:
+            if "output_config" not in request_payload:
+                request_payload["output_config"] = {}
+
+            schema = _sanitize_schema(
+                add_schema_additional_properties_false(options.json_schema)
+            )
+            request_payload["output_config"]["format"] = {
+                "type": "json_schema",
+                "schema": schema,
+            }
+
+        request_payload.update(gen_kwargs or {})
+
         try:
-            # Claude API requires separating the system prompt
-            messages, system_instruction = _extract_system_instruction(
-                messages
-            )
-
-            request_payload: dict[str, Any] = options.to_payload()
-
-            request_payload.update(
-                {
-                    "model": self.model,
-                    "messages": messages,
-                }
-            )
-
-            if system_instruction:
-                request_payload["system"] = system_instruction
-
-            if options.json_schema is not None:
-                if "output_config" not in request_payload:
-                    request_payload["output_config"] = {}
-
-                schema = _sanitize_schema(
-                    add_schema_additional_properties_false(options.json_schema)
-                )
-                request_payload["output_config"]["format"] = {
-                    "type": "json_schema",
-                    "schema": schema,
-                }
-
-            request_payload.update(gen_kwargs or {})
             response = self._client.messages.create(**request_payload)
         except Exception as exc:
-            # API errors specifically can always be raised
-            raise exc
-        else:
-            try:
-                return self._process_response(response=response)
-            except Exception as exc:
-                return self._handle_error(
-                    exc, context="Claude response processing failed"
-                )
+            return self._handle_error(exc, context="Claude request failed")
 
-    def batch_generate(
-        self,
-        *,
-        messages: list[list[dict[str, str]]],
-        options: ClaudeRuntimeOptions | None = None,
-        gen_kwargs: dict[str, Any] | None = None,
-    ) -> list[Response]:
-        """Generate responses for a batch of inputs concurrently.
-
-        The Anthropic API has no native synchronous batch endpoint, so requests
-        are dispatched in parallel using a thread pool.
-
-        Args:
-            messages: List of message lists, one per request.
-            options: Provider-specific generation options.
-            gen_kwargs: Additional provider-specific generation kwargs that are not covered by the standard options.
-                Has precedence over ``options``.
-
-        Returns:
-            A list of Response objects in the same order as the input.
-
-        Raises:
-            ProviderError: If any individual request fails.
-        """
-        from concurrent.futures import ThreadPoolExecutor
-
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = [
-                executor.submit(
-                    self.generate,
-                    messages=msgs,
-                    options=options,
-                    gen_kwargs=gen_kwargs,
-                )
-                for msgs in messages
-            ]
-
-        responses: list[Response] = []
-        for idx, future in enumerate(futures):
-            try:
-                responses.append(future.result())
-            except Exception as exc:
-                responses.append(
-                    self._handle_error(
-                        exc,
-                        context=f"Claude batch request failed at index {idx}",
-                    )
-                )
-        return responses
+        try:
+            return self._process_response(response=response)
+        except Exception as exc:
+            return self._handle_error(
+                exc, context="Claude response processing failed"
+            )
 
     def _handle_stop_reason(
         self, *, stop_reason: str | None, num_output_tokens: int | None

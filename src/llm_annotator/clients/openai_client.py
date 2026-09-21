@@ -387,46 +387,50 @@ class OpenAIClient(Client[T_OpenAIOptions]):
                 Has precedence over ``options``.
 
         Returns:
-            A Response object containing the generated response.
+            A Response object containing the generated response. A failed
+            request is an error Response when ``on_error`` is ``"warn"`` or
+            ``"ignore"``.
 
         Raises:
-            ProviderError: If the provider call fails.
+            ProviderError: If the request fails and ``on_error`` is
+                ``"raise"``.
+            ValueError: If the request asks for more than one response.
         """
         resolved = cast(
             OpenAIRuntimeOptions, options or self._default_options()
         )
-        try:
-            request_payload: dict[str, Any] = resolved.to_payload()
+        request_payload: dict[str, Any] = resolved.to_payload()
+        request_payload.update(
+            {
+                "model": self.model,
+                "messages": messages,
+            }
+        )
+        if resolved.json_schema is not None:
+            request_payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "response",
+                    "schema": add_schema_additional_properties_false(
+                        resolved.json_schema
+                    ),
+                    "strict": True,
+                },
+            }
+        request_payload.update(gen_kwargs or {})
+        reject_multiple_responses(request_payload)
 
-            request_payload.update(
-                {
-                    "model": self.model,
-                    "messages": messages,
-                }
-            )
-            if resolved.json_schema is not None:
-                request_payload["response_format"] = {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "response",
-                        "schema": add_schema_additional_properties_false(
-                            resolved.json_schema
-                        ),
-                        "strict": True,
-                    },
-                }
-            request_payload.update(gen_kwargs or {})
+        try:
             response = self._client.chat.completions.create(**request_payload)
         except Exception as exc:
-            # API errors specifically can always be raised
-            raise exc
-        else:
-            try:
-                return self._process_response(response=response)
-            except Exception as exc:
-                return self._handle_error(
-                    exc, context="OpenAI response processing failed"
-                )
+            return self._handle_error(exc, context="OpenAI request failed")
+
+        try:
+            return self._process_response(response=response)
+        except Exception as exc:
+            return self._handle_error(
+                exc, context="OpenAI response processing failed"
+            )
 
     def batch_generate(
         self,

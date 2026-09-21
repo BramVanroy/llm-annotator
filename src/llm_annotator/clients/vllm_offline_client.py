@@ -462,11 +462,13 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
                 not covered by ``options``. Has precedence over ``options``.
 
         Returns:
-            A Response object containing the generated text and metadata.
+            A Response object containing the generated text and metadata. A
+            failed call is an error Response when ``on_error`` is ``"warn"`` or
+            ``"ignore"``.
 
         Raises:
-            ProviderError: If the vLLM call fails or the stop reason is
-                an error condition.
+            ProviderError: If the vLLM call fails or the stop reason is an
+                error condition, and ``on_error`` is ``"raise"``.
         """
         return self.batch_generate(
             messages=[messages],
