@@ -74,7 +74,7 @@ llm-annotate my-pipeline.yaml
 ```
 
 The result is a dataset with a `sentiment_response` column next to the original
-`text`, saved under `outputs/imdb-sentiment/`.
+`text`, written to `outputs/imdb-sentiment/final/`.
 <!-- --8<-- [end:config-quickstart] -->
 
 A config can hold several steps that run in order, each annotating what the

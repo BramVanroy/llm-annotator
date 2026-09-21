@@ -46,7 +46,7 @@ llm-annotate my-pipeline.yaml
 ```
 
 That writes a `sentiment_response` column next to the original `text` and saves
-the dataset under `outputs/imdb-sentiment/`. `{text}` is filled in from the
+the dataset to `outputs/imdb-sentiment/final/`. `{text}` is filled in from the
 column of that name, so a prompt can name any column of the dataset. The rest of
 this page is what to add to that config, and
 [Choosing a provider](choosing-a-provider.md) covers the `client` block for
