@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shlex
 import shutil
@@ -2035,3 +2036,69 @@ def test_pipeline_growth_keeps_a_later_step_on_its_rows(
 
     assert len(grown) == 20
     assert [len(client.seen_prompts) for client in built_clients] == [10, 10]
+
+
+# --- small helpers used by run_pipeline -------------------------------------
+
+
+def test_record_step_run_returns_none_without_a_selection_record(
+    tmp_path: Path,
+) -> None:
+    """An annotate directory with no SelectionRecord has no token to attach."""
+    result = pipeline_mod._record_step_run(tmp_path, "step_", "tok", None)
+    assert result is None
+
+
+def test_filter_invalid_without_a_schema_reports_the_missing_column(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    """'filter_invalid' with no output schema names the column it needs."""
+    config = two_step_config(tmp_path)
+    config.steps[0].output_schema = None
+    config.steps[0].filter_invalid = True
+
+    with pytest.raises(
+        ValueError, match="column 'write_valid_fields' is missing"
+    ):
+        run_pipeline(config)
+
+
+def test_filter_invalid_logs_how_many_rows_were_dropped(
+    tmp_path: Path,
+    failing_clients: list[FailingTextClient],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Dropping some invalid rows logs the count dropped and remaining."""
+    config = two_step_config(tmp_path)
+    config.steps[0].filter_invalid = True
+    config.steps[0].num_retries_invalid = 0
+
+    with caplog.at_level(logging.WARNING, logger="llm_annotator.pipeline"):
+        dataset = run_pipeline(config)
+
+    assert len(dataset) == 3
+    assert "dropped 1 invalid sample(s), 3 remaining" in caplog.text
+
+
+def test_serve_args_reports_a_pool_step_with_no_model(
+    tmp_path: Path,
+) -> None:
+    """A vllm_pool step that names no model has nothing to serve."""
+    config = PipelineConfig.model_validate(
+        {
+            "output_dir": tmp_path / "out",
+            "config_dir": tmp_path,
+            "dataset": {"path": source_dataset(tmp_path)},
+            "client": {"provider": "vllm_online"},
+            "steps": [{"name": "serve", "prompt": "x {text}"}],
+        }
+    )
+    with pytest.raises(ValueError, match="names no 'model'"):
+        pipeline_mod._serve_args(config, "serve")
+
+
+def test_parse_set_override_keeps_invalid_yaml_as_a_string() -> None:
+    """A value that fails to parse as YAML is kept as the literal string."""
+    key, value = pipeline_mod._parse_set_override("client.model=@nope")
+    assert key == "client.model"
+    assert value == "@nope"

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
+import llm_annotator.config as config_mod
 from llm_annotator.config import (
     ClientConfig,
     DatasetConfig,
@@ -14,6 +16,7 @@ from llm_annotator.config import (
     PipelineConfig,
     PoolConfig,
     StepConfig,
+    _options_class,
     load_config_file,
     load_pipeline_config,
 )
@@ -1605,3 +1608,162 @@ def test_cache_key_tracks_engine_but_not_gen_kwargs() -> None:
     # A different engine needs a different engine; gen_kwargs are per request.
     assert base.cache_key() != other_engine.cache_key()
     assert base.cache_key() == other_gen.cache_key()
+
+
+# --- OpenAI Batch API init settings ------------------------------------------
+
+
+def test_openai_init_accepts_batch_api_settings() -> None:
+    """A config that sets 'use_batch_api' and 'batch_poll_interval' loads."""
+    client = ClientConfig.model_validate(
+        {
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "init": {"use_batch_api": True, "batch_poll_interval": 30},
+        }
+    )
+    assert client.init == {
+        "use_batch_api": True,
+        "batch_poll_interval": 30,
+    }
+
+
+def test_vllm_online_init_rejects_batch_api_setting() -> None:
+    """The vLLM server client takes no 'use_batch_api', so init is rejected."""
+    with pytest.raises(
+        ValueError, match="Unknown 'init' keys for provider 'vllm_online'"
+    ):
+        ClientConfig.model_validate(
+            {
+                "provider": "vllm_online",
+                "model": "m",
+                "init": {"use_batch_api": True},
+            }
+        )
+
+
+# --- override key resolution -------------------------------------------------
+
+
+def test_dotted_override_rejects_a_scalar_in_the_middle_of_the_path(
+    tmp_path: Path,
+) -> None:
+    """A path segment that walks into a scalar before the leaf is rejected."""
+    path = write_config(tmp_path, minimal_config(), ".yaml")
+    with pytest.raises(
+        ValueError, match="'deeper' cannot be set inside a str"
+    ):
+        load_pipeline_config(path, overrides={"output_dir.deeper.deeper2": 1})
+
+
+def test_dotted_override_replaces_a_list_element_by_position(
+    tmp_path: Path,
+) -> None:
+    """An override key ending in a list index replaces the whole element."""
+    path = write_config(tmp_path, minimal_config(), ".yaml")
+    config = load_pipeline_config(
+        path,
+        overrides={"steps.0": {"name": "renamed", "prompt": "y {text}"}},
+    )
+    assert config.steps[0].name == "renamed"
+    assert config.steps[0].resolved_prompt(config.config_dir) == "y {text}"
+
+
+# --- provider and options lookup helpers -------------------------------------
+
+
+def test_options_class_rejects_unknown_provider() -> None:
+    """An unrecognised provider name reports itself in the error message."""
+    with pytest.raises(ValueError, match="Unknown provider 'bogus'."):
+        _options_class("bogus")  # type: ignore[arg-type]
+
+
+def test_is_local_source_is_false_without_a_name() -> None:
+    """A dataset addressed by 'path' rather than 'name' is not local."""
+    config = DatasetConfig(path=Path("/tmp/prepared"))
+    assert config.is_local_source(Path(".")) is False
+
+
+class _KwargsOnlyClient:
+    """Stand-in client whose constructor accepts any keyword argument."""
+
+    def __init__(self, model: str, **kwargs: Any) -> None:
+        self.model = model
+        self.kwargs = kwargs
+
+
+def test_init_keys_are_unchecked_when_the_client_takes_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A client constructor with '**kwargs' accepts any 'init' key."""
+    monkeypatch.setattr(
+        config_mod, "_client_class", lambda provider: _KwargsOnlyClient
+    )
+    client = ClientConfig(
+        provider="openai", model="m", init={"anything_goes": True}
+    )
+    assert client.init == {"anything_goes": True}
+
+
+# --- resolving vLLM server pool sources --------------------------------------
+
+
+def test_resolve_base_urls_reports_a_missing_hosts_file(
+    tmp_path: Path,
+) -> None:
+    """A configured 'hosts_file' absent from disk is reported by name."""
+    client = ClientConfig(
+        provider="vllm_online", model="m", hosts_file=Path("hosts.txt")
+    )
+    expected = tmp_path / "hosts.txt"
+    with pytest.raises(
+        ValueError, match=re.escape(f"hosts_file '{expected}' does not exist.")
+    ):
+        client.resolve_base_urls(tmp_path)
+
+
+def test_resolve_base_urls_reports_a_pool_source_with_no_urls(
+    tmp_path: Path,
+) -> None:
+    """A hosts_file that exists but holds only blank lines yields no URL."""
+    hosts = tmp_path / "hosts.txt"
+    hosts.write_text("\n\n", encoding="utf-8")
+    client = ClientConfig(
+        provider="vllm_online", model="m", hosts_file=Path("hosts.txt")
+    )
+    with pytest.raises(
+        ValueError, match="No vLLM server URLs found for the client pool."
+    ):
+        client.resolve_base_urls(tmp_path)
+
+
+# --- step and generate-step edge cases ---------------------------------------
+
+
+@pytest.mark.parametrize("name", ["", "   "])
+def test_blank_step_name_is_rejected(name: str) -> None:
+    """A step name that is empty or only whitespace is rejected."""
+    with pytest.raises(ValueError, match="Step 'name' must not be empty."):
+        StepConfig(name=name, prompt="x")
+
+
+def test_generate_step_with_an_empty_prompts_list_reports_when_resolved() -> (
+    None
+):
+    """An empty 'prompts' list passes construction but fails on resolution."""
+    step = StepConfig(name="gen", type="generate", prompts=[])
+    with pytest.raises(
+        ValueError, match="'prompts' resolved to an empty list"
+    ):
+        step.resolved_prompts(Path("."))
+
+
+def test_missing_json_prompts_file_raises_file_not_found(
+    tmp_path: Path,
+) -> None:
+    """A '.json' prompts file that does not exist is reported with its path."""
+    step = StepConfig(
+        name="gen", type="generate", prompts=Path("missing.json")
+    )
+    with pytest.raises(FileNotFoundError, match="resolved to"):
+        step.resolved_prompts(tmp_path)

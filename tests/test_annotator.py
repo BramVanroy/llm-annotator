@@ -16,12 +16,14 @@ from llm_annotator.annotator import (
     PROGRESS_UPLOAD_FILE,
     Annotator,
     SelectionRecord,
+    VLLMQueueAnnotator,
     _callable_component,
     _copy_file_prefix,
     _create_messages,
     _ProgressUploader,
     _resolve_samples_per_output_file,
     destroy_on_error,
+    is_retried_error,
 )
 from llm_annotator.clients.base import (
     Client,
@@ -3646,3 +3648,182 @@ def test_run_summary_is_null_when_nothing_new_is_annotated(
         "run_summary"
     ]
     assert summary is None
+
+
+def test_is_retried_error_accepts_a_single_error_type_string() -> None:
+    # A plain string is treated as a one-element sequence: it matches a row
+    # of that error type and no other.
+    row = {"error": "boom", "error_type": "APITimeoutError"}
+    assert is_retried_error(row, retry_errors="APITimeoutError") is True
+    assert is_retried_error(row, retry_errors="ConnectError") is False
+
+
+def test_get_skip_idxs_returns_empty_set_when_dir_is_missing(
+    tmp_path: Path, dummy_annotator: Annotator
+) -> None:
+    # Verifies a first run, with no progress directory yet, skips nothing.
+    result = dummy_annotator._get_skip_idxs(
+        process_pdout=tmp_path / "missing", idx_column="idx"
+    )
+    assert result == set()
+
+
+def test_get_skip_idxs_skips_blank_lines(
+    tmp_path: Path, dummy_annotator: Annotator
+) -> None:
+    # Verifies a blank line between two rows is skipped without raising,
+    # and the ids on the other lines are still found.
+    p = tmp_path / "out"
+    p.mkdir()
+    (p / "out.jsonl").write_text(
+        json.dumps({"idx": 1}) + "\n\n" + json.dumps({"idx": 2}) + "\n",
+        encoding="utf-8",
+    )
+
+    result = dummy_annotator._get_skip_idxs(process_pdout=p, idx_column="idx")
+
+    assert result == {1, 2}
+
+
+def test_get_skip_idxs_skips_a_row_with_a_different_dataset_config(
+    tmp_path: Path, dummy_annotator: Annotator
+) -> None:
+    # Verifies a row recorded under another dataset_config is not counted as
+    # done for the config that was asked for.
+    p = tmp_path / "out"
+    p.mkdir()
+    (p / "out.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps({"idx": 1, "dataset_config": "en"}),
+                json.dumps({"idx": 2, "dataset_config": "fr"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = dummy_annotator._get_skip_idxs(
+        process_pdout=p, idx_column="idx", dataset_config="fr"
+    )
+
+    assert result == {2}
+
+
+def test_prepare_data_sort_by_length_orders_prompts(tmp_path: Path) -> None:
+    # Verifies 'longest_first' puts the longest prompt first and
+    # 'shortest_first' puts the shortest prompt first.
+    annotator = Annotator(client=DummyClient())
+    ds = Dataset.from_dict({"text": ["a", "aaaaaaaaaa", "aaa"]})
+
+    longest_first, _, _ = annotator.prepare_data(
+        output_dir=tmp_path / "longest",
+        prompt_template="Q: {text}",
+        dataset=ds,
+        sort_by_length="longest_first",
+        keep_columns=["text"],
+    )
+    assert longest_first["text"][0] == "aaaaaaaaaa"
+
+    shortest_first, _, _ = annotator.prepare_data(
+        output_dir=tmp_path / "shortest",
+        prompt_template="Q: {text}",
+        dataset=ds,
+        sort_by_length="shortest_first",
+        keep_columns=["text"],
+    )
+    assert shortest_first["text"][0] == "a"
+
+
+def test_run_annotation_rejects_a_negative_max_consecutive_failed_batches(
+    tmp_path: Path,
+) -> None:
+    # Verifies the guard rejects a negative value before any batch runs.
+    annotator = Annotator(client=DummyClient())
+    prepared_ds = Dataset.from_dict(
+        {"idx": [0], "messages": [[{"role": "user", "content": "Q"}]]}
+    )
+
+    with pytest.raises(ValueError, match="must be 0 or a positive integer"):
+        annotator.run_annotation(
+            output_dir=tmp_path / "out",
+            prompt_template="Q: {text}",
+            prepared_dataset=prepared_ds,
+            max_consecutive_failed_batches=-1,
+        )
+
+
+def test_run_annotation_warns_and_fails_when_prepared_data_path_is_bad(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Verifies a prepared_data_path that fails to load logs a warning naming
+    # that path, and, with no other source given, the run then raises
+    # because no prepared data could be resolved.
+    annotator = Annotator(client=DummyClient())
+    bad_path = tmp_path / "does_not_exist"
+
+    with caplog.at_level(logging.WARNING, logger="llm_annotator.annotator"):
+        with pytest.raises(ValueError, match="No prepared data found"):
+            annotator.run_annotation(
+                output_dir=tmp_path / "out",
+                prompt_template="Q: {text}",
+                prepared_data_path=str(bad_path),
+            )
+
+    assert any(str(bad_path) in r.message for r in caplog.records)
+
+
+def test_generate_dataset_with_a_single_prompt_and_no_cap(
+    tmp_path: Path,
+) -> None:
+    # Verifies a single prompt string with no max_num_samples produces
+    # exactly one row.
+    annotator = Annotator(client=DummyClient())
+    out = annotator.generate_dataset(
+        output_dir=tmp_path / "out",
+        prompts="Tell me a story.",
+        upload_every_n_samples=0,
+    )
+    assert len(out) == 1
+
+
+def test_generate_dataset_rejects_an_empty_prompt_list(
+    tmp_path: Path,
+) -> None:
+    # Verifies an empty prompt sequence is refused before any data is built.
+    annotator = Annotator(client=DummyClient())
+
+    with pytest.raises(
+        ValueError, match="At least one prompt must be provided."
+    ):
+        annotator.generate_dataset(output_dir=tmp_path / "out", prompts=[])
+
+
+def test_prepare_data_keep_columns_accepts_a_plain_string(
+    tmp_path: Path,
+) -> None:
+    # Verifies keep_columns given as a single string keeps that one column,
+    # not just an iterable of strings.
+    annotator = Annotator(client=DummyClient())
+    ds = Dataset.from_dict({"text": ["a", "b"], "label": ["x", "y"]})
+
+    prepared, _, _ = annotator.prepare_data(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        dataset=ds,
+        keep_columns="label",
+    )
+
+    assert prepared["label"] == ["x", "y"]
+
+
+def test_add_client_rejects_a_client_that_is_not_vllm_online() -> None:
+    # Verifies add_client (via _add_client_locked) refuses a client whose
+    # provider_type is not vllm_online, the same guard the constructor uses.
+    vllm_client = object.__new__(VLLMOnlineClient)
+    vllm_client.model = "fake-model"
+    vllm_client.base_url = "http://worker"
+    annotator = VLLMQueueAnnotator(clients=[vllm_client])
+
+    with pytest.raises(TypeError, match="only supports vLLM server clients"):
+        annotator.add_client(DummyClient())
