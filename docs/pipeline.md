@@ -133,15 +133,6 @@ whenever the request carries a thinking budget. Without a parser a reasoning
 model returns its trace inside `{prefix}response`, tags and all, and this column
 stays `None`.
 
-!!! note "`{prefix}num_tokens` on a `vllm_online` step"
-
-    A `vllm_online` step sends each batch to vLLM's batch endpoint, which
-    reports one `usage` block for the whole batch instead of one per sample, so
-    `{prefix}num_tokens` is `None` on that provider. Every other column,
-    `{prefix}reasoning` included, is per sample as usual. Use `vllm_offline` if
-    you need the counts, for instance to see how much of the budget a reasoning
-    trace is eating.
-
 Because schema properties are *not* prefixed, two steps that use the same
 property name would collide. Use `rename` to give a step's output its final
 name:
@@ -345,21 +336,24 @@ client:
   # hosts_file: logs/pool_123/hosts.txt   # one URL per line, read once
   # url_glob: logs/pool_*/*.url           # one URL per file, re-read during the run
   queue_size: 8                    # batches kept in flight over the pool
-  max_concurrent_batches_per_client: 4  # requests per server, independent of batch_size
+  max_concurrent_batches_per_client: 4  # batches per server, independent of batch_size
   wait_for_servers: 300            # poll /health first; 0 disables
 ```
 
-`max_concurrent_batches_per_client` is how many requests each server is asked to
-handle at once, and every one of them carries `batch_size` samples, so one
-server holds up to `max_concurrent_batches_per_client * batch_size` prompts. The
-whole pool runs `servers * max_concurrent_batches_per_client` requests at once,
-which is the floor for `queue_size`: a smaller queue cannot fill every server,
-so the config is rejected with the minimum spelled out. Leave `queue_size` out
-to keep four batches queued per request slot. Both keys size a pool, so both are
-`vllm_online`-only; on the other providers one request is in flight at a time
-and `batch_size` is the only knob.
+`max_concurrent_batches_per_client` is how many batches each server is asked to
+handle at once, and every batch is `batch_size` samples, so one server holds up
+to `max_concurrent_batches_per_client * batch_size` prompts. A `vllm_online`
+step sends every sample of a batch as its own `/v1/chat/completions` request,
+all at the same time, so that number is also the requests the server has
+in flight and what its `engine.max_num_seqs` has to cover. The whole pool runs
+`servers * max_concurrent_batches_per_client` batches at once, which is the
+floor for `queue_size`: a smaller queue cannot fill every server, so the config
+is rejected with the minimum spelled out. Leave `queue_size` out to keep four
+batches queued per slot. Both keys size a pool, so both are `vllm_online`-only;
+on the other providers one batch is in flight at a time and `batch_size` is the
+only knob.
 
-The block above works out to 2 servers * 4 requests = 8 requests in flight, so
+The block above works out to 2 servers * 4 batches = 8 batches in flight, so
 its `queue_size` of 8 is exactly the minimum. With the default `batch_size` of
 256, each of those servers holds 1024 prompts, which is what its
 `engine.max_num_seqs` has to cover. `--describe-steps` prints all of these
@@ -441,14 +435,14 @@ against:
 
 | Key | Meaning |
 | --- | --- |
-| `batch_size` | samples in one request |
-| `max_concurrent_batches_per_client` | requests each server handles at once |
+| `batch_size` | samples in one batch |
+| `max_concurrent_batches_per_client` | batches each server handles at once |
 | `queue_size` | batches in flight over the pool, after the default and the minimum have been applied |
 | `max_requests_per_server` | `max_concurrent_batches_per_client * batch_size`, the prompts one server holds, so what its `max_num_seqs` has to cover |
 | `max_requests_in_flight` | that number times the server count |
 
 The four pool keys are `null` for a provider that has no pool, which sends one
-request at a time.
+batch at a time.
 
 `--serve-args` is the other half: it prints the `vllm serve` argument list for
 one step, one argument per line, so a server job reads its own serving profile

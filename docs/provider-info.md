@@ -141,6 +141,48 @@ with Annotator(client=client) as anno:
     ...
 ```
 
+A batch is one `/v1/chat/completions` request per sample, and the whole batch
+is sent at once. vLLM schedules the requests it holds as one continuous batch,
+so the GPU sees the same workload that a single combined request would give
+it, while the result stays per sample: each response carries its own token
+count, and a sample that fails (a prompt over the context length, say) is the
+only one that errors.
+
+Three constructor arguments size that:
+
+- `timeout` (3600 seconds): how long one request may take, the wait in the
+  server's queue included. A batch of 256 long generations on a busy server
+  can take many minutes; a timeout below that turns a healthy run into errors.
+- `max_retries` (2): retries by the OpenAI SDK, which covers connection
+  errors, request timeouts and the status codes 408, 409, 429 and 5xx.
+- `max_workers` (`None`): how many requests of a batch go out at once.
+  `None` sends all of them. Lower it only for a server shared with other
+  jobs.
+
+From a config file they are `init` keys:
+
+```yaml
+client:
+  provider: vllm_online
+  model: meta-llama/Llama-3.2-3B-Instruct
+  init:
+    timeout: 7200
+    max_retries: 2
+```
+
+#### Migration
+
+The client no longer posts to vLLM's own `/v1/chat/completions/batch` route.
+Nothing in a config or in the Python API names that route, so no setting
+changes, but two behaviours do:
+
+- `{prefix}num_tokens` is filled on a `vllm_online` step. It used to be
+  `None`, because the batch route reported one `usage` block for the whole
+  batch. Code that treated the column as always empty on this provider (a
+  filter, a throughput report) now gets real numbers.
+- A failing sample no longer takes its batch down with it. A batch in which
+  one prompt is too long used to write errors for every row of that batch.
+
 ### vLLM offline (in-process)
 
 ```python

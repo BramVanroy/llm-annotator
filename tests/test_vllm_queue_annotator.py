@@ -309,7 +309,7 @@ def test_rejects_non_vllm_clients() -> None:
 
 
 def test_queue_size_defaults_and_floor() -> None:
-    # Verifies queue_size defaults to four batches per concurrent request slot
+    # Verifies queue_size defaults to four batches per concurrent batch slot
     # and never drops below the number of slots (which would idle servers).
     clients = [FakeVLLMOnlineClient(base_url=f"http://w{i}") for i in range(3)]
     assert VLLMQueueAnnotator(clients=clients).queue_size == 48
@@ -660,7 +660,7 @@ def test_shutdown_started_prevents_new_batch_checkout() -> None:
     annotator._shutdown_started.set()
     batch = next(_make_dataset(1).iter(1))
 
-    with pytest.raises(RuntimeError, match="Cannot start a new batch request"):
+    with pytest.raises(RuntimeError, match="Cannot start a new batch"):
         annotator._annotate_batch_on_free_client(
             batch,
             options=None,

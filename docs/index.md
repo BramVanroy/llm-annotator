@@ -255,12 +255,12 @@ instance one server per GPU of a multi-node SLURM allocation. It is a drop-in
 `Annotator`: the same four entry points, the same JSONL progress files, the same
 resume behaviour. Batches are dispatched to whichever server is free, with at
 most `queue_size` batches in flight at a time. Set
-`max_concurrent_batches_per_client` to send more than one request to each
-server without increasing the request `batch_size`. The two multiply: with four
-servers, four concurrent requests each and a `batch_size` of 64, a server holds
-256 prompts and the pool 1024. `queue_size` never drops below the number of
-concurrent requests, since a smaller queue would leave servers idle, and
-defaults to four batches per request slot.
+`max_concurrent_batches_per_client` to give each server more than one batch
+at a time without raising `batch_size`. The two multiply: with four servers,
+four concurrent batches each and a `batch_size` of 64, a server holds 256
+prompts and the pool 1024. `queue_size` never drops below the number of
+concurrent batches, since a smaller queue would leave servers idle, and
+defaults to four batches per batch slot.
 
 ```python
 from llm_annotator import (

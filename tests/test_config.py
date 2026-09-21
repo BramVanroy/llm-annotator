@@ -1189,7 +1189,7 @@ def pool_client(**overrides: Any) -> dict[str, Any]:
 
 
 def test_queue_size_below_the_pool_minimum_is_rejected() -> None:
-    # 4 servers x 4 concurrent requests each = 16 requests in flight, so a
+    # 4 servers x 4 concurrent batches each = 16 batches in flight, so a
     # queue of 8 could never fill the pool.
     with pytest.raises(ValidationError, match="minimum of 16"):
         ClientConfig.model_validate(

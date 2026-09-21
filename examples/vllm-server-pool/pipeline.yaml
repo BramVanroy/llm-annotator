@@ -57,9 +57,9 @@ steps:
       provider: vllm_online
       model: Qwen/Qwen3-8B
       batch_size: 64
-      # Four servers times four concurrent requests each is 16 requests in
+      # Four servers times four concurrent batches each is 16 batches in
       # flight, so 16 is the smallest queue that keeps every server busy and
-      # anything lower is rejected. 32 queues a second batch per request slot,
+      # anything lower is rejected. 32 queues a second batch per batch slot,
       # so a server never waits for the writer. Leaving the key out picks 64
       # (four per slot).
       queue_size: 32
