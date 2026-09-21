@@ -181,8 +181,14 @@ def test_annotate_waits_for_the_whole_pool_by_default(
     assert "--url-glob" in recorded
 
 
-def test_annotate_fails_when_no_server_registers(tmp_path: Path) -> None:
-    """An empty pool directory after the timeout is an error, not a run."""
+def test_annotate_runs_the_step_when_no_server_registers(
+    tmp_path: Path,
+) -> None:
+    """An empty pool leaves the verdict to the library.
+
+    A finished step needs no server, which is how a surplus resubmit attempt
+    ends with status 0.
+    """
     pool_dir = tmp_path / "pool"
     pool_dir.mkdir()
 
@@ -190,9 +196,9 @@ def test_annotate_fails_when_no_server_registers(tmp_path: Path) -> None:
         tmp_path, pool_dir, MIN_SERVERS="1", POOL_WAIT="0"
     )
 
-    assert process.returncode == 1
+    assert process.returncode == 0, process.stderr
     assert "No server registered" in process.stderr
-    assert recorded == []
+    assert "--url-glob" in recorded
 
 
 def test_annotate_stops_waiting_when_the_server_array_is_gone(

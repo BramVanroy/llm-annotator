@@ -189,13 +189,15 @@ each one fits on a partially used node. They also start at different times,
 which is fine: the client starts once `pool.min_servers` are ready, and the
 remaining servers join the run as they leave the queue.
 
-`pool.min_servers` is a target with a fallback, not a hard minimum. The client
+`pool.min_servers` is a target with a fallback. The client
 waits for that many `.url` files and gives up waiting when `squeue` reports that
 the server array has no element left in the queue, or when `POOL_WAIT` is up. It
 then annotates on the servers it does have, and says how many in its log
-(`Annotating over 2 of 4 server(s)`). With none at all it fails instead and
-points at the `vllm-<step>_*.err` logs. A pool that half fills therefore still
-produces data, at half the throughput.
+(`Annotating over 2 of 4 server(s)`). A pool that half fills therefore still
+produces data, at half the throughput. With no server at all the step still
+runs: a step that already finished loads its result and ends with status 0, and
+any other step fails with `url_glob ... matched no files`, in which case the
+`vllm-<step>_*.err` logs say why no server came up.
 
 At a site with a per-user GPU limit, set `MAX_CONCURRENT_SERVERS` in the cluster
 file. The array is then submitted as `--array=1-4%2`, so two servers run while
@@ -333,8 +335,11 @@ What happens to the attempts that turn out not to be needed:
 
 - The attempt before it succeeded. `afternotok` can then never be satisfied, so
   `--kill-on-invalid-dep=yes` has Slurm remove the attempt rather than leave it
-  queued. Removing it invalidates the dependency of the jobs behind it, so the
-  rest of that step's chain is removed with it.
+  queued. For a pool step the removed job is the server array, and Slurm counts
+  a cancelled job as a satisfied `after:` dependency, so that attempt's client
+  does start. It finds no server, runs the step anyway, and the library loads
+  the finished step's `output/` snapshot and exits with status 0 within
+  seconds. No GPU is allocated, and every later attempt ends the same way.
 - The attempt before it failed, but the step had already finished in an earlier
   submission. The attempt runs, the library loads the step's `output/` snapshot
   and the job ends in seconds.

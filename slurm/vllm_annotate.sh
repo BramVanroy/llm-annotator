@@ -120,13 +120,17 @@ if [[ -n "${POOL_DIR:-}" ]]; then
   done
 
   if (( ready == 0 )); then
+    # The step still runs. A step that already finished needs no server: the
+    # library loads its result and exits 0, which is how a surplus attempt of
+    # --max-resubmits ends (its array was removed because the attempt before
+    # it succeeded, and that removal released this client). A step that does
+    # need a server fails in the library, which reports the empty pool.
     echo "No server registered in ${POOL_DIR}." \
-      "See the vllm-${STEP_NAME}_*.err logs." >&2
-    exit 1
+      "See the vllm-${STEP_NAME}_*.err logs if the step fails below." >&2
+  else
+    echo "Annotating over ${ready} of ${NUM_SERVERS} server(s):"
+    cat "$POOL_DIR"/*.url
   fi
-
-  echo "Annotating over ${ready} of ${NUM_SERVERS} server(s):"
-  cat "$POOL_DIR"/*.url
 
   # The glob rather than a snapshot of it: the client re-reads the pool
   # directory while it runs, so the servers still queued join this step as
