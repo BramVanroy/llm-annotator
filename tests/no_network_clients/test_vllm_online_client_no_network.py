@@ -402,3 +402,14 @@ def test_vllm_online_extra_body_and_gen_kwargs_reach_the_request(
     assert kwargs["priority"] == 1
     # gen_kwargs is documented as taking precedence over options.
     assert kwargs["temperature"] == 0.0
+
+
+def test_vllm_online_client_builds_one_sdk_client(
+    fake_openai_module: dict[str, Any],
+) -> None:
+    # Verifies the constructor builds exactly one SDK client, the pooled one.
+    VLLMOnlineClient(model="served-vllm-model")
+
+    inits = cast(list[Any], fake_openai_module["openai_init_kwargs"])
+    assert len(inits) == 1
+    assert inits[0]["http_client"] is not None

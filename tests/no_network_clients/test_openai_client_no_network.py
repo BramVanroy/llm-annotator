@@ -8,6 +8,9 @@ import pytest
 
 from llm_annotator.clients.exceptions import ProviderError
 from llm_annotator.clients.openai_client import (
+    CONNECT_TIMEOUT,
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_TIMEOUT,
     OpenAIClient,
     OpenAIRuntimeOptions,
 )
@@ -769,3 +772,47 @@ def test_batch_api_keeps_tracking_an_interrupted_batch(
 
     assert fake_openai_module["cancelled_batches"] == ["batch-fake"]
     assert fake_openai_module["deleted_files"] == ["file-fake"]
+
+
+def test_openai_client_passes_the_sdk_defaults(
+    fake_openai_module: dict[str, Any],
+) -> None:
+    """The SDK client gets the OpenAI SDK's own timeout and retry count.
+
+    The timeout is an ``httpx.Timeout`` rather than a plain float, so the
+    connect limit stays short while the read limit is the full timeout.
+    """
+    client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(model="gpt-test")
+
+    assert client.timeout == DEFAULT_TIMEOUT
+    assert client.max_retries == DEFAULT_MAX_RETRIES
+    assert client.use_batch_api is False
+    assert client.batch_poll_interval == 10.0
+    inits = cast(list[Any], fake_openai_module["openai_init_kwargs"])
+    assert len(inits) == 1
+    assert inits[0]["max_retries"] == DEFAULT_MAX_RETRIES
+    assert inits[0]["timeout"].read == DEFAULT_TIMEOUT
+    assert inits[0]["timeout"].connect == CONNECT_TIMEOUT
+
+
+def test_openai_client_takes_its_own_timeout_and_retries(
+    fake_openai_module: dict[str, Any],
+) -> None:
+    # Verifies the constructor arguments reach the SDK client.
+    OpenAIClient(model="gpt-test", timeout=30.0, max_retries=5)
+
+    sdk_kwargs = cast(list[Any], fake_openai_module["openai_init_kwargs"])[-1]
+    assert sdk_kwargs["timeout"].read == 30.0
+    assert sdk_kwargs["max_retries"] == 5
+
+
+def test_openai_batch_generate_uses_the_thread_pool_by_default(
+    fake_openai_module: dict[str, Any],
+) -> None:
+    # Verifies a client built without use_batch_api sends no batch job.
+    client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(model="gpt-test")
+
+    client.batch_generate(messages=[[{"role": "user", "content": "hi"}]])
+
+    assert fake_openai_module["created_batches"] == []
+    assert fake_openai_module["uploaded_files"] == []
