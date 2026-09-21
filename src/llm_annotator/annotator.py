@@ -892,12 +892,7 @@ class Annotator:
         *,
         prompt_template: str,
         idx_column: str,
-        dataset_name: str | None = None,
-        dataset: Dataset | None = None,
-        dataset_config: str | None = None,
-        data_dir: str | None = None,
-        data_files: str | list[str] | dict[str, str | list[str]] | None = None,
-        dataset_split: str | None = None,
+        dataset: Dataset,
         max_num_samples: int | None = None,
         shuffle_seed: int | None = None,
         prompt_fields: Iterable[str] = (),
@@ -908,20 +903,14 @@ class Annotator:
         preprocess_fn: Callable | None = None,
         reuse_idx_column: bool = False,
     ) -> Dataset:
-        """Load and preprocess the dataset for annotation.
-
-        Handles dataset loading, applies prompt templates, and manages
-        caching for efficient resumption of interrupted jobs.
+        """Select, template and sort the rows of a source dataset.
 
         Args:
             prompt_template: Prompt template used to build chat messages.
             idx_column: Column name used as unique identifier. Must not exist in the input dataset.
-            dataset_name: Name or path of the dataset to load.
-            dataset: Pre-loaded dataset to use instead of loading from name/path.
-            dataset_config: Dataset configuration name (optional).
-            data_dir: Data directory for local datasets (optional).
-            data_files: Specific file(s) for local datasets (optional).
-            dataset_split: Specific split to load (optional).
+            dataset: The source dataset, as
+                [`_load_source`][llm_annotator.annotator.Annotator._load_source]
+                returns it.
             max_num_samples: Maximum number of samples to process.
             shuffle_seed: Seed for dataset shuffling (optional).
             prompt_fields: Fields required by the prompt template.
@@ -960,17 +949,7 @@ class Annotator:
                 "'max_num_samples' must be a positive integer or None"
             )
 
-        dataset = self._load_source(
-            dataset_name=dataset_name,
-            dataset=dataset,
-            dataset_config=dataset_config,
-            data_dir=data_dir,
-            data_files=data_files,
-            dataset_split=dataset_split,
-        )
-
         if idx_column not in dataset.column_names:
-            # Index column for tracking samples and resuming interrupted runs
             dataset = dataset.add_column(idx_column, list(range(len(dataset))))
         elif not reuse_idx_column:
             raise ValueError(
