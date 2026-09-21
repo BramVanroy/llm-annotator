@@ -14,7 +14,7 @@ according to our prior analysis (speed/EuroEval performance). The expectation is
 of course that the larger MoE model does better, but at least we can quantify by
 how much in this experiment.
 
-Qwen 3.8 27B (deterministic, no-thinking) is chosen as judge since it is the most
+Qwen 3.6 27B (deterministic, no-thinking) is chosen as judge since it is the most
 recent and best-in-class model available.
 
 ## Models
@@ -26,7 +26,7 @@ Optimal VLLM parameters are chosen after running datatrove's speed benchmark.
 | Generator | `ibm-granite/granite-4.1-3b-fp8` | `batch_size: 16`, served with `--max-num-seqs 1024 --max-num-batched-tokens 16384` |
 | Generator | `ibm-granite/granite-4.1-8b-fp8` | `batch_size: 16`, served with `--max-num-seqs 256 --max-num-batched-tokens 16384` |
 | Generator | `google/gemma-4-26B-A4B-it` | `batch_size: 16`, served with `--max-num-seqs 256 --max-num-batched-tokens 8192`, MTP speculative decoding (4 tokens, draft `google/gemma-4-26B-A4B-it-assistant`) |
-| Judge | `Qwen/Qwen3.8-27B-FP8` | `temperature: 0.0, repetition_penalty: 1.0`, thinking off, served with `--reasoning-parser qwen3 --speculative-config {"method":"qwen3_next_mtp","num_speculative_tokens":2}` |
+| Judge | `Qwen/Qwen3.6-27B-FP8` | `temperature: 0.0, repetition_penalty: 1.0`, thinking off, served with `--reasoning-parser qwen3 --speculative-config {"method":"qwen3_next_mtp","num_speculative_tokens":2}` |
 
 ## How it works
 

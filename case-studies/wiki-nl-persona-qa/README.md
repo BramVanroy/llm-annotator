@@ -15,7 +15,7 @@ document it will not be given.
 
 | Role | Model | `client` block |
 | --- | --- | --- |
-| Question + answer | `Qwen/Qwen3.6-35B-A3B-FP8` | `batch_size: 16`, 4 servers; thinking off for the question, on for the answer, which is served with `--reasoning-parser qwen3` |
+| Question + answer | `Qwen/Qwen3.6-35B-A3B-FP8` | `batch_size: 16`, `queue_size: 8`, two GPUs per server; thinking off for the question, on for the answer, which is served with `--reasoning-parser qwen3` |
 | Judge | `Qwen/Qwen3.6-27B-FP8` | `temperature: 0.0`, `repetition_penalty: 1.0`, thinking off, `--reasoning-parser qwen3` as a safety net |
 
 The MoE generator does the bulk work at 3B active parameters per token; the
@@ -179,9 +179,8 @@ uv run --frozen case-studies/wiki-nl-persona-qa/prepare_seed.py \
   --out case-studies/wiki-nl-persona-qa/outputs/seed
 
 # 2. Question + answer, two chained steps on one model.
-# You may have to execute this command multiple commands to complete
-# it on your hardware but do not worry: rerunning the script just continues
-# where it left of
+# You may have to run this command several times to finish it on your
+# hardware, but do not worry: a re-run continues where it stopped.
 CLIENT_TIME=04:00:00 SERVER_TIME=03:30:00 ANNOTATE_CONFIG=case-studies/wiki-nl-persona-qa/generate/pipeline-qa.yaml \
   ./slurm/submit_pipeline.sh
 
