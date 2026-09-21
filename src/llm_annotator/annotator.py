@@ -78,6 +78,19 @@ LOGGER = get_logger("annotator")
 # (eg on SLURM, no need to use 128 cores for a small dataset)
 DEFAULT_CPU_COUNT = min(8, max(1, (cpu_count() or 1) - 1))
 
+BOOKKEEPING_SUFFIXES = (
+    "error",
+    "error_type",
+    "finish_reason",
+    "messages",
+    "num_tokens",
+    "reasoning",
+    "response",
+    "valid",
+    "valid_fields",
+)
+"""Column names, after the task prefix, that the annotator writes itself."""
+
 PREPARED_DS_BRANCH_SUFF = "prepared_dataset"
 PREPARED_DS_LOCAL_SUBDIR = "prepared_dataset"
 PROGRESS_BACKUP_BRANCH_SUFF = "progress_backup"
@@ -147,6 +160,30 @@ def _resolve_samples_per_output_file(
         )
 
     return max_samples_per_output_file
+
+
+def _bookkeeping_columns(
+    *, task_prefix: str, idx_column: str | None = None
+) -> set[str]:
+    """Name the columns that the annotator writes for every sample.
+
+    Args:
+        task_prefix: Prefix of the internal column names.
+        idx_column: Name of the sample id column. ``None`` leaves it out, for
+            a caller that does not know it.
+
+    Returns:
+        The column names that a schema property or a parsed key must not use.
+
+    Examples:
+        >>> columns = _bookkeeping_columns(task_prefix="qa_", idx_column="idx")
+        >>> sorted(columns)[:3]
+        ['idx', 'qa_error', 'qa_error_type']
+    """
+    columns = {f"{task_prefix}{name}" for name in BOOKKEEPING_SUFFIXES}
+    if idx_column is not None:
+        columns.add(idx_column)
+    return columns
 
 
 def is_retried_error(
@@ -576,10 +613,12 @@ class Annotator:
     num_proc: int | None = DEFAULT_CPU_COUNT
     verbose: bool = False
     _logger: Any = field(init=False, repr=False)
+    _ignored_keys: set[str] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         """Initialize the logger for annotator runtime messages."""
         self._logger = get_logger("annotator")
+        self._ignored_keys = set()
 
     def __enter__(self) -> "Annotator":
         """Enter the context manager, returning the annotator instance."""
@@ -933,11 +972,17 @@ class Annotator:
             - A key '{prefix}response' containing the raw model output text.
             - A key '{prefix}finish_reason' indicating why generation stopped.
             - A key '{prefix}num_tokens' indicating the number of tokens in the output.
+            - A key '{prefix}error' and '{prefix}error_type' describing a failed request.
             - A key '{prefix}reasoning' containing the model's reasoning trace, or None when the provider did not return one separately.
 
             And if an output_schema is provided, also:
-                - Keys from the output_schema with their parsed values (or None if parsing failed).
-                - A key '{prefix}valid_fields' indicating if all required fields were valid.
+                - One key per top-level property of the schema. A property that
+                  the response does not hold is None, so that every row has the
+                  same keys. A parsed key that the schema does not declare is
+                  ignored, with one warning per run.
+                - A key '{prefix}valid_fields', False when the response errored,
+                  did not parse as JSON, was not a JSON object, or left out a
+                  property that the schema requires.
         """
         data: dict[str, Any] = {
             f"{task_prefix}response": response.text,
@@ -951,38 +996,69 @@ class Annotator:
             f"{task_prefix}reasoning": response.reasoning,
         }
 
-        if response.error is not None:
-            if not output_schema:
-                return data
-
-            result = dict.fromkeys(output_schema.get("properties", {}).keys())
-            return {
-                **data,
-                f"{task_prefix}valid_fields": False,
-                **result,
-            }
-
         if not output_schema:
             return data
 
-        valid_fields = None
-        result = dict.fromkeys(output_schema.get("properties", {}).keys())
+        properties: dict[str, Any] = output_schema.get("properties", {})
+        # Every row carries every property, so that the rows of one run stack
+        # into a dataset with one set of columns.
+        result: dict[str, Any] = dict.fromkeys(properties)
+        invalid = {**data, f"{task_prefix}valid_fields": False, **result}
+
+        if response.error is not None:
+            return invalid
+
         try:
             parsed_response = json.loads(response.text)
         except json.JSONDecodeError:
-            valid_fields = False
-        else:
-            result = parsed_response
+            return invalid
 
-            if "required" in output_schema:
-                required_keys = output_schema["required"]
-                valid_fields = all(key in result for key in required_keys)
+        if not isinstance(parsed_response, dict):
+            return invalid
 
+        for key, value in parsed_response.items():
+            if key in properties:
+                result[key] = value
+            else:
+                self._warn_ignored_key(key=key, task_prefix=task_prefix)
+
+        valid_fields = all(
+            key in parsed_response for key in output_schema.get("required", [])
+        )
         return {
             **data,
             f"{task_prefix}valid_fields": valid_fields,
             **result,
         }
+
+    def _warn_ignored_key(self, *, key: str, task_prefix: str) -> None:
+        """Report a parsed key that does not become a column.
+
+        The same key is only reported once per run, since a model that returns
+        it for one sample usually returns it for every sample.
+
+        Args:
+            key: The key of the parsed response.
+            task_prefix: String prefix used for internal column names.
+        """
+        if key in self._ignored_keys:
+            return
+        self._ignored_keys.add(key)
+
+        if key in _bookkeeping_columns(task_prefix=task_prefix):
+            self._logger.warning(
+                f"The model returned the key '{key}', which is the name of a"
+                " column that the annotator writes for every sample. The key"
+                " is ignored and the column keeps the annotator's value. This"
+                " is reported once per run."
+            )
+        else:
+            self._logger.warning(
+                f"The model returned the key '{key}', which the output schema"
+                " does not declare as a property. The key is ignored, so that"
+                " every row has the same columns. This is reported once per"
+                " run."
+            )
 
     def _process_batch(
         self,
@@ -1820,9 +1896,11 @@ class Annotator:
             Final concatenated annotation dataset.
 
         Raises:
-            ValueError: If no prepared data source can be resolved, or if
-                ``output_schema`` differs from the one that the finished rows
-                were annotated with and ``overwrite`` is off.
+            ValueError: If no prepared data source can be resolved, if a
+                top-level property of the schema has the name of a column that
+                the annotator writes itself, or if ``output_schema`` differs
+                from the one that the finished rows were annotated with while
+                ``overwrite`` is off.
             TooManyConsecutiveFailedBatchesError: If
                 ``max_consecutive_failed_batches`` consecutive batches fail
                 entirely.
@@ -1864,6 +1942,23 @@ class Annotator:
                 options or ProviderRuntimeOptions(),
                 json_schema=output_schema,
             )
+
+        schema = options.json_schema if options is not None else None
+        if schema:
+            reserved = _bookkeeping_columns(
+                task_prefix=task_prefix, idx_column=idx_column
+            )
+            taken = sorted(set(schema.get("properties", {})) & reserved)
+            if taken:
+                names = ", ".join(f"'{name}'" for name in taken)
+                raise ValueError(
+                    f"The output schema property names {names} are also the"
+                    " names of columns that the annotator writes for every"
+                    " sample. Pick other names in the schema, or give the run"
+                    " another 'task_prefix' or 'idx_column'."
+                )
+
+        self._ignored_keys = set()
 
         if not keep_columns:
             keep_columns = set()

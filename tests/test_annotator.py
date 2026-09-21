@@ -268,6 +268,175 @@ def test_process_output_branches(dummy_annotator: Annotator) -> None:
     assert err_schema["label"] is None
 
 
+@pytest.mark.parametrize("text", ["[1, 2]", '"text"', "null", "3"])
+def test_process_output_marks_a_non_object_response_invalid(
+    dummy_annotator: Annotator, text: str
+) -> None:
+    # Verifies valid JSON that is not an object is invalid instead of raising.
+    schema = {
+        "type": "object",
+        "properties": {"label": {"type": "string"}},
+        "required": ["label"],
+    }
+
+    res = dummy_annotator._process_output(
+        response=Response(text=text), output_schema=schema
+    )
+
+    assert res["valid_fields"] is False
+    assert res["label"] is None
+
+
+def test_process_output_fills_absent_properties_with_none(
+    dummy_annotator: Annotator,
+) -> None:
+    # Verifies every schema property is a key, whether the response holds it
+    # or not, so that all rows of a run have the same columns.
+    schema = {
+        "type": "object",
+        "properties": {"label": {"type": "string"}, "score": {"type": "int"}},
+        "required": ["label"],
+    }
+
+    res = dummy_annotator._process_output(
+        response=Response(text='{"label": "good"}'), output_schema=schema
+    )
+
+    assert res["valid_fields"] is True
+    assert res["score"] is None
+
+
+def test_process_output_without_required_is_valid_when_it_parses(
+    dummy_annotator: Annotator,
+) -> None:
+    # Verifies a schema that requires nothing accepts any parsed object.
+    schema = {"type": "object", "properties": {"label": {"type": "string"}}}
+
+    res = dummy_annotator._process_output(
+        response=Response(text="{}"), output_schema=schema
+    )
+
+    assert res["valid_fields"] is True
+    assert res["label"] is None
+
+
+def test_process_output_missing_required_property_is_invalid(
+    dummy_annotator: Annotator,
+) -> None:
+    # Verifies a response that leaves out a required property is invalid.
+    schema = {
+        "type": "object",
+        "properties": {"label": {"type": "string"}, "score": {"type": "int"}},
+        "required": ["label", "score"],
+    }
+
+    res = dummy_annotator._process_output(
+        response=Response(text='{"label": "good"}'), output_schema=schema
+    )
+
+    assert res["valid_fields"] is False
+
+
+def test_process_output_ignores_keys_outside_the_schema(
+    dummy_annotator: Annotator, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Verifies an undeclared key is dropped and reported once per run.
+    schema = {
+        "type": "object",
+        "properties": {"label": {"type": "string"}},
+        "required": ["label"],
+    }
+    response = Response(text='{"label": "good", "extra": 1, "response": "x"}')
+
+    with caplog.at_level(logging.WARNING):
+        first = dummy_annotator._process_output(
+            response=response, output_schema=schema
+        )
+        dummy_annotator._process_output(
+            response=response, output_schema=schema
+        )
+
+    assert first["label"] == "good"
+    assert "extra" not in first
+    assert first["response"] == response.text
+    warnings = [rec.message for rec in caplog.records]
+    assert sum("'extra'" in message for message in warnings) == 1
+    assert sum("'response'" in message for message in warnings) == 1
+
+
+def test_run_annotation_rejects_a_schema_property_named_like_a_column(
+    tmp_path: Path,
+) -> None:
+    # Verifies a collision is refused before any request is sent.
+    annotator = Annotator(client=DummyClient())
+    prepared = Dataset.from_dict(
+        {"idx": [0], "messages": [[{"role": "user", "content": "Q"}]]}
+    )
+
+    with pytest.raises(ValueError, match="'idx', 'response'"):
+        annotator.run_annotation(
+            output_dir=tmp_path / "out",
+            prepared_dataset=prepared,
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "idx": {"type": "int"},
+                    "response": {"type": "string"},
+                    "label": {"type": "string"},
+                },
+            },
+            upload_every_n_samples=0,
+        )
+
+
+def test_run_annotation_continues_after_a_non_object_response(
+    tmp_path: Path,
+) -> None:
+    # Verifies a JSON array response does not end the run.
+    annotator = Annotator(client=ScriptedClient(lambda call, msg: "[1, 2]"))
+    ds = Dataset.from_dict({"text": ["a", "b"]})
+
+    out = annotator.annotate_dataset(
+        output_dir=tmp_path / "out",
+        prompt_template="x {text}",
+        dataset=ds,
+        upload_every_n_samples=0,
+        num_retries_invalid=0,
+        output_schema={
+            "type": "object",
+            "properties": {"label": {"type": "string"}},
+            "required": ["label"],
+        },
+    )
+
+    assert out["valid_fields"] == [False, False]
+    assert out["label"] == [None, None]
+
+
+def test_post_annotate_loads_a_schema_column_that_is_null_in_one_file(
+    tmp_path: Path, dummy_annotator: Annotator
+) -> None:
+    # Verifies the final dataset loads when a run errored before it succeeded,
+    # which types the schema column as null in the older progress file.
+    progress_dir = tmp_path / "out" / "progress_backup"
+    progress_dir.mkdir(parents=True)
+    (progress_dir / "progress_0.jsonl").write_text(
+        '{"idx": 0, "response": "", "valid_fields": false, "label": null}\n',
+        encoding="utf-8",
+    )
+    (progress_dir / "progress_1.jsonl").write_text(
+        '{"idx": 1, "response": "{}", "valid_fields": true, "label": "ok"}\n',
+        encoding="utf-8",
+    )
+
+    ds = dummy_annotator._post_annotate(
+        process_pdout=progress_dir, idx_column="idx", keep_idx_column=True
+    )
+
+    assert ds["label"] == [None, "ok"]
+    assert Dataset.load_from_disk(tmp_path / "out")["label"] == [None, "ok"]
+
+
 def test_process_batch_validate_and_postprocess(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
