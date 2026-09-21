@@ -196,10 +196,10 @@ class ClaudeClient(Client[ClaudeRuntimeOptions]):
 
         Raises:
             ProviderError: If the request fails and ``on_error`` is
-                ``"raise"``, or if ``messages`` holds more than one system
-                message.
-            ValueError: If a message has a role Claude does not take, or a
-                system message is not the first message.
+                ``"raise"``.
+            ValueError: If ``messages`` holds more than one system message,
+                if a system message is not the first message, or if a message
+                has a role Claude does not take.
         """
         options = options or ClaudeRuntimeOptions()
 
@@ -309,9 +309,8 @@ def _extract_system_instruction(
         (``""`` when there is none).
 
     Raises:
-        ProviderError: If more than one system message is present.
-        ValueError: If a system message is not first, or a role is one Claude
-            does not take.
+        ValueError: If more than one system message is present, if a system
+            message is not first, or if a role is one Claude does not take.
 
     Examples:
         >>> _extract_system_instruction(
@@ -331,7 +330,7 @@ def _extract_system_instruction(
 
         if role == "system":
             if has_system:
-                raise ProviderError(
+                raise ValueError(
                     "For Claude, only a single system message is supported."
                 )
             if msg_idx != 0:
