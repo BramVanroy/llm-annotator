@@ -64,14 +64,19 @@ if TYPE_CHECKING:
 
 
 class ClaudeClient(Client[ClaudeRuntimeOptions]):
-    """Client wrapper for Anthropic Claude APIs."""
+    """Client wrapper for Anthropic Claude APIs.
+
+    The Messages API has no synchronous batch endpoint, so the inherited
+    [`batch_generate`][llm_annotator.clients.base.Client.batch_generate] sends
+    one request per sample over a thread pool of ``max_workers`` threads.
+    """
 
     provider_type = Provider.CLAUDE
 
     def __init__(
         self,
         model: str,
-        max_workers: int = 4,
+        max_workers: int | None = 4,
         api_key: str | None = None,
         on_error: OnError = "warn",
     ) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum, auto
 from typing import Any, ClassVar, Generic, Literal, Self, TypeVar
@@ -256,6 +257,80 @@ class Client(ABC, Generic[T_Options]):
             "Subclasses must implement the generate method."
         )
 
+    def _generate_in_threads(
+        self,
+        *,
+        messages: list[list[dict[str, str]]],
+        options: T_Options | None,
+        gen_kwargs: dict[str, Any] | None,
+        max_workers: int | None,
+        context: str,
+    ) -> list[Response]:
+        """Run one [`generate`][llm_annotator.clients.base.Client.generate] call per input.
+
+        The worker count is a local value, so a small batch does not lower the
+        concurrency of the batches after it.
+
+        Args:
+            messages: One conversation per request.
+            options: Provider-specific generation options for every request.
+            gen_kwargs: Extra generation kwargs for every request.
+            max_workers: Threads to dispatch with. ``None``, ``0`` and ``1``
+                run the requests one after another; a higher value is capped
+                at the number of requests.
+            context: Start of the error context, completed with the index of
+                the request that failed.
+
+        Returns:
+            One [`Response`][llm_annotator.clients.base.Response] per input
+            conversation, in input order. A request that fails is an error
+            ``Response`` and leaves the other requests untouched.
+
+        Raises:
+            ProviderError: If a request fails and ``on_error`` is ``"raise"``.
+        """
+        workers = min(max_workers or 1, len(messages))
+        responses: list[Response] = []
+
+        if workers > 1:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = [
+                    executor.submit(
+                        self.generate,
+                        messages=msgs,
+                        options=options,
+                        gen_kwargs=gen_kwargs,
+                    )
+                    for msgs in messages
+                ]
+                for idx, future in enumerate(futures):
+                    try:
+                        responses.append(future.result())
+                    except Exception as exc:
+                        responses.append(
+                            self._handle_error(
+                                exc, context=f"{context} at index {idx}"
+                            )
+                        )
+            return responses
+
+        for idx, msgs in enumerate(messages):
+            try:
+                responses.append(
+                    self.generate(
+                        messages=msgs,
+                        options=options,
+                        gen_kwargs=gen_kwargs,
+                    )
+                )
+            except Exception as exc:
+                responses.append(
+                    self._handle_error(
+                        exc, context=f"{context} at index {idx}"
+                    )
+                )
+        return responses
+
     def batch_generate(
         self,
         *,
@@ -265,10 +340,11 @@ class Client(ABC, Generic[T_Options]):
     ) -> list[Response]:
         """Generate responses for a batch of inputs.
 
-        The default implementation calls
-        [`generate`][llm_annotator.clients.base.Client.generate] sequentially.
-        Override this method in subclasses that support native batching
-        (e.g. vLLM offline and vLLM server) for better throughput.
+        The default implementation dispatches one
+        [`generate`][llm_annotator.clients.base.Client.generate] call per input
+        over a thread pool of ``max_workers`` threads. Override this method in
+        subclasses that support native batching (e.g. vLLM offline and vLLM
+        server) for better throughput.
 
         Args:
             messages: List of message lists, where each message dict has "role" and "content" keys.
@@ -277,16 +353,19 @@ class Client(ABC, Generic[T_Options]):
                 Has precedence over ``options``.
 
         Returns:
-            A list of Response objects containing the generated responses.
+            One Response per input, in input order. A request that fails is an
+            error Response, unless ``on_error`` is ``"raise"``.
+
+        Raises:
+            ProviderError: If a request fails and ``on_error`` is ``"raise"``.
         """
-        return [
-            self.generate(
-                messages=msgs,
-                options=options,
-                gen_kwargs=gen_kwargs,
-            )
-            for msgs in messages
-        ]
+        return self._generate_in_threads(
+            messages=messages,
+            options=options,
+            gen_kwargs=gen_kwargs,
+            max_workers=self.max_workers,
+            context=f"{self.provider_type.value} request failed",
+        )
 
     def warm_up(
         self,

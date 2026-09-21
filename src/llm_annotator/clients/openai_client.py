@@ -456,10 +456,12 @@ class OpenAIClient(Client[T_OpenAIOptions]):
                 ``use_batch_api=True``. Defaults to ``10.0``.
 
         Returns:
-            A list of Response objects in the same order as the input.
+            A list of Response objects in the same order as the input. A
+            request that fails is an error Response when ``on_error`` is
+            ``"warn"`` or ``"ignore"``.
 
         Raises:
-            ProviderError: If any individual request fails.
+            ProviderError: If a request fails and ``on_error`` is ``"raise"``.
         """
         if use_batch_api:
             resolved = cast(
@@ -469,48 +471,13 @@ class OpenAIClient(Client[T_OpenAIOptions]):
                 messages, resolved, gen_kwargs, poll_interval
             )
 
-        if self.max_workers and self.max_workers > 1:
-            self.max_workers = min(self.max_workers, len(messages))
-            from concurrent.futures import ThreadPoolExecutor
-
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                futures = [
-                    executor.submit(
-                        self.generate,
-                        messages=msgs,
-                        options=options,
-                        gen_kwargs=gen_kwargs,
-                    )
-                    for msgs in messages
-                ]
-
-            responses: list[Response] = []
-            for idx, future in enumerate(futures):
-                try:
-                    responses.append(future.result())
-                except Exception as exc:
-                    responses.append(
-                        self._handle_error(
-                            exc,
-                            context=f"OpenAI request failed at index {idx}",
-                        )
-                    )
-        else:
-            responses = []
-            for idx, msgs in enumerate(messages):
-                try:
-                    response = self.generate(
-                        messages=msgs, options=options, gen_kwargs=gen_kwargs
-                    )
-                    responses.append(response)
-                except Exception as exc:
-                    responses.append(
-                        self._handle_error(
-                            exc,
-                            context=f"OpenAI request failed at index {idx}",
-                        )
-                    )
-        return responses
+        return self._generate_in_threads(
+            messages=messages,
+            options=options,
+            gen_kwargs=gen_kwargs,
+            max_workers=self.max_workers,
+            context="OpenAI request failed",
+        )
 
     def _handle_stop_reason(
         self,
