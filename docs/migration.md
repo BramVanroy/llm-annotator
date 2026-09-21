@@ -108,8 +108,10 @@ mix with the new backup.
 | `options.n` on either vLLM provider | remove it, or set it to 1 |
 | `pool.gpus_per_vllm_server` | write it as `engine.tensor_parallel_size` |
 
-The first two fail at load time with a message that names them, and the third
-with the unknown-option error. One response per sample is read, so `n` above 1
+The first two fail at load time with a message that names them, the third
+with the unknown-option error, and the fourth with the unknown-key error of
+the `pool` block. `engine.tensor_parallel_size` is read by both vLLM
+providers, so a step states its GPU count once. One response per sample is read, so `n` above 1
 was only ever paid for and dropped.
 
 ### `init` is checked against the constructor
@@ -161,6 +163,13 @@ current working directory needs the paths rewritten, or an absolute path.
 2, instead of printing a traceback. `--debug` keeps the traceback. Only config
 loading is reported this way.
 
+### A step with a `hub_id` backs up its progress by default
+
+`upload_every_n_samples` on a step defaults to `10000`, the same as in the
+Python API. A step that named a `hub_id` and no cadence uploaded nothing in
+0.16. Set `upload_every_n_samples: 0` to switch the backup off. Without a
+`hub_id` nothing is uploaded either way.
+
 ## Python API
 
 ### Renamed and removed arguments
@@ -171,6 +180,8 @@ loading is reported this way.
 | `prompt_field_swapper={"content": "body"}` | apply the rename yourself: `template.replace("{content}", "{body}")` |
 | `VLLMOfflineClient(batch_size=..., min_batch_size=...)` | the annotator's own `batch_size`, at or above `max_num_seqs` |
 | `client.batch_generate(..., use_batch_api=True, poll_interval=30)` | `OpenAIClient(..., use_batch_api=True, batch_poll_interval=30)` |
+| `run_annotation(..., dataset_split=..., dataset_config=...)` | drop both; they are arguments of `prepare_data` and `annotate_dataset`, where they select what is loaded |
+| `anno.push_progress_to_hub(progress_dir)` | `hub_id` is a required keyword: `anno.push_progress_to_hub(progress_dir, hub_id="me/my-dataset")` |
 
 ```python
 template = "Summarize this document: {content}"
@@ -233,6 +244,12 @@ annotator = build_annotator(client_config, root, verbose=True)
   `SelectionRecord.components`, and
   [`changed_components`][llm_annotator.annotator.SelectionRecord.changed_components]
   is what compares a request against a record.
+- `convert_int_to_annotated_str`, `yield_jsonl_robust`, `count_lines`,
+  `is_in_range` and `is_length` of `llm_annotator.utils`, which nothing in the
+  package used. In a `validate_fn`, write the comparison inline. To read
+  progress files back, use `datasets.load_dataset("json", data_dir=...)`.
+- `Annotator.get_pfout_name`, which is the private `_get_pfout_name`. The
+  names of the progress files are unchanged.
 - `llm_annotator.external.propella`, which left the installed package. Copy
   `examples/propella/propella_schema.py` out of the repository if you used it.
 
@@ -251,6 +268,13 @@ With `"warn"` or `"ignore"` it returns a `Response` that carries `error` and
 exception. A malformed message, or `n` above 1, is still a `ValueError` for the
 caller whatever `on_error` says, because the request payload is built outside
 that path.
+
+### The Claude client raises `ValueError` for a malformed message list
+
+A second system message raised `ProviderError` in 0.16, while a system message
+that is not first and an unknown role raised `ValueError`. All three raise
+`ValueError`, like every other mistake in a request payload. `ProviderError`
+covers a failed request.
 
 ### `batch_generate` takes three arguments
 
