@@ -53,7 +53,7 @@ dataset:
 client:
   provider: vllm_offline
   model: meta-llama/Llama-3.2-3B-Instruct
-  init:
+  engine:
     max_model_len: 4096
 
 steps:

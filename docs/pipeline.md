@@ -53,6 +53,23 @@ resolves against the directory holding the config file, never against your
 current working directory. A config directory is therefore self-contained and
 can be copied to a cluster or shared with a colleague as a unit.
 
+`dataset.data_dir` and `dataset.data_files` follow the same rule when
+`dataset.name` names a local source: one of the packaged builders (`json`,
+`csv`, `parquet`, `text`, `arrow`, ...) or a directory on disk. Glob patterns
+are prefixed rather than expanded, so `data_files: data/*.jsonl` keeps working
+from any directory:
+
+```yaml
+dataset:
+  name: json
+  split: train
+  data_files: data/*.jsonl    # <config dir>/data/*.jsonl
+```
+
+A URL (`https://`, `hf://`, ...) and an absolute path are left alone. So are
+the `data_files` of a Hub dataset id, which are patterns inside that
+repository rather than paths on this machine.
+
 The `--output-dir` CLI flag is the one exception: since it is typed at the
 shell rather than written into the config, it resolves against your current
 working directory instead, the same as the `config` argument itself.
@@ -70,6 +87,12 @@ an error, so there is never any doubt about which one won:
 
 Short prompts read well inline; anything longer belongs in a `.md` file next to
 the config, which also keeps the prompt reviewable in a diff.
+
+`prompt_file` and `system_prompt_file` are read verbatim, whatever the suffix:
+the file's bytes are the prompt, including its trailing newline. Nothing is
+stripped, rendered or reformatted, so a `.json` file used as a prompt reaches
+the model as the JSON text it holds. `output_schema_file` is the one file that
+is parsed, and it has to hold a JSON object.
 
 ## How steps see each other's output
 
@@ -240,9 +263,13 @@ client:
 
 `init` and `options` are passed straight through to the matching client
 constructor and `*RuntimeOptions` dataclass, so every provider-specific setting
-is reachable; unknown option names are rejected at load time with the valid
-names listed. When a dataclass does not name what you need, `options.extra_body`
-(vLLM) and `gen_kwargs` (any provider) are merged into the request as written.
+is reachable. Both are checked when the config loads: `init` against the
+constructor's signature and `options` against the dataclass's fields. An unknown
+name is reported with the accepted ones listed, so `init: {on_eror: warn}` fails
+at load time, before any step has run. `model` is not an
+`init` key: it has its own key next to `provider`. When a dataclass does not
+name what you need, `options.extra_body` (vLLM) and `gen_kwargs` (any provider)
+are merged into the request as written.
 
 The groups do not overlap, and the config says so rather than letting a value
 sit in two places: an engine setting written under `init` is rejected at load
@@ -261,10 +288,20 @@ Changing only `options` never triggers a reload, because options are per
 request.
 
 One exception to the merging above: a step that names a *different* `provider`
-than the top-level block inherits no `options` from it at all. They name fields
-of the previous provider's runtime-options dataclass — `top_k` means nothing to
-Claude — and would be rejected as unknown. The step's own `options` are kept
-exactly as written:
+than the top-level block inherits nothing that was written for the old one.
+`options` name fields of the previous provider's runtime-options dataclass
+(`top_k` means nothing to Claude) and `init` names arguments of its
+constructor, so an inherited `api_key` would send one provider's key to
+another. Both are dropped, and so is every block that belongs to a provider the
+step no longer uses:
+
+| Key | Dropped when the step switches to |
+| --- | --- |
+| `init`, `options` | any other provider |
+| `engine` | `openai`, `claude` |
+| `base_urls`, `hosts_file`, `url_glob`, `pool`, `queue_size`, `max_concurrent_batches_per_client`, `wait_for_servers` | anything but `vllm_online` |
+
+What the step writes itself is always kept, exactly as written:
 
 ```yaml
 client:
@@ -594,10 +631,28 @@ steps:
     output_schema_file: schemas/qa.json
 ```
 
-`prompts` may be a list, or a path to a file with one prompt per line. A single
-prompt with `num_samples` is repeated that many times; a list is truncated to
-`num_samples` when both are given. To wrap every prompt in a shared prefix, add
-a template containing the `{prompt}` placeholder:
+`prompts` is a list, or a path to a file. Two file formats are accepted, chosen
+by the suffix:
+
+- `.json`: a JSON list of strings. An object, a list with a non-string entry or
+  an empty list is rejected when the step starts, before anything is sent to
+  the model, with the file named.
+
+  ```json title="prompts/questions.json"
+  ["Write a short geography quiz question.", "Write a short history question."]
+  ```
+
+- Anything else: one prompt per line, blank lines skipped. A prompt that spans
+  several lines needs the `.json` form.
+
+  ```text title="prompts/questions.txt"
+  Write a short geography quiz question.
+  Write a short history question.
+  ```
+
+A single prompt with `num_samples` is repeated that many times; a list is
+truncated to `num_samples` when both are given. To wrap every prompt in a shared
+prefix, add a template containing the `{prompt}` placeholder:
 
 ```yaml
     prompt: "Answer in Dutch.\n\n{prompt}"
@@ -611,7 +666,8 @@ llm-annotate [-h] [--output-dir OUTPUT_DIR] [--hub-id HUB_ID]
              [--max-num-samples MAX_NUM_SAMPLES] [--shuffle-seed SHUFFLE_SEED]
              [--set KEY=VALUE] [--steps STEPS]
              [--retry-errors [ERROR_TYPE ...]] [--hosts-file HOSTS_FILE]
-             [--url-glob URL_GLOB] [--serve-args STEP] [--describe-steps]
+             [--url-glob URL_GLOB] [--serve-args STEP] [--debug]
+             [--describe-steps]
              config
 ```
 
@@ -620,6 +676,19 @@ config keys, which is handy for pointing one config at a scratch directory or
 resuming with a different log level without editing the file. `--steps`,
 `--hosts-file`, `--url-glob`, `--serve-args` and `--describe-steps` are
 described under [Running one step at a time](#running-one-step-at-a-time).
+
+A config that does not load is reported as one line per problem, on stderr,
+and the command exits with status 2:
+
+```console
+$ llm-annotate cfg.yaml
+error: client: Unknown 'init' keys for provider 'openai': ['on_eror']. OpenAIClient takes ['api_key', 'base_url', 'max_workers', 'on_error'].
+```
+
+The location before the message is the key that the problem belongs to, or the
+config file itself when the problem names no key. `--debug` prints the full
+traceback instead, which is what a bug report needs. Only config loading is
+reported this way: an error raised while the pipeline runs keeps its traceback.
 
 `--retry-errors` without a value annotates every errored row of the selected
 steps again. With one or more `ERROR_TYPE` values only the rows with that

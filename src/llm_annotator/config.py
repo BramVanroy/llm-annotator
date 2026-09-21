@@ -4,16 +4,20 @@ As much as possible is validated at config validation time but functional elemen
 like preprocess/postprocess/validation functions are not configurable here. If you
 need such functionality, you need to write your own Python script that uses the
 library's API directly.
+
+This module holds the models, their validation and the pure factory parts. The
+live clients and annotators a config describes are built by
+[`pool`][llm_annotator.pool], which is also where the ``/health`` polling and
+the pool watcher live.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import glob
+import inspect
 import json
-import threading
-import time
-from concurrent.futures import ThreadPoolExecutor
+import re
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_args
 
@@ -22,6 +26,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     field_validator,
     model_validator,
 )
@@ -29,18 +34,10 @@ from pydantic import (
 from llm_annotator.annotator import (
     DEFAULT_CPU_COUNT,
     QUEUE_BATCHES_PER_SLOT,
-    Annotator,
     VLLMQueueAnnotator,
 )
 from llm_annotator.clients.base import Client, ProviderRuntimeOptions
-from llm_annotator.clients.vllm_online_client import (
-    VLLMOnlineClient,
-    server_is_healthy,
-)
-from llm_annotator.logging_utils import get_logger
 
-
-LOGGER = get_logger("config")
 
 ProviderName = Literal["openai", "claude", "vllm_online", "vllm_offline"]
 StepType = Literal["annotate", "generate"]
@@ -50,6 +47,32 @@ StepKind = Literal["vllm_pool", "vllm_online", "vllm_offline", "api"]
 
 DEFAULT_MAX_CONCURRENT_BATCHES = 4
 """Simultaneous batch requests per vLLM server unless a step says otherwise."""
+
+LOCAL_DATASET_BUILDERS = frozenset(
+    {
+        "arrow",
+        "audiofolder",
+        "csv",
+        "imagefolder",
+        "json",
+        "pandas",
+        "parquet",
+        "sql",
+        "text",
+        "videofolder",
+        "webdataset",
+        "xml",
+    }
+)
+"""``datasets`` builder names that read files from the local machine.
+
+A ``dataset.name`` from this set makes ``data_dir`` and ``data_files`` local
+paths, which resolve against the config file's directory like every other path
+in a config.
+"""
+
+_URL_SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://")
+"""What a ``data_files`` entry looks like when it is not a local path."""
 
 
 def load_config_file(path: str | Path) -> dict[str, Any]:
@@ -205,6 +228,83 @@ def _options_class(provider: ProviderName) -> type[ProviderRuntimeOptions]:
     raise ValueError(f"Unknown provider '{provider}'.")
 
 
+def _resolve_data_path(value: str, root: Path) -> str:
+    """Resolve one ``data_dir`` or ``data_files`` entry against a directory.
+
+    Args:
+        value: The entry as written in the config, possibly a glob pattern.
+        root: Directory that relative paths resolve against.
+
+    Returns:
+        The entry with a relative local path made absolute. A URL and an
+        absolute path are returned unchanged.
+
+    Examples:
+        >>> from pathlib import Path
+        >>> _resolve_data_path("data/*.jsonl", Path("/cfg"))
+        '/cfg/data/*.jsonl'
+        >>> _resolve_data_path("hf://datasets/user/repo/a.json", Path("/cfg"))
+        'hf://datasets/user/repo/a.json'
+    """
+    if _URL_SCHEME.match(value):
+        return value
+    candidate = Path(value).expanduser()
+    if candidate.is_absolute():
+        return str(candidate)
+    return str(root / candidate)
+
+
+def _resolve_data_files(value: str | list[str], root: Path) -> str | list[str]:
+    """Resolve one ``data_files`` value, which may be a list.
+
+    Args:
+        value: A single entry or a list of them.
+        root: Directory that relative paths resolve against.
+
+    Returns:
+        The same shape, with relative local paths made absolute.
+    """
+    if isinstance(value, str):
+        return _resolve_data_path(value, root)
+    return [_resolve_data_path(entry, root) for entry in value]
+
+
+def _provider_bound_keys(provider: ProviderName) -> set[str]:
+    """Name the client keys that a step must not inherit across a switch.
+
+    These are the keys whose value only makes sense for the provider it was
+    written for: ``init`` names constructor arguments, ``options`` names fields
+    of a runtime-options dataclass, and the rest describe a vLLM engine or a
+    pool of vLLM servers.
+
+    Args:
+        provider: The provider the step switched to.
+
+    Returns:
+        The names of the keys that provider cannot take over.
+
+    Examples:
+        >>> sorted(_provider_bound_keys("vllm_offline"))
+        ['base_urls', 'hosts_file', 'init', 'max_concurrent_batches_per_client', 'options', 'pool', 'queue_size', 'url_glob', 'wait_for_servers']
+        >>> sorted(_provider_bound_keys("vllm_online"))
+        ['init', 'options']
+    """
+    keys = {"init", "options"}
+    if not provider.startswith("vllm"):
+        keys.add("engine")
+    if provider != "vllm_online":
+        keys |= {
+            "base_urls",
+            "hosts_file",
+            "url_glob",
+            "pool",
+            "queue_size",
+            "max_concurrent_batches_per_client",
+            "wait_for_servers",
+        }
+    return keys
+
+
 def _client_class(provider: ProviderName) -> type[Client[Any]]:
     """Get the client class belonging to a provider.
 
@@ -252,60 +352,6 @@ def _client_class(provider: ProviderName) -> type[Client[Any]]:
             f" with `uv sync --extra {extras[provider]}`."
         ) from exc
     raise ValueError(f"Unknown provider '{provider}'.")
-
-
-def wait_for_servers(
-    base_urls: list[str], timeout: float, min_servers: int = 1
-) -> list[str]:
-    """Block until the requested number of vLLM servers answer ``/health``.
-
-    Args:
-        base_urls: vLLM base URLs (each ending in ``/v1``).
-        timeout: Maximum number of seconds to wait for the pool as a whole.
-        min_servers: Number of ready servers required to continue.
-
-    Raises:
-        TimeoutError: If fewer than ``min_servers`` are reachable after
-            ``timeout``.
-    """
-    pending = list(dict.fromkeys(base_urls))
-    if not 1 <= min_servers <= len(pending):
-        raise ValueError(
-            f"'min_servers' must be between 1 and {len(pending)}, got"
-            f" {min_servers}."
-        )
-
-    ready: list[str] = []
-    deadline = time.monotonic() + timeout
-    while pending:
-        remaining = deadline - time.monotonic()
-        if remaining < 0:
-            break
-        with ThreadPoolExecutor(max_workers=len(pending)) as pool:
-            results = zip(
-                pending,
-                pool.map(
-                    lambda url: server_is_healthy(
-                        url, min(5, max(remaining, 0))
-                    ),
-                    pending,
-                ),
-                strict=True,
-            )
-            newly_ready = []
-            for url, is_ready in results:
-                if is_ready:
-                    ready.append(url)
-                    newly_ready.append(url)
-        pending = [url for url in pending if url not in newly_ready]
-        if len(ready) >= min_servers:
-            return ready
-        time.sleep(min(5, max(0, deadline - time.monotonic())))
-
-    raise TimeoutError(
-        f"Only {len(ready)} of {min_servers} required vLLM server(s) became"
-        f" ready within {timeout:g}s."
-    )
 
 
 class _StrictBase(BaseModel):
@@ -360,6 +406,73 @@ class DatasetConfig(_StrictBase):
                 "'data_dir' and 'data_files' only apply to 'name', not 'path'."
             )
         return self
+
+    def is_local_source(self, root: Path) -> bool:
+        """Check whether ``name`` loads files from this machine.
+
+        Args:
+            root: Directory that relative paths resolve against.
+
+        Returns:
+            ``True`` for a packaged builder such as ``json`` or ``csv``, and
+            for a ``name`` that is a directory on disk. ``False`` for a Hub
+            dataset id, whose ``data_files`` are patterns inside the
+            repository.
+
+        Examples:
+            >>> from pathlib import Path
+            >>> DatasetConfig(name="json").is_local_source(Path("."))
+            True
+            >>> DatasetConfig(name="stanfordnlp/imdb").is_local_source(
+            ...     Path(".")
+            ... )
+            False
+        """
+        if self.name is None:
+            return False
+        if self.name in LOCAL_DATASET_BUILDERS:
+            return True
+        return _resolve_path(self.name, root).is_dir()
+
+    def resolved_data_dir(self, root: Path) -> str | None:
+        """Get ``data_dir`` with a relative local path made absolute.
+
+        Args:
+            root: Directory that relative paths resolve against.
+
+        Returns:
+            The directory as ``load_dataset`` should see it, or ``None`` when
+            the block names none.
+        """
+        if self.data_dir is None or not self.is_local_source(root):
+            return self.data_dir
+        return _resolve_data_path(self.data_dir, root)
+
+    def resolved_data_files(
+        self, root: Path
+    ) -> str | list[str] | dict[str, str | list[str]] | None:
+        """Get ``data_files`` with relative local paths made absolute.
+
+        Every shape the key accepts is kept: a single path, a list, or a
+        mapping of split name to either. Glob patterns are prefixed with
+        ``root`` rather than expanded, so ``datasets`` still resolves them.
+
+        Args:
+            root: Directory that relative paths resolve against.
+
+        Returns:
+            The files as ``load_dataset`` should see them, or ``None`` when
+            the block names none.
+        """
+        files = self.data_files
+        if files is None or not self.is_local_source(root):
+            return files
+        if isinstance(files, dict):
+            return {
+                split: _resolve_data_files(value, root)
+                for split, value in files.items()
+            }
+        return _resolve_data_files(files, root)
 
 
 class EngineConfig(_StrictBase):
@@ -419,9 +532,9 @@ class EngineConfig(_StrictBase):
         Unset fields are dropped rather than passed as ``None``, so vLLM's own
         defaults apply to anything the config does not mention.
         ``reasoning_parser`` rides along here because
-        [`build_client`][llm_annotator.config.ClientConfig.build_client] feeds
-        this dict to the offline client's constructor, which keeps it rather
-        than forwarding it: ``vllm.LLM`` does not take it.
+        [`build_client`][llm_annotator.pool.build_client] feeds this dict to
+        the offline client's constructor, which keeps it rather than
+        forwarding it: ``vllm.LLM`` does not take it.
 
         Returns:
             Keyword arguments, with ``extra`` merged in.
@@ -654,7 +767,58 @@ class ClientConfig(_StrictBase):
                 f"Unknown 'options' for provider '{self.provider}':"
                 f" {unknown}. Valid options are {sorted(valid)}."
             )
+
+        self._check_init_keys()
         return self
+
+    def _check_init_keys(self) -> None:
+        """Compare ``init`` against the constructor of the provider's client.
+
+        The client classes import their provider SDK inside their methods, so
+        the signature is available without ``openai``, ``anthropic`` or
+        ``vllm`` being installed.
+
+        Raises:
+            ValueError: If ``init`` names something the constructor does not
+                take, or a value that the client block states elsewhere.
+        """
+        if "model" in self.init:
+            raise ValueError(
+                "'init' sets 'model', which the client block names itself."
+                " Write it as 'model' next to 'provider'."
+            )
+        if self.is_pool() and "base_url" in self.init:
+            raise ValueError(
+                "'init' sets 'base_url', but each server of a pool gets its"
+                " own. The pool's servers are named by 'base_urls',"
+                " 'hosts_file' or 'url_glob'."
+            )
+
+        try:
+            client_cls = _client_class(self.provider)
+        except ImportError:
+            # Without the client class there is no signature to compare
+            # against; the constructor reports the key when the step runs.
+            return
+
+        parameters = inspect.signature(client_cls.__init__).parameters
+        if any(p.kind is p.VAR_KEYWORD for p in parameters.values()):
+            return
+        accepted = {
+            name
+            for name, parameter in parameters.items()
+            # 'model' has its own key in the client block, so it is not
+            # offered here as an 'init' key.
+            if name not in {"self", "model"}
+            and parameter.kind is not parameter.VAR_POSITIONAL
+        }
+        unknown_init = sorted(set(self.init) - accepted)
+        if unknown_init:
+            raise ValueError(
+                f"Unknown 'init' keys for provider '{self.provider}':"
+                f" {unknown_init}. {client_cls.__name__} takes"
+                f" {sorted(accepted)}."
+            )
 
     def _check_pool_concurrency(self) -> None:
         """Reject pool concurrency keys that are misplaced or too small.
@@ -936,161 +1100,6 @@ class ClientConfig(_StrictBase):
             )
         return _options_class(self.provider)(**self.options)
 
-    def build_client(self, root: Path) -> Client[Any] | list[Client[Any]]:
-        """Instantiate the client, or one client per server for a pool.
-
-        Args:
-            root: Directory that relative paths and globs resolve against.
-
-        Returns:
-            A single client, or a list of clients when a pool is configured.
-        """
-        kwargs = dict(self.init)
-        if self.model is not None:
-            kwargs["model"] = self.model
-        if self.provider == "vllm_offline":
-            engine_kwargs = self.engine.as_llm_kwargs()
-            # `extra` names arguments this class does not, so it can only
-            # travel as the client's own passthrough.
-            kwargs.update(
-                {
-                    k: v
-                    for k, v in engine_kwargs.items()
-                    if k not in self.engine.extra
-                }
-            )
-            if self.engine.extra:
-                kwargs["extra_vllm_kwargs"] = dict(self.engine.extra)
-
-        if not self.is_pool():
-            return _client_class(self.provider)(**kwargs)
-
-        # A pool is `vllm_online`-only (enforced in validation), so the server
-        # client is named directly here rather than looked up: only it takes
-        # the `base_url` that distinguishes one pool member from the next.
-        base_urls = self.resolve_base_urls(root)
-        if self.wait_for_servers:
-            # The pool source is read once here, so it can name fewer servers
-            # than `min_servers` while the rest are still starting. Waiting for
-            # more servers than it names could never succeed; the ones that
-            # arrive later are admitted by the watcher instead.
-            min_ready = min(
-                self.pool.min_servers, len(dict.fromkeys(base_urls))
-            )
-            LOGGER.info(
-                f"Waiting up to {self.wait_for_servers:g}s for"
-                f" {min_ready} vLLM server(s) to become ready..."
-            )
-            base_urls = wait_for_servers(
-                base_urls, self.wait_for_servers, min_ready
-            )
-
-        return [VLLMOnlineClient(base_url=url, **kwargs) for url in base_urls]
-
-    def build_annotator(self, root: Path, verbose: bool = False) -> Annotator:
-        """Instantiate the annotator that drives this client.
-
-        A pool of servers yields a
-        [`VLLMQueueAnnotator`][llm_annotator.annotator.VLLMQueueAnnotator];
-        everything else yields a plain
-        [`Annotator`][llm_annotator.annotator.Annotator].
-
-        Args:
-            root: Directory that relative paths and globs resolve against.
-            verbose: Whether the annotator should log progress information.
-
-        Returns:
-            The annotator, ready to run.
-        """
-        one_or_more_clients = self.build_client(root)
-        if isinstance(one_or_more_clients, list):
-            LOGGER.info(
-                f"Annotating over {len(one_or_more_clients)} vLLM server(s)."
-            )
-            expected_servers = self._expected_pool_size(root)
-            annotator = VLLMQueueAnnotator(
-                clients=one_or_more_clients,
-                batch_size=self.batch_size,
-                queue_size=self.queue_size,
-                max_concurrent_batches_per_client=(
-                    self.max_concurrent_batches_per_client
-                ),
-                max_workers=(
-                    expected_servers * self.max_concurrent_batches_per_client
-                ),
-                num_proc=self.num_proc,
-                verbose=verbose,
-            )
-            self._watch_pool(root, annotator)
-            return annotator
-        return Annotator(
-            client=one_or_more_clients,
-            batch_size=self.batch_size,
-            num_proc=self.num_proc,
-            verbose=verbose,
-        )
-
-    def _expected_pool_size(self, root: Path) -> int:
-        """Return how many distinct vLLM servers this pool can grow to."""
-        if self.base_urls:
-            return self.configured_servers()
-        try:
-            return max(
-                self.pool.servers,
-                len(list(dict.fromkeys(self.resolve_base_urls(root)))),
-            )
-        except ValueError:
-            return self.pool.servers
-
-    def _watch_pool(self, root: Path, annotator: VLLMQueueAnnotator) -> None:
-        """Add configured vLLM servers to an active pool once they are ready.
-
-        A server is a candidate whenever the pool does not hold it, so this
-        admits a server that starts late as well as one that the annotator
-        evicted and that answers ``/health`` again.
-        """
-        kwargs = dict(self.init)
-        if self.model is not None:
-            kwargs["model"] = self.model
-
-        def discover() -> list[str]:
-            try:
-                return self.resolve_base_urls(root)
-            except ValueError:
-                return []
-
-        def watch() -> None:
-            while not annotator.is_shutting_down:
-                pooled_urls = annotator.client_base_urls()
-                candidates = [
-                    url for url in discover() if url not in pooled_urls
-                ]
-                with ThreadPoolExecutor(
-                    max_workers=len(candidates) or 1
-                ) as pool:
-                    readiness = list(
-                        pool.map(
-                            lambda url: server_is_healthy(url, 5), candidates
-                        )
-                    )
-
-                for url, is_ready in zip(candidates, readiness, strict=True):
-                    if annotator.is_shutting_down:
-                        return
-                    if is_ready:
-                        annotator.add_client_for_base_url(
-                            url,
-                            lambda base_url: VLLMOnlineClient(
-                                base_url=base_url, **kwargs
-                            ),
-                        )
-                if annotator.wait_for_shutdown(timeout=1):
-                    return
-
-        threading.Thread(
-            target=watch, name="vllm-pool-watcher", daemon=True
-        ).start()
-
 
 class StepConfig(_StrictBase):
     """One annotation pass over the dataset produced by the previous step.
@@ -1289,8 +1298,9 @@ class StepConfig(_StrictBase):
     def resolved_prompts(self, root: Path) -> list[str]:
         """Get the prompt list for a ``generate`` step.
 
-        A path is read as a file with one prompt per line; blank lines are
-        skipped. A single prompt is repeated ``num_samples`` times, mirroring
+        A ``.json`` path is read as a list of strings; any other path is read
+        as a file with one prompt per line, where blank lines are skipped. A
+        single prompt is repeated ``num_samples`` times, mirroring
         [`generate_dataset`][llm_annotator.annotator.Annotator.generate_dataset].
 
         Args:
@@ -1300,11 +1310,15 @@ class StepConfig(_StrictBase):
             The prompts, one per sample to generate.
 
         Raises:
-            ValueError: If no prompt could be resolved.
+            ValueError: If no prompt could be resolved, or if a ``.json`` file
+                does not hold a non-empty list of strings.
         """
         if isinstance(self.prompts, Path):
-            text = _read_text(self.prompts, root)
-            prompts = [line for line in text.splitlines() if line.strip()]
+            if self.prompts.suffix.lower() == ".json":
+                prompts = _read_json_prompts(self.prompts, root)
+            else:
+                text = _read_text(self.prompts, root)
+                prompts = [line for line in text.splitlines() if line.strip()]
         else:
             prompts = list(self.prompts or [])
 
@@ -1374,6 +1388,9 @@ class PipelineConfig(_StrictBase):
     log_level: str = "INFO"
     config_dir: Path = Field(default_factory=Path.cwd)
 
+    _step_clients: dict[str, ClientConfig] = PrivateAttr(default_factory=dict)
+    """Merged client per step name, filled while the config is validated."""
+
     @model_validator(mode="after")
     def _resolve_output_dir(self) -> "PipelineConfig":
         """Resolve a relative ``output_dir`` against ``config_dir``."""
@@ -1442,15 +1459,24 @@ class PipelineConfig(_StrictBase):
         key-by-key so a step can change a single option without repeating the
         whole block, while other keys are replaced outright.
 
-        The one exception is a step that names a *different* ``provider``: it
-        inherits neither ``options``, which name fields of the previous
-        provider's runtime-options dataclass, nor any block the new provider
-        cannot act on (``engine`` outside the vLLM providers, ``queue_size``
-        and ``max_concurrent_batches_per_client`` outside ``vllm_online``).
-        All of those are kept when the step writes them itself.
+        The one exception is a step that names a *different* ``provider``. It
+        inherits no key whose value belongs to the provider it was written
+        for: ``init`` and ``options`` on every switch, plus ``engine`` outside
+        the vLLM providers and the pool keys (``base_urls``, ``hosts_file``,
+        ``url_glob``, ``pool``, ``queue_size``,
+        ``max_concurrent_batches_per_client``, ``wait_for_servers``) outside
+        ``vllm_online``. Dropping ``init`` is what keeps one provider's
+        credentials and base URL from reaching another. A key the step writes
+        itself is kept.
 
         The step's block is only validated here, after merging, because on its
         own it is a fragment that need not name a ``provider`` or ``model``.
+        The result is kept per step name, so the merge and its validation run
+        once per step rather than once per caller. Validation fills that cache
+        for every step, and a config is not changed after it is loaded: the
+        command line reaches a step's client through
+        ``step_client_overrides``, which is applied to the decoded mapping
+        before validation.
 
         Args:
             step: The step whose effective client settings are wanted.
@@ -1463,6 +1489,10 @@ class PipelineConfig(_StrictBase):
                 merged result is not a valid client configuration. The
                 offending step is named either way.
         """
+        cached = self._step_clients.get(step.name)
+        if cached is not None:
+            return cached
+
         if not step.client:
             if self.client is None:
                 raise ValueError(
@@ -1470,6 +1500,7 @@ class PipelineConfig(_StrictBase):
                     " top-level 'client' block to share one across steps, or"
                     " a 'client' block to this step."
                 )
+            self._step_clients[step.name] = self.client
             return self.client
 
         override = dict(step.client)
@@ -1480,39 +1511,27 @@ class PipelineConfig(_StrictBase):
         else:
             base = self.client.model_dump()
             merged = {**base, **override}
-            if "init" in override:
-                merged["init"] = {**base["init"], **override["init"]}
-
-            # A step that switches provider must not inherit the previous
-            # provider's options: they belong to a different dataclass and
-            # would fail validation for a reason the user cannot act on. Its
-            # own options still stand -- only the inherited ones are dropped,
-            # which is why this replaces rather than skipping the merge.
             if merged["provider"] != base["provider"]:
-                merged["options"] = dict(override.get("options") or {})
-                # Same reasoning for the blocks the new provider cannot act
-                # on at all: they were written for the inherited provider,
-                # and keeping them would fail validation for a reason the
-                # user cannot act on. A block the step writes itself stands.
-                unusable = {
-                    "engine": not merged["provider"].startswith("vllm"),
-                    "queue_size": merged["provider"] != "vllm_online",
-                    "max_concurrent_batches_per_client": (
-                        merged["provider"] != "vllm_online"
-                    ),
-                }
-                for key, drop in unusable.items():
-                    if drop and key not in override:
+                for key in _provider_bound_keys(merged["provider"]):
+                    if key not in override:
                         merged.pop(key, None)
-            elif "options" in override:
-                merged["options"] = {**base["options"], **override["options"]}
+            else:
+                for key in ("init", "options"):
+                    if key in override:
+                        merged[key] = {
+                            **base[key],
+                            **(override[key] or {}),
+                        }
 
         try:
-            return ClientConfig.model_validate(merged)
+            client = ClientConfig.model_validate(merged)
         except ValueError as exc:
             raise ValueError(
                 f"Step '{step.name}': invalid 'client' block. {exc}"
             ) from exc
+
+        self._step_clients[step.name] = client
+        return client
 
     def step_dir(self, index: int) -> Path:
         """Get the directory holding one step's artifacts.
@@ -1633,73 +1652,11 @@ def _resolve_path(path: str | Path, root: Path) -> Path:
     return (root / candidate).resolve()
 
 
-def _render_json_catalog(payload: Any, path: str | Path) -> str:
-    """Turn a JSON persona or taxonomy catalog into prompt-readable text."""
-    if isinstance(payload, list):
-        entries = payload
-        intro = None
-    elif isinstance(payload, dict):
-        intro = payload.get("instruction")
-        for key in (
-            "professional",
-            "profession",
-            "social",
-            "categories",
-            "personas",
-            "items",
-            "codes",
-        ):
-            if key in payload:
-                entries = payload[key]
-                break
-        else:
-            entries = []
-            for value in payload.values():
-                if isinstance(value, list):
-                    entries = value
-                    break
-    else:
-        raise ValueError(
-            "JSON system prompt catalogs must decode to a list or mapping."
-        )
-
-    if not isinstance(entries, list):
-        raise ValueError(
-            "JSON system prompt catalogs must contain a list of entries."
-        )
-
-    lines: list[str] = []
-    if isinstance(intro, str) and intro.strip():
-        lines.append(intro.strip())
-
-    for item in entries:
-        if isinstance(item, str):
-            lines.append(f"- `{item.strip()}`")
-        elif isinstance(item, dict):
-            code = (
-                item.get("code")
-                or item.get("name")
-                or item.get("persona")
-                or item.get("label")
-            )
-            description = item.get("description") or item.get("detail")
-            if code is None:
-                continue
-            code = str(code).strip()
-            if description is None or str(description).strip() == "":
-                lines.append(f"- `{code}`")
-            else:
-                lines.append(f"- `{code}` — {str(description).strip()}")
-
-    if not lines:
-        raise ValueError(
-            f"JSON catalog file '{path}' did not contain any catalog entries."
-        )
-    return "\n".join(lines)
-
-
 def _read_text(path: str | Path, root: Path) -> str:
     """Read a UTF-8 text file referenced from a config file.
+
+    The file is used exactly as it is on disk, whatever its suffix, so a prompt
+    is what the file says.
 
     Args:
         path: Path as written in the config file.
@@ -1719,14 +1676,60 @@ def _read_text(path: str | Path, root: Path) -> str:
             f" (resolved to '{pfin}')."
         )
 
-    if pfin.suffix.lower() == ".json":
-        try:
-            payload = json.loads(pfin.read_text(encoding="utf-8"))
-            return _render_json_catalog(payload, pfin)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"JSON catalog '{pfin}' is invalid.") from exc
-
     return pfin.read_text(encoding="utf-8")
+
+
+def _read_json_prompts(path: str | Path, root: Path) -> list[str]:
+    """Read a ``.json`` prompts file of a ``generate`` step.
+
+    Args:
+        path: Path as written in the config file.
+        root: Directory that relative paths resolve against.
+
+    Returns:
+        The prompts, in file order.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        ValueError: If the file is not valid JSON, or does not hold a non-empty
+            list of strings.
+    """
+    pfin = _resolve_path(path, root)
+    if not pfin.is_file():
+        raise FileNotFoundError(
+            f"File '{path}' referenced from the config does not exist"
+            f" (resolved to '{pfin}')."
+        )
+
+    expected = (
+        "A '.json' prompts file holds a list of strings, one per prompt."
+    )
+    try:
+        payload = json.loads(pfin.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"Prompts file '{pfin}' is not valid JSON: {exc}. {expected}"
+        ) from exc
+
+    if not isinstance(payload, list):
+        raise ValueError(
+            f"Prompts file '{pfin}' holds a"
+            f" {type(payload).__name__}. {expected}"
+        )
+    if not payload:
+        raise ValueError(f"Prompts file '{pfin}' holds an empty list.")
+
+    wrong = [
+        index
+        for index, entry in enumerate(payload)
+        if not isinstance(entry, str)
+    ]
+    if wrong:
+        raise ValueError(
+            f"Prompts file '{pfin}' holds entries that are not strings, at"
+            f" position(s) {wrong}. {expected}"
+        )
+    return payload
 
 
 __all__ = [
@@ -1739,5 +1742,4 @@ __all__ = [
     "StepKind",
     "load_config_file",
     "load_pipeline_config",
-    "wait_for_servers",
 ]

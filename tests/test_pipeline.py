@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 
 import pytest
 from datasets import Dataset
+from pydantic import ValidationError
 
 import llm_annotator.pipeline as pipeline_mod
+import llm_annotator.pool as pool_mod
 from llm_annotator.annotator import (
     Annotator,
     SelectionRecord,
@@ -158,14 +161,16 @@ def built_clients(monkeypatch: pytest.MonkeyPatch) -> list[EchoClient]:
     created: list[EchoClient] = []
 
     def fake_build_client(
-        self: ClientConfig, root: Path
+        client_config: ClientConfig, root: Path
     ) -> Client[Any] | list[Client[Any]]:
         _ = root
-        client = EchoClient(model=self.model or "echo", **self.init)
+        client = EchoClient(
+            model=client_config.model or "echo", **client_config.init
+        )
         created.append(client)
         return client
 
-    monkeypatch.setattr(ClientConfig, "build_client", fake_build_client)
+    monkeypatch.setattr(pool_mod, "build_client", fake_build_client)
     return created
 
 
@@ -211,8 +216,19 @@ def rating_schema() -> dict[str, Any]:
     }
 
 
-def two_step_config(tmp_path: Path, **overrides: Any) -> PipelineConfig:
-    """Build a write-then-rate pipeline over a local dataset."""
+def two_step_config(
+    tmp_path: Path,
+    second_client: dict[str, Any] | None = None,
+    **overrides: Any,
+) -> PipelineConfig:
+    """Build a write-then-rate pipeline over a local dataset.
+
+    Args:
+        tmp_path: Directory the config and its dataset live in.
+        second_client: Replaces the second step's client block, before the
+            config is validated.
+        overrides: Top-level config keys to replace.
+    """
     data: dict[str, Any] = {
         "output_dir": tmp_path / "out",
         "config_dir": tmp_path,
@@ -240,6 +256,8 @@ def two_step_config(tmp_path: Path, **overrides: Any) -> PipelineConfig:
         ],
     }
     data.update(overrides)
+    if second_client is not None:
+        data["steps"][1]["client"] = second_client
     return PipelineConfig.model_validate(data)
 
 
@@ -382,6 +400,46 @@ def test_pipeline_runs_over_local_jsonl_data_files(
     assert len(dataset) == 2
 
 
+def test_relative_data_files_resolve_against_the_config_dir(
+    tmp_path: Path,
+    built_clients: list[EchoClient],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Run from another directory: a relative 'data_files' glob belongs to the
+    # config file, like every other path in a config.
+    source_jsonl_dir(tmp_path, num_rows=2)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    config = two_step_config(
+        tmp_path,
+        dataset={"name": "json", "data_files": "source_jsonl/*.jsonl"},
+    )
+
+    dataset = run_pipeline(config)
+
+    assert len(dataset) == 2
+
+
+def test_relative_data_dir_resolves_against_the_config_dir(
+    tmp_path: Path,
+    built_clients: list[EchoClient],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_jsonl_dir(tmp_path, num_rows=3)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    config = two_step_config(
+        tmp_path,
+        dataset={"name": "json", "data_dir": "source_jsonl"},
+    )
+
+    dataset = run_pipeline(config)
+
+    assert len(dataset) == 3
+
+
 # --- chaining ----------------------------------------------------------------
 
 
@@ -438,9 +496,10 @@ def test_keep_messages_retains_the_column(
 def test_client_is_reused_when_settings_match(
     tmp_path: Path, built_clients: list[EchoClient]
 ) -> None:
-    config = two_step_config(tmp_path)
     # Same model for both steps: the (expensive) client must be built once.
-    config.steps[1].client = {"options": {"max_completion_tokens": 16}}
+    config = two_step_config(
+        tmp_path, second_client={"options": {"max_completion_tokens": 16}}
+    )
     run_pipeline(config)
     assert len(built_clients) == 1
 
@@ -505,12 +564,12 @@ def test_filter_invalid_drops_unparseable_rows(
     # Only the first step is broken, so the pipeline must stop there rather
     # than hand a half-empty dataset to step 2.
     def fake_build_client(
-        self: ClientConfig, root: Path
+        client_config: ClientConfig, root: Path
     ) -> Client[Any] | list[Client[Any]]:
         _ = root
-        return BrokenJSONClient(model=self.model or "echo")
+        return BrokenJSONClient(model=client_config.model or "echo")
 
-    monkeypatch.setattr(ClientConfig, "build_client", fake_build_client)
+    monkeypatch.setattr(pool_mod, "build_client", fake_build_client)
 
     config = two_step_config(tmp_path)
     config.steps[0].filter_invalid = True
@@ -552,17 +611,19 @@ def failing_clients(
     """Route every client construction to a client that fails "document 0"."""
     created: list[FailingTextClient] = []
 
-    def fake_build_client(self: ClientConfig, root: Path) -> Client[Any]:
+    def fake_build_client(
+        client_config: ClientConfig, root: Path
+    ) -> Client[Any]:
         _ = root
         client = FailingTextClient(
             fail_texts=frozenset({"document 0"}),
-            model=self.model or "echo",
-            **self.init,
+            model=client_config.model or "echo",
+            **client_config.init,
         )
         created.append(client)
         return client
 
-    monkeypatch.setattr(ClientConfig, "build_client", fake_build_client)
+    monkeypatch.setattr(pool_mod, "build_client", fake_build_client)
     return created
 
 
@@ -595,16 +656,16 @@ def test_retry_errors_true_redoes_the_same_rows_in_every_selected_step(
     retried_clients: list[EchoClient] = []
 
     def fake_healthy_build_client(
-        self: ClientConfig, root: Path
+        client_config: ClientConfig, root: Path
     ) -> Client[Any]:
         _ = root
-        client = EchoClient(model=self.model or "echo", **self.init)
+        client = EchoClient(
+            model=client_config.model or "echo", **client_config.init
+        )
         retried_clients.append(client)
         return client
 
-    monkeypatch.setattr(
-        ClientConfig, "build_client", fake_healthy_build_client
-    )
+    monkeypatch.setattr(pool_mod, "build_client", fake_healthy_build_client)
 
     final = run_pipeline(two_step_config(tmp_path), retry_errors=True)
 
@@ -992,15 +1053,22 @@ def test_cli_set_reaches_any_key(
     assert snapshot["client"]["options"] == {"temperature": 0.25}
 
 
-def test_cli_set_rejects_a_malformed_assignment(tmp_path: Path) -> None:
+def test_cli_set_rejects_a_malformed_assignment(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     config_path = _write_cli_config(tmp_path)
-    with pytest.raises(ValueError, match="expects 'key=value'"):
+    with pytest.raises(SystemExit) as excinfo:
         main([str(config_path), "--set", "dataset.max_num_samples"])
 
+    assert excinfo.value.code == 2
+    assert "expects 'key=value'" in capsys.readouterr().err
 
-def test_cli_set_rejects_a_key_given_twice(tmp_path: Path) -> None:
+
+def test_cli_set_rejects_a_key_given_twice(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     config_path = _write_cli_config(tmp_path)
-    with pytest.raises(ValueError, match="set twice"):
+    with pytest.raises(SystemExit):
         main(
             [
                 str(config_path),
@@ -1011,8 +1079,12 @@ def test_cli_set_rejects_a_key_given_twice(tmp_path: Path) -> None:
             ]
         )
 
+    assert "set twice" in capsys.readouterr().err
 
-def test_cli_dataset_flags_need_a_dataset_block(tmp_path: Path) -> None:
+
+def test_cli_dataset_flags_need_a_dataset_block(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     import yaml
 
     config_path = tmp_path / "generate.yaml"
@@ -1029,8 +1101,69 @@ def test_cli_dataset_flags_need_a_dataset_block(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="no 'dataset' block"):
+    with pytest.raises(SystemExit):
         main([str(config_path), "--max-num-samples", "2"])
+
+    assert "no 'dataset' block" in capsys.readouterr().err
+
+
+def _write_invalid_config(tmp_path: Path) -> Path:
+    """Write a config with two problems in it and return its path."""
+    import yaml
+
+    config_path = tmp_path / "broken.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "output_dir": str(tmp_path / "out"),
+                "dataset": {"name": "stanfordnlp/imdb", "split": "test"},
+                "client": {
+                    "provider": "openai",
+                    "model": "m",
+                    "init": {"on_eror": "warn"},
+                },
+                "steps": [{"name": "one", "prompt": "x {text}"}],
+                "unknown_key": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return config_path
+
+
+def test_cli_reports_an_invalid_config_without_a_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        main([str(_write_invalid_config(tmp_path))])
+
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    lines = [line for line in err.splitlines() if line.startswith("error: ")]
+    assert len(lines) == 2
+    assert any("client: Unknown 'init' keys" in line for line in lines)
+    assert any("unknown_key" in line for line in lines)
+    assert "Traceback" not in err
+
+
+def test_cli_debug_keeps_the_traceback(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError):
+        main([str(_write_invalid_config(tmp_path)), "--debug"])
+
+
+def test_cli_reports_a_problem_that_names_no_key(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # An override that does not fit the config raises a plain ValueError, so
+    # the config file itself is the location.
+    config_path = _write_cli_config(tmp_path)
+    with pytest.raises(SystemExit):
+        main([str(config_path), "--set", "steps.9.name=nope"])
+
+    assert (
+        f"error: {config_path}: Override 'steps.9.name'"
+        in capsys.readouterr().err
+    )
 
 
 def _write_mixed_config(tmp_path: Path) -> Path:
@@ -1301,16 +1434,15 @@ def test_batch_size_follows_the_step(
         return original(self, *args, **kwargs)
 
     def fake_build_client(
-        self: ClientConfig, root: Path
+        client_config: ClientConfig, root: Path
     ) -> Client[Any] | list[Client[Any]]:
         _ = root
-        return EchoClient(model=self.model or "echo")
+        return EchoClient(model=client_config.model or "echo")
 
-    monkeypatch.setattr(ClientConfig, "build_client", fake_build_client)
+    monkeypatch.setattr(pool_mod, "build_client", fake_build_client)
     monkeypatch.setattr(Annotator, "annotate_dataset", spy)
 
-    config = two_step_config(tmp_path)
-    config.steps[1].client = {"batch_size": 1}
+    config = two_step_config(tmp_path, second_client={"batch_size": 1})
     run_pipeline(config)
     assert seen == [2, 1]
 
@@ -1328,12 +1460,12 @@ def test_max_consecutive_failed_batches_follows_the_step(
         return original(self, *args, **kwargs)
 
     def fake_build_client(
-        self: ClientConfig, root: Path
+        client_config: ClientConfig, root: Path
     ) -> Client[Any] | list[Client[Any]]:
         _ = root
-        return EchoClient(model=self.model or "echo")
+        return EchoClient(model=client_config.model or "echo")
 
-    monkeypatch.setattr(ClientConfig, "build_client", fake_build_client)
+    monkeypatch.setattr(pool_mod, "build_client", fake_build_client)
     monkeypatch.setattr(Annotator, "annotate_dataset", spy)
 
     config = two_step_config(tmp_path)
@@ -1360,16 +1492,23 @@ def test_queue_settings_follow_the_step(
         return original(self, *args, **kwargs)
 
     def fake_build_client(
-        self: ClientConfig, root: Path
+        client_config: ClientConfig, root: Path
     ) -> Client[Any] | list[Client[Any]]:
         _ = root
-        return [PoolClient(model=self.model or "echo") for _ in range(2)]
+        return [
+            PoolClient(model=client_config.model or "echo") for _ in range(2)
+        ]
 
-    monkeypatch.setattr(ClientConfig, "build_client", fake_build_client)
+    monkeypatch.setattr(pool_mod, "build_client", fake_build_client)
     monkeypatch.setattr(Annotator, "annotate_dataset", spy)
 
+    # Same cache key as step 1, so the pool is reused rather than rebuilt.
     config = two_step_config(
         tmp_path,
+        second_client={
+            "queue_size": 3,
+            "max_concurrent_batches_per_client": 1,
+        },
         client={
             "provider": "vllm_online",
             "model": "m",
@@ -1380,11 +1519,6 @@ def test_queue_settings_follow_the_step(
             "max_concurrent_batches_per_client": 2,
         },
     )
-    # Same cache key as step 1, so the pool is reused rather than rebuilt.
-    config.steps[1].client = {
-        "queue_size": 3,
-        "max_concurrent_batches_per_client": 1,
-    }
     run_pipeline(config)
     assert seen == [(8, 2), (3, 1)]
 
@@ -1561,14 +1695,14 @@ def test_pipeline_growth_recovers_from_a_crash_during_extension(
     created: list[EchoClient] = []
 
     def fake_build_client(
-        self: ClientConfig, root: Path
+        client_config: ClientConfig, root: Path
     ) -> Client[Any] | list[Client[Any]]:
         _ = root
-        client = FlakyClient(model=self.model or "echo")
+        client = FlakyClient(model=client_config.model or "echo")
         created.append(client)
         return client
 
-    monkeypatch.setattr(ClientConfig, "build_client", fake_build_client)
+    monkeypatch.setattr(pool_mod, "build_client", fake_build_client)
 
     with pytest.raises(RuntimeError, match="boom"):
         run_pipeline(growth_config(tmp_path, big_source, max_num_samples=20))
@@ -1607,6 +1741,60 @@ def test_pipeline_refuses_a_step_record_without_components(
 
     with pytest.raises(ValueError, match="does not describe the settings"):
         run_pipeline(two_step_config(tmp_path))
+
+
+@pytest.mark.parametrize("step_index", [0, 1])
+def test_pipeline_refuses_a_finished_step_without_a_record(
+    tmp_path: Path, built_clients: list[EchoClient], step_index: int
+) -> None:
+    # A step that finished under a release that wrote no record must not pass
+    # for up to date, in the first step and in every later one.
+    config = two_step_config(tmp_path)
+    run_pipeline(config)
+
+    SelectionRecord.path(
+        config.step_dir(step_index) / STEP_ANNOTATE_SUBDIR,
+        config.steps[step_index].resolved_task_prefix(),
+    ).unlink()
+
+    with pytest.raises(ValueError, match="no record of the settings"):
+        run_pipeline(two_step_config(tmp_path))
+
+
+def test_a_step_without_a_record_rebuilds_from_its_progress_files(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    # What the error tells the user to do: remove the snapshot, keep the
+    # finished rows.
+    config = two_step_config(tmp_path)
+    run_pipeline(config)
+    SelectionRecord.path(
+        config.step_dir(1) / STEP_ANNOTATE_SUBDIR,
+        config.steps[1].resolved_task_prefix(),
+    ).unlink()
+    shutil.rmtree(config.step_dir(1) / STEP_OUTPUT_SUBDIR)
+    built_clients.clear()
+
+    dataset = run_pipeline(two_step_config(tmp_path))
+
+    assert len(dataset) == 4
+    # The step ran again, but every row was already in its progress files.
+    assert [client.seen_prompts for client in built_clients] == [[]]
+
+
+def test_a_later_step_runs_without_the_source_dataset(
+    tmp_path: Path, built_clients: list[EchoClient]
+) -> None:
+    # '--steps rate' reads step 1's output, so the source it was built from
+    # does not have to exist any more.
+    config = two_step_config(tmp_path)
+    run_pipeline(config, selected=["write"])
+    shutil.rmtree(tmp_path / "source")
+
+    dataset = run_pipeline(two_step_config(tmp_path), selected=["rate"])
+
+    assert len(dataset) == 4
+    assert "rating" in dataset.column_names
 
 
 def test_generate_step_growth_sends_only_new_prompts(

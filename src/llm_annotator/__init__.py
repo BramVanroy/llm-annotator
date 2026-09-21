@@ -42,6 +42,9 @@ from .logging_utils import configure_logging as configure_logging
 from .logging_utils import get_logger as get_logger
 from .logging_utils import set_log_level as set_log_level
 from .pipeline import run_pipeline as run_pipeline
+from .pool import build_annotator as build_annotator
+from .pool import build_client as build_client
+from .pool import wait_for_servers as wait_for_servers
 from .utils import extract_prompt_prefix as extract_prompt_prefix
 from .utils import get_hash as get_hash
 
@@ -72,6 +75,8 @@ __all__ = [
     "VLLMOfflineRuntimeOptions",
     "VLLMOnlineRuntimeOptions",
     "auto_reduce_batch_size",
+    "build_annotator",
+    "build_client",
     "configure_logging",
     "extract_prompt_prefix",
     "get_hash",
@@ -80,4 +85,5 @@ __all__ = [
     "load_pipeline_config",
     "run_pipeline",
     "set_log_level",
+    "wait_for_servers",
 ]

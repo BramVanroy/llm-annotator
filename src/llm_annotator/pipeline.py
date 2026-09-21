@@ -28,12 +28,14 @@ from __future__ import annotations
 import dataclasses
 import json
 import shutil
+import sys
 from pathlib import Path
 from typing import Any, Sequence
 from uuid import uuid4
 
 import yaml
 from datasets import Dataset
+from pydantic import ValidationError
 
 from llm_annotator.annotator import (
     _COMPONENT_CHANGES,
@@ -54,6 +56,7 @@ from llm_annotator.config import (
     load_pipeline_config,
 )
 from llm_annotator.logging_utils import configure_logging, get_logger
+from llm_annotator.pool import build_annotator
 from llm_annotator.utils import dataset_signature, drop_jsonl_rows
 
 
@@ -212,6 +215,26 @@ def _step_remedy(config: PipelineConfig, index: int) -> str:
         "Restore the old value(s), use a new 'output_dir', or re-run with"
         f" '--steps {names} --overwrite' to annotate that step and the ones"
         " that read it again from scratch."
+    )
+
+
+def _unrecorded_step_error(step_name: str, step_output: Path) -> ValueError:
+    """Build the error for a finished step that has no record of its settings.
+
+    Args:
+        step_name: Name of the step.
+        step_output: The step's ``output`` directory.
+
+    Returns:
+        The error to raise.
+    """
+    return ValueError(
+        f"Step '{step_name}' finished into '{step_output}', but there is no"
+        " record of the settings it was annotated with, so this run cannot"
+        " tell whether its result still matches the config. Remove"
+        f" '{step_output}' to run the step again: the rows in its progress"
+        " files are not sent to the model a second time. See 'Migrating an"
+        " output directory' in docs/growing-a-run.md."
     )
 
 
@@ -448,8 +471,8 @@ def _run_step(
             kwargs["dataset_name"] = source.name
             kwargs["dataset_config"] = source.config
             kwargs["dataset_split"] = source.split
-            kwargs["data_dir"] = source.data_dir
-            kwargs["data_files"] = source.data_files
+            kwargs["data_dir"] = source.resolved_data_dir(root)
+            kwargs["data_files"] = source.resolved_data_files(root)
 
     if is_first and config.dataset is not None:
         kwargs["max_num_samples"] = config.dataset.max_num_samples
@@ -549,7 +572,7 @@ def run_pipeline(
         encoding="utf-8",
     )
 
-    dataset: Dataset | None = _load_input_dataset(config)
+    dataset: Dataset | None = None
     annotator: Annotator | None = None
     active_client_key: str | None = None
     runs_last_step = chosen.stop >= len(config.steps)
@@ -571,6 +594,12 @@ def run_pipeline(
             if config.overwrite and index in chosen and step_dir.is_dir():
                 LOGGER.info(f"{label}: removing '{step_dir}' (overwrite).")
                 shutil.rmtree(step_dir, ignore_errors=True)
+
+            # The source belongs to the first step, so a run that starts at a
+            # later one never touches it: it reads the output of the step
+            # before it instead.
+            if index == 0 and index in chosen:
+                dataset = _load_input_dataset(config)
 
             if step.type == "generate":
                 dataset = _generate_dataset(step, config.config_dir)
@@ -617,6 +646,15 @@ def run_pipeline(
                     or bool(changed)
                     or record.max_num_samples != cap
                 )
+
+            # Without a record there is nothing to compare this run against,
+            # so the snapshot cannot be taken for the result of this config.
+            if (
+                _is_complete(step_output)
+                and record is None
+                and not is_outdated
+            ):
+                raise _unrecorded_step_error(step.name, step_output)
 
             if _is_complete(step_output) and not is_outdated:
                 LOGGER.info(
@@ -682,8 +720,8 @@ def run_pipeline(
             if annotator is None or client_key != active_client_key:
                 if annotator is not None:
                     annotator.destroy()
-                annotator = client_config.build_annotator(
-                    config.config_dir, verbose=config.verbose
+                annotator = build_annotator(
+                    client_config, config.config_dir, verbose=config.verbose
                 )
                 active_client_key = client_key
             else:
@@ -1011,8 +1049,42 @@ def _cli_overrides(
     return overrides
 
 
+def _config_problems(
+    exc: ValueError, config_path: Path
+) -> list[tuple[str, str]]:
+    """Describe a failure to load a config, one problem per line.
+
+    Args:
+        exc: The error that loading the config raised.
+        config_path: Path of the config file, which is the location of a
+            problem that names no key.
+
+    Returns:
+        One pair of location and message per problem, in the order pydantic
+        reports them.
+
+    Examples:
+        >>> _config_problems(ValueError("no such step"), Path("cfg.yaml"))
+        [('cfg.yaml', 'no such step')]
+    """
+    if not isinstance(exc, ValidationError):
+        return [(str(config_path), str(exc))]
+
+    problems = []
+    for error in exc.errors():
+        location = ".".join(str(part) for part in error["loc"])
+        message = str(error["msg"]).removeprefix("Value error, ")
+        problems.append((location or str(config_path), message))
+    return problems
+
+
 def main(args: list[str] | None = None) -> None:
     """Run an annotation pipeline described by a JSON or YAML config file.
+
+    A config that does not load is reported as one ``error:`` line per
+    problem, and the process exits with status 2. ``--debug`` keeps the
+    traceback instead. An error raised while the pipeline runs keeps its
+    traceback either way.
 
     Args:
         args: Optional argument list; defaults to ``sys.argv``.
@@ -1123,6 +1195,12 @@ def main(args: list[str] | None = None) -> None:
         " profile lives in the config.",
     )
     parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Show the full traceback when the config does not load, instead"
+        " of one 'error:' line per problem.",
+    )
+    parser.add_argument(
         "--describe-steps",
         action="store_true",
         help="Print one JSON object per step describing what it needs to run"
@@ -1140,24 +1218,30 @@ def main(args: list[str] | None = None) -> None:
         else None
     )
 
-    overrides = _cli_overrides(
-        config_path=parsed.config,
-        output_dir=parsed.output_dir,
-        hub_id=parsed.hub_id,
-        log_level=parsed.log_level,
-        overwrite=parsed.overwrite,
-        max_num_samples=parsed.max_num_samples,
-        shuffle_seed=parsed.shuffle_seed,
-        settings=parsed.settings,
-    )
-
-    config = load_pipeline_config(
-        parsed.config,
-        overrides=overrides,
-        step_client_overrides=_pool_source_override(
-            parsed.config, parsed.hosts_file, parsed.url_glob, selected
-        ),
-    )
+    try:
+        overrides = _cli_overrides(
+            config_path=parsed.config,
+            output_dir=parsed.output_dir,
+            hub_id=parsed.hub_id,
+            log_level=parsed.log_level,
+            overwrite=parsed.overwrite,
+            max_num_samples=parsed.max_num_samples,
+            shuffle_seed=parsed.shuffle_seed,
+            settings=parsed.settings,
+        )
+        config = load_pipeline_config(
+            parsed.config,
+            overrides=overrides,
+            step_client_overrides=_pool_source_override(
+                parsed.config, parsed.hosts_file, parsed.url_glob, selected
+            ),
+        )
+    except ValueError as exc:
+        if parsed.debug:
+            raise
+        for location, message in _config_problems(exc, parsed.config):
+            print(f"error: {location}: {message}", file=sys.stderr)
+        sys.exit(2)
     configure_logging(level=config.log_level)
     if overrides:
         applied = ", ".join(f"{k}={v}" for k, v in overrides.items())
