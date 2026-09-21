@@ -34,10 +34,14 @@ import yaml
 from datasets import Dataset
 
 from llm_annotator.annotator import (
+    _COMPONENT_CHANGES,
     PROGRESS_DS_LOCAL_SUBDIR,
     Annotator,
     SelectionRecord,
     VLLMQueueAnnotator,
+    _preparation_components,
+    _reuse_error,
+    _schema_component,
     is_retried_error,
 )
 from llm_annotator.config import (
@@ -80,29 +84,52 @@ def _is_complete(snapshot_dir: Path) -> bool:
     return snapshot_dir.is_dir() and (snapshot_dir / "state.json").is_file()
 
 
-def _selection_request(
-    config: PipelineConfig, dataset: Dataset | None, is_first: bool
-) -> dict[str, Any]:
-    """Build the selection that a step asks for, in the terms of its record.
+def _step_components(
+    config: PipelineConfig,
+    step: StepConfig,
+    dataset: Dataset | None,
+    is_first: bool,
+) -> dict[str, str]:
+    """Describe the settings that a step's finished rows depend on.
+
+    The values must match what
+    [`prepare_data`][llm_annotator.annotator.Annotator.prepare_data] records
+    for the same step, so this mirrors the arguments that ``_run_step``
+    passes.
 
     Args:
         config: The pipeline configuration.
+        step: The step to describe.
         dataset: The step's in-memory input, or ``None`` for a source that the
             annotator loads itself.
         is_first: Whether this is the pipeline's first step.
 
     Returns:
-        Keyword arguments for
-        [`SelectionRecord.is_stale`][llm_annotator.annotator.SelectionRecord.is_stale].
+        One short string per setting, keyed by the setting's name.
     """
+    root = config.config_dir
     source = config.dataset if is_first else None
-    return {
-        "max_num_samples": source.max_num_samples if source else None,
-        "shuffle_seed": source.shuffle_seed if source else None,
-        "source_signature": (
+    template = (
+        _generate_template(step, root)
+        if step.type == "generate"
+        else step.resolved_prompt(root)
+    )
+    components = _preparation_components(
+        prompt_template=template or "",
+        system_message=step.resolved_system_prompt(root),
+        sort_by_length=step.sort_by_length,
+        idx_column=config.idx_column,
+        reuse_idx_column=not is_first,
+        shuffle_seed=source.shuffle_seed if source else None,
+        preprocess_fn=None,
+        source_signature=(
             dataset_signature(dataset) if dataset is not None else None
         ),
-    }
+    )
+    components["output_schema"] = _schema_component(
+        step.resolved_output_schema(root)
+    )
+    return components
 
 
 def _load_input_dataset(config: PipelineConfig) -> Dataset | None:
@@ -544,15 +571,22 @@ def run_pipeline(
                 )
 
             is_outdated = False
+            changed: list[str] = []
             if _is_complete(step_output):
-                request = _selection_request(config, dataset, index == 0)
                 record = SelectionRecord.read(
                     step_dir / STEP_ANNOTATE_SUBDIR,
                     step.resolved_task_prefix(),
                 )
-                is_outdated = bool(retried_idxs) or (
-                    record is not None and record.is_stale(**request)
-                )
+                if record is not None:
+                    changed = record.changed_components(
+                        _step_components(config, step, dataset, index == 0)
+                    )
+                    source = config.dataset if index == 0 else None
+                    cap = source.max_num_samples if source else None
+                    is_outdated = (
+                        bool(changed) or record.max_num_samples != cap
+                    )
+                is_outdated = is_outdated or bool(retried_idxs)
                 if not is_outdated:
                     LOGGER.info(
                         f"{label}: already finished, loading its result from"
@@ -563,8 +597,8 @@ def run_pipeline(
 
             if index not in chosen:
                 reason = (
-                    "finished for another selection of samples than the one"
-                    " that is requested now"
+                    "finished with other settings than the ones that are"
+                    " requested now"
                     if is_outdated
                     else "not run yet"
                 )
@@ -575,9 +609,30 @@ def run_pipeline(
                 )
 
             if is_outdated:
+                # A changed input is what growth looks like from a later
+                # step, so it is resumed. Every other change gives the
+                # finished rows another meaning, and the step's own result is
+                # still on disk, so this is refused before anything is
+                # removed.
+                conflicting = [name for name in changed if name != "dataset"]
+                progress_dir = (
+                    step_dir
+                    / STEP_ANNOTATE_SUBDIR
+                    / f"{step.resolved_task_prefix()}"
+                    f"{PROGRESS_DS_LOCAL_SUBDIR}"
+                )
+                if (
+                    conflicting
+                    and not config.overwrite
+                    and any(progress_dir.glob("*.jsonl"))
+                ):
+                    raise _reuse_error(
+                        progress_dir,
+                        [_COMPONENT_CHANGES[name] for name in conflicting],
+                    )
                 if not retried_idxs:
                     LOGGER.info(
-                        f"{label}: its input or sample selection changed"
+                        f"{label}: its input or its sample selection changed"
                         " since it finished. Resuming it; rows in its"
                         " progress files are not sent to the model again."
                     )

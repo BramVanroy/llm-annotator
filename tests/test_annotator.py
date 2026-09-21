@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import types
@@ -13,6 +14,7 @@ from datasets import Dataset, load_dataset
 from llm_annotator.annotator import (
     Annotator,
     SelectionRecord,
+    _callable_component,
     _create_messages,
     _resolve_samples_per_output_file,
     destroy_on_error,
@@ -30,7 +32,7 @@ from llm_annotator.clients.exceptions import (
 from llm_annotator.clients.openai_client import OpenAIClient
 from llm_annotator.clients.vllm_offline_client import VLLMOfflineClient
 from llm_annotator.clients.vllm_online_client import VLLMOnlineClient
-from llm_annotator.utils import dataset_signature
+from llm_annotator.utils import dataset_signature, get_hash
 
 
 class DummyClient(Client[ProviderRuntimeOptions]):
@@ -1803,6 +1805,27 @@ def test_generate_dataset_end_to_end(tmp_path: Path) -> None:
     assert out["response"] == ["Tell me about cats", "Tell me about dogs"]
 
 
+def test_generate_dataset_rejects_an_edited_prompt_prefix(
+    tmp_path: Path,
+) -> None:
+    annotator = Annotator(client=DummyClient(), batch_size=2)
+    prompts = ["Tell me about cats", "Tell me about dogs"]
+    annotator.generate_dataset(
+        output_dir=tmp_path / "out",
+        prompts=prompts,
+        prompt_prefix="In Dutch. ",
+        upload_every_n_samples=0,
+    )
+
+    with pytest.raises(ValueError, match="the prompt template changed"):
+        annotator.generate_dataset(
+            output_dir=tmp_path / "out",
+            prompts=prompts,
+            prompt_prefix="In English. ",
+            upload_every_n_samples=0,
+        )
+
+
 def test_post_annotate_deduplicates_repeated_idxs(
     tmp_path: Path, dummy_annotator: Annotator
 ) -> None:
@@ -1977,11 +2000,9 @@ def test_selection_record_read_returns_none_for_an_empty_dir(
 def test_selection_record_write_read_round_trip(tmp_path: Path) -> None:
     record = SelectionRecord(
         max_num_samples=10,
-        shuffle_seed=42,
-        source_signature="abc123",
         source_rows=40,
         selected_rows=10,
-        reuse_idx_column=True,
+        components={"shuffle_seed": "42", "dataset": "abc123"},
     )
     record.write(tmp_path, task_prefix="p_")
 
@@ -1991,45 +2012,38 @@ def test_selection_record_write_read_round_trip(tmp_path: Path) -> None:
     assert SelectionRecord.read(tmp_path, "p_") == record
     # A different (here: empty) task_prefix names a different file.
     assert SelectionRecord.read(tmp_path) is None
+    stored = json.loads(
+        (tmp_path / "p_selection.json").read_text(encoding="utf-8")
+    )
+    assert stored["fingerprint"] == record.fingerprint
 
 
 @pytest.mark.parametrize(
-    ("kwargs", "expected_stale"),
+    ("components", "expected_changed"),
     [
-        ({"max_num_samples": 10, "shuffle_seed": 42}, False),
-        ({"max_num_samples": 20, "shuffle_seed": 42}, True),
-        ({"max_num_samples": 10, "shuffle_seed": 7}, True),
+        ({"shuffle_seed": "42"}, []),
+        ({"shuffle_seed": "7"}, ["shuffle_seed"]),
+        ({"dataset": "abc"}, []),
+        ({"dataset": "other"}, ["dataset"]),
+        ({"prompt_template": "anything"}, []),
         (
-            {
-                "max_num_samples": 10,
-                "shuffle_seed": 42,
-                "source_signature": "abc",
-            },
-            False,
-        ),
-        (
-            {
-                "max_num_samples": 10,
-                "shuffle_seed": 42,
-                "source_signature": "other",
-            },
-            True,
+            {"dataset": "other", "shuffle_seed": "7"},
+            ["dataset", "shuffle_seed"],
         ),
     ],
 )
-def test_selection_record_is_stale(
-    kwargs: dict[str, Any], expected_stale: bool
+def test_selection_record_changed_components(
+    components: dict[str, str], expected_changed: list[str]
 ) -> None:
-    # source_signature defaults to None, which leaves the source out of the
-    # comparison (a source that is not loaded yet).
+    # A setting the record does not hold is left out: an older record cannot
+    # answer for it.
     record = SelectionRecord(
         max_num_samples=10,
-        shuffle_seed=42,
-        source_signature="abc",
         source_rows=40,
         selected_rows=10,
+        components={"shuffle_seed": "42", "dataset": "abc"},
     )
-    assert record.is_stale(**kwargs) is expected_stale
+    assert record.changed_components(components) == expected_changed
 
 
 def test_prepare_data_writes_the_selection_record(tmp_path: Path) -> None:
@@ -2047,11 +2061,13 @@ def test_prepare_data_writes_the_selection_record(tmp_path: Path) -> None:
     record = SelectionRecord.read(tmp_path / "out")
     assert record is not None
     assert record.max_num_samples == 3
-    assert record.shuffle_seed == 1
     assert record.source_rows == 5
     assert record.selected_rows == 3
-    assert record.reuse_idx_column is False
-    assert record.source_signature == dataset_signature(ds)
+    assert record.components["shuffle_seed"] == "1"
+    assert record.components["reuse_idx_column"] == "False"
+    assert record.components["dataset"] == dataset_signature(ds)
+    assert record.components["prompt_template"] == get_hash("Q: {text}")
+    assert record.components["system_message"] == "None"
 
 
 def test_prepare_data_rebuilds_a_stale_local_cache(tmp_path: Path) -> None:
@@ -2100,6 +2116,292 @@ def test_prepare_data_reuses_a_cache_that_has_no_record(
         max_num_samples=4,
     )
     assert len(second) == 2
+
+    # The settings of that run are recorded, so the next edit is caught.
+    record = SelectionRecord.read(tmp_path / "out")
+    assert record is not None
+    assert record.components["prompt_template"] == get_hash("Q: {text}")
+
+    third, _, _ = annotator.prepare_data(
+        output_dir=tmp_path / "out",
+        prompt_template="A: {text}",
+        dataset=ds,
+        max_num_samples=4,
+    )
+    assert third[0]["messages"][-1]["content"] == "A: row 0"
+
+
+def _upper_case(*, dataset: Dataset) -> Dataset:
+    return dataset.map(lambda row: {"text": row["text"].upper()})
+
+
+def _lower_case(*, dataset: Dataset) -> Dataset:
+    return dataset.map(lambda row: {"text": row["text"].lower()})
+
+
+def test_callable_component_follows_the_source(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    same_name = _lower_case
+    same_name.__qualname__ = _upper_case.__qualname__
+    # Only the body differs now, so the two are told apart by their source.
+    assert _callable_component(
+        _upper_case, setting="preprocess_fn"
+    ) != _callable_component(same_name, setting="preprocess_fn")
+    assert _callable_component(None, setting="preprocess_fn") == "None"
+
+    with caplog.at_level(logging.WARNING):
+        component = _callable_component(
+            functools.partial(_upper_case), setting="preprocess_fn"
+        )
+    assert "cannot be read" in caplog.text
+    assert component == _callable_component(
+        functools.partial(_upper_case), setting="preprocess_fn"
+    )
+
+
+# --- settings that the finished rows depend on ----------------------------------
+
+
+def _finished_run(
+    tmp_path: Path, **kwargs: Any
+) -> tuple[Annotator, Dataset, Path]:
+    """Annotate four rows so that the output directory holds progress files."""
+    annotator = Annotator(client=TrackingClient(), batch_size=2)
+    ds = Dataset.from_dict({"text": [f"row {i}" for i in range(4)]})
+    out_dir = tmp_path / "out"
+    annotator.annotate_dataset(
+        output_dir=out_dir,
+        prompt_template="Q: {text}",
+        dataset=ds,
+        upload_every_n_samples=0,
+        **kwargs,
+    )
+    return annotator, ds, out_dir
+
+
+@pytest.mark.parametrize(
+    ("changed", "expected"),
+    [
+        ({"prompt_template": "A: {text}"}, "the prompt template changed"),
+        ({"system_message": "Be brief."}, "the system message changed"),
+        ({"sort_by_length": True}, "'sort_by_length' changed"),
+        ({"preprocess_fn": _upper_case}, "'preprocess_fn' changed"),
+        ({"idx_column": "sample_id"}, "'idx_column' changed"),
+    ],
+)
+def test_annotate_dataset_rejects_changed_settings(
+    tmp_path: Path, changed: dict[str, Any], expected: str
+) -> None:
+    annotator, ds, out_dir = _finished_run(tmp_path)
+    kwargs: dict[str, Any] = {
+        "output_dir": out_dir,
+        "prompt_template": "Q: {text}",
+        "dataset": ds,
+        "upload_every_n_samples": 0,
+        **changed,
+    }
+
+    with pytest.raises(ValueError, match=expected):
+        annotator.annotate_dataset(**kwargs)
+
+    # The finished rows are still there; nothing is removed before the
+    # request is refused.
+    assert list((out_dir / "progress_backup").glob("*.jsonl"))
+
+
+def test_annotate_dataset_accepts_a_changed_setting_with_overwrite(
+    tmp_path: Path,
+) -> None:
+    annotator, ds, out_dir = _finished_run(tmp_path)
+
+    result = annotator.annotate_dataset(
+        output_dir=out_dir,
+        prompt_template="A: {text}",
+        dataset=ds,
+        upload_every_n_samples=0,
+        overwrite=True,
+    )
+    assert result["response"] == [f"A: row {i}" for i in range(4)]
+
+
+def test_prepare_data_rebuilds_for_an_edited_prompt_without_progress_files(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    annotator = Annotator(client=DummyClient())
+    ds = Dataset.from_dict({"text": ["a", "b"]})
+    annotator.prepare_data(
+        output_dir=tmp_path / "out", prompt_template="Q: {text}", dataset=ds
+    )
+
+    with caplog.at_level(logging.INFO):
+        prepared, _, _ = annotator.prepare_data(
+            output_dir=tmp_path / "out",
+            prompt_template="A: {text}",
+            dataset=ds,
+        )
+
+    assert "the prompt template changed" in caplog.text
+    assert prepared["messages"][0][-1]["content"] == "A: a"
+
+
+def test_prompt_field_swapper_is_recorded_after_the_swap(
+    tmp_path: Path,
+) -> None:
+    annotator = Annotator(client=DummyClient())
+    ds = Dataset.from_dict({"text": ["a", "b"], "other": ["c", "d"]})
+    annotator.prepare_data(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {field}",
+        dataset=ds,
+        prompt_field_swapper={"field": "text"},
+    )
+
+    record = SelectionRecord.read(tmp_path / "out")
+    assert record is not None
+    assert record.components["prompt_template"] == get_hash("Q: {text}")
+    assert record.changed_components(
+        {"prompt_template": get_hash("Q: {other}")}
+    ) == ["prompt_template"]
+
+
+def test_the_sample_cap_is_outside_the_recorded_settings(
+    tmp_path: Path,
+) -> None:
+    # Only because of this can a run grow under a higher cap.
+    annotator = Annotator(client=DummyClient())
+    ds = Dataset.from_dict({"text": [f"row {i}" for i in range(4)]})
+    annotator.prepare_data(
+        output_dir=tmp_path / "out",
+        prompt_template="Q: {text}",
+        dataset=ds,
+        max_num_samples=2,
+    )
+
+    record = SelectionRecord.read(tmp_path / "out")
+    assert record is not None
+    assert "max_num_samples" not in record.components
+    assert record.max_num_samples == 2
+
+
+def test_annotate_dataset_rejects_a_changed_output_schema(
+    tmp_path: Path,
+) -> None:
+    schema = {
+        "type": "object",
+        "properties": {"label": {"type": "string"}},
+    }
+    annotator, ds, out_dir = _finished_run(tmp_path, output_schema=schema)
+
+    other = {
+        "type": "object",
+        "properties": {"sentiment": {"type": "string"}},
+    }
+    with pytest.raises(ValueError, match="the output schema changed"):
+        annotator.annotate_dataset(
+            output_dir=out_dir,
+            prompt_template="Q: {text}",
+            dataset=ds,
+            upload_every_n_samples=0,
+            output_schema=other,
+        )
+
+
+def test_run_annotation_records_the_output_schema_once(
+    tmp_path: Path,
+) -> None:
+    annotator = Annotator(client=DummyClient(), batch_size=2)
+    ds = Dataset.from_dict({"text": ["a", "b"]})
+    prepared, _, _ = annotator.prepare_data(
+        output_dir=tmp_path / "out", prompt_template="Q: {text}", dataset=ds
+    )
+
+    record = SelectionRecord.read(tmp_path / "out")
+    assert record is not None
+    assert "output_schema" not in record.components
+
+    annotator.run_annotation(
+        output_dir=tmp_path / "out",
+        prepared_dataset=prepared,
+        upload_every_n_samples=0,
+    )
+
+    record = SelectionRecord.read(tmp_path / "out")
+    assert record is not None
+    assert record.components["output_schema"] == "None"
+
+
+def test_an_old_record_keeps_comparing_what_it_holds(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    annotator, ds, out_dir = _finished_run(tmp_path, shuffle_seed=1)
+    record_path = SelectionRecord.path(out_dir)
+    stored = json.loads(record_path.read_text(encoding="utf-8"))
+    # What a release that only recorded the selection wrote.
+    record_path.write_text(
+        json.dumps(
+            {
+                "max_num_samples": None,
+                "shuffle_seed": 1,
+                "source_signature": stored["components"]["dataset"],
+                "source_rows": 4,
+                "selected_rows": 4,
+                "reuse_idx_column": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="'shuffle_seed' changed"):
+        annotator.annotate_dataset(
+            output_dir=out_dir,
+            prompt_template="Q: {text}",
+            dataset=ds,
+            shuffle_seed=2,
+            upload_every_n_samples=0,
+        )
+
+
+def test_an_old_record_warns_about_what_it_cannot_compare(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    annotator, ds, out_dir = _finished_run(tmp_path)
+    record_path = SelectionRecord.path(out_dir)
+    stored = json.loads(record_path.read_text(encoding="utf-8"))
+    record_path.write_text(
+        json.dumps(
+            {
+                "max_num_samples": None,
+                "shuffle_seed": None,
+                "source_signature": stored["components"]["dataset"],
+                "source_rows": 4,
+                "selected_rows": 4,
+                "reuse_idx_column": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    # An edit that the old record cannot answer for is named in a warning and
+    # the finished rows are kept.
+    with caplog.at_level(logging.WARNING):
+        result = annotator.annotate_dataset(
+            output_dir=out_dir,
+            prompt_template="A: {text}",
+            dataset=ds,
+            upload_every_n_samples=0,
+        )
+    assert "prompt_template" in caplog.text
+    assert result["response"] == [f"Q: row {i}" for i in range(4)]
+
+    # The current settings are recorded now, so the next edit is refused.
+    with pytest.raises(ValueError, match="the prompt template changed"):
+        annotator.annotate_dataset(
+            output_dir=out_dir,
+            prompt_template="B: {text}",
+            dataset=ds,
+            upload_every_n_samples=0,
+        )
 
 
 # --- growing an annotate_dataset run --------------------------------------------

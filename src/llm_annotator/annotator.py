@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import json
 import logging
 import shutil
@@ -64,10 +65,13 @@ from llm_annotator.utils import (
     ensure_returns_bool,
     ensure_returns_dict,
     extract_prompt_prefix,
+    get_hash,
     get_lib_versions,
     remove_empty_jsonl_files,
 )
 
+
+LOGGER = get_logger("annotator")
 
 # Set a sensible default: cpu_count-1 cores
 # but at least 1 at most 8 to avoid overloading the system
@@ -180,72 +184,229 @@ def is_retried_error(
     return row.get(f"{task_prefix}error_type") in retry_errors
 
 
+_COMPONENT_CHANGES: dict[str, str] = {
+    "prompt_template": "the prompt template changed",
+    "system_message": "the system message changed",
+    "sort_by_length": "'sort_by_length' changed",
+    "idx_column": "'idx_column' changed",
+    "reuse_idx_column": "'reuse_idx_column' changed",
+    "shuffle_seed": "'shuffle_seed' changed",
+    "preprocess_fn": "'preprocess_fn' changed",
+    "dataset": "the source dataset changed",
+    "output_schema": "the output schema changed",
+}
+"""What each recorded component is called when it differs from the record."""
+
+
+def _callable_component(func: Callable | None, *, setting: str) -> str:
+    """Describe a user callable for a preparation record.
+
+    Args:
+        func: The callable, or ``None`` when the setting is unset.
+        setting: Name of the setting the callable was passed as, used in the
+            warning about a callable whose source cannot be read.
+
+    Returns:
+        The qualified name of the callable, followed by a hash of its source
+        when the source is available.
+    """
+    if func is None:
+        return "None"
+    module = getattr(func, "__module__", "?")
+    qualified = f"{module}.{getattr(func, '__qualname__', repr(func))}"
+    try:
+        source = inspect.getsource(func)
+    except (OSError, TypeError):
+        LOGGER.warning(
+            f"The source of '{setting}' ({qualified}) cannot be read, so an"
+            " edit to it is not detected when this run is resumed."
+        )
+        return qualified
+    return f"{qualified}:{get_hash(source)}"
+
+
+def _preparation_components(
+    *,
+    prompt_template: str,
+    system_message: str | None,
+    sort_by_length: bool | Literal["shortest_first", "longest_first"],
+    idx_column: str,
+    reuse_idx_column: bool,
+    shuffle_seed: int | None,
+    preprocess_fn: Callable | None,
+    source_signature: str | None,
+) -> dict[str, str]:
+    """Describe every setting that decides what a prepared dataset holds.
+
+    Long values are hashed, short ones are kept as they are, so a difference
+    can be named without the record holding a copy of the prompt.
+    ``max_num_samples`` is left out: a run may grow under a higher cap.
+
+    Args:
+        prompt_template: The prompt template, after ``prompt_field_swapper``.
+        system_message: The system message, or ``None``.
+        sort_by_length: The requested prompt ordering.
+        idx_column: Name of the sample id column.
+        reuse_idx_column: Whether the ids come from an existing column.
+        shuffle_seed: The shuffle seed, or ``None``.
+        preprocess_fn: The preprocessing callback, or ``None``.
+        source_signature: Signature of the source dataset, or ``None`` for a
+            source that is not loaded yet, which leaves it out.
+
+    Returns:
+        One short string per setting, keyed by the setting's name.
+
+    Examples:
+        >>> components = _preparation_components(
+        ...     prompt_template="Q: {text}",
+        ...     system_message=None,
+        ...     sort_by_length=False,
+        ...     idx_column="idx",
+        ...     reuse_idx_column=False,
+        ...     shuffle_seed=42,
+        ...     preprocess_fn=None,
+        ...     source_signature=None,
+        ... )
+        >>> components["shuffle_seed"]
+        '42'
+        >>> "dataset" in components
+        False
+    """
+    components = {
+        "prompt_template": get_hash(prompt_template),
+        "system_message": (
+            "None" if system_message is None else get_hash(system_message)
+        ),
+        "sort_by_length": repr(sort_by_length),
+        "idx_column": idx_column,
+        "reuse_idx_column": repr(reuse_idx_column),
+        "shuffle_seed": repr(shuffle_seed),
+        "preprocess_fn": _callable_component(
+            preprocess_fn, setting="preprocess_fn"
+        ),
+    }
+    if source_signature is not None:
+        components["dataset"] = source_signature
+    return components
+
+
+def _schema_component(output_schema: dict[str, Any] | None) -> str:
+    """Describe an output schema for a preparation record.
+
+    Args:
+        output_schema: The decoded JSON schema, or ``None``.
+
+    Returns:
+        A hash of the schema, or ``"None"``.
+
+    Examples:
+        >>> _schema_component(None)
+        'None'
+        >>> _schema_component({"type": "object"}) == _schema_component(
+        ...     {"type": "object"}
+        ... )
+        True
+    """
+    if output_schema is None:
+        return "None"
+    return get_hash(json.dumps(output_schema, sort_keys=True, default=repr))
+
+
+def _reuse_error(progress_dir: Path, causes: list[str]) -> ValueError:
+    """Build the error for finished rows that the request no longer matches.
+
+    Args:
+        progress_dir: Directory that holds the progress files.
+        causes: One phrase per setting that differs from the record.
+
+    Returns:
+        The error to raise.
+    """
+    return ValueError(
+        f"The finished rows in '{progress_dir}' were annotated with other"
+        f" settings than the ones given now: {', '.join(causes)}. Restore"
+        " the old value(s), use a new 'output_dir', or overwrite the run"
+        " ('overwrite=True', '--overwrite' on the command line) to discard"
+        " the finished rows and annotate every sample again. A run can only"
+        " grow through a higher 'max_num_samples' with the same settings, or"
+        " through rows appended to a source that is not shuffled."
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class SelectionRecord:
-    """The sample selection that a prepared dataset was built from.
+    """What a prepared dataset was built from.
 
     [`prepare_data`][llm_annotator.annotator.Annotator.prepare_data] writes it
     to ``<output_dir>/<task_prefix>selection.json``. The file stays in place
     after a run finishes, so a later run can tell whether the finished rows
-    belong to the selection that it asks for.
+    were annotated with the settings that it asks for.
 
     Attributes:
-        max_num_samples: The requested sample cap, ``None`` for no cap.
-        shuffle_seed: The shuffle seed, ``None`` for no shuffle.
-        source_signature: Result of
-            [`dataset_signature`][llm_annotator.utils.dataset_signature] for
-            the source dataset.
+        max_num_samples: The requested sample cap, ``None`` for no cap. It is
+            outside ``components`` because a run may grow under a higher cap.
         source_rows: Number of rows in the source dataset.
         selected_rows: Number of rows that the cap left in the selection.
-        reuse_idx_column: Whether the ids came from an existing column.
+        components: One short string per setting that decides what the
+            prepared dataset holds, keyed by the setting's name. A record
+            written by an older version holds only the settings that version
+            knew.
 
     Examples:
         >>> record = SelectionRecord(
         ...     max_num_samples=10,
-        ...     shuffle_seed=42,
-        ...     source_signature="abc",
         ...     source_rows=40,
         ...     selected_rows=10,
+        ...     components={"prompt_template": "abc", "shuffle_seed": "42"},
         ... )
-        >>> record.is_stale(max_num_samples=20, shuffle_seed=42)
-        True
-        >>> record.is_stale(max_num_samples=10, shuffle_seed=42)
-        False
+        >>> record.changed_components({"prompt_template": "abc"})
+        []
+        >>> record.changed_components({"prompt_template": "def"})
+        ['prompt_template']
+        >>> record.changed_components({"system_message": "def"})
+        []
     """
 
     max_num_samples: int | None
-    shuffle_seed: int | None
-    source_signature: str
     source_rows: int
     selected_rows: int
-    reuse_idx_column: bool = False
+    components: dict[str, str] = field(default_factory=dict)
 
-    def is_stale(
-        self,
-        *,
-        max_num_samples: int | None,
-        shuffle_seed: int | None,
-        source_signature: str | None = None,
-    ) -> bool:
-        """Check whether a request asks for another selection than this one.
+    @property
+    def fingerprint(self) -> str:
+        """A single hash over every recorded component."""
+        return get_hash(json.dumps(self.components, sort_keys=True))
+
+    def changed_components(self, components: dict[str, str]) -> list[str]:
+        """Name the requested settings that differ from the recorded ones.
 
         Args:
-            max_num_samples: The requested sample cap.
-            shuffle_seed: The requested shuffle seed.
-            source_signature: Signature of the source dataset. ``None`` leaves
-                the source out of the comparison, for a source that is not
-                loaded yet.
+            components: The settings of the request, as
+                ``_preparation_components`` builds them.
 
         Returns:
-            ``True`` when the cap, the seed or the source differs.
+            The names of the settings that the record holds under another
+            value, sorted. A setting the record does not hold is left out,
+            because a record written by an older version cannot answer for it.
         """
-        return (
-            self.max_num_samples != max_num_samples
-            or self.shuffle_seed != shuffle_seed
-            or (
-                source_signature is not None
-                and self.source_signature != source_signature
-            )
+        return sorted(
+            name
+            for name, value in components.items()
+            if name in self.components and self.components[name] != value
+        )
+
+    def unknown_components(self, components: dict[str, str]) -> list[str]:
+        """Name the requested settings that the record cannot answer for.
+
+        Args:
+            components: The settings of the request, as
+                ``_preparation_components`` builds them.
+
+        Returns:
+            The names of the settings that the record does not hold, sorted.
+        """
+        return sorted(
+            name for name in components if name not in self.components
         )
 
     @classmethod
@@ -267,6 +428,10 @@ class SelectionRecord:
     ) -> "SelectionRecord | None":
         """Read the record of an output directory.
 
+        A file written before the settings were recorded as components is
+        read into the components that it does hold, so the cap, the seed and
+        the source of such a run are still compared.
+
         Args:
             output_dir: The annotator's output directory.
             task_prefix: The task prefix of the run.
@@ -279,8 +444,22 @@ class SelectionRecord:
         if not record_path.is_file():
             return None
         stored = json.loads(record_path.read_text(encoding="utf-8"))
-        known = {fld.name for fld in dataclasses.fields(cls)}
-        return cls(**{k: v for k, v in stored.items() if k in known})
+        components = stored.get("components")
+        if not isinstance(components, dict):
+            components = {
+                "shuffle_seed": repr(stored.get("shuffle_seed")),
+                "reuse_idx_column": repr(
+                    stored.get("reuse_idx_column", False)
+                ),
+            }
+            if stored.get("source_signature"):
+                components["dataset"] = stored["source_signature"]
+        return cls(
+            max_num_samples=stored.get("max_num_samples"),
+            source_rows=stored.get("source_rows", 0),
+            selected_rows=stored.get("selected_rows", 0),
+            components={str(k): str(v) for k, v in components.items()},
+        )
 
     def write(self, output_dir: str | Path, task_prefix: str = "") -> None:
         """Write the record to an output directory.
@@ -289,8 +468,9 @@ class SelectionRecord:
             output_dir: The annotator's output directory.
             task_prefix: The task prefix of the run.
         """
+        payload = dataclasses.asdict(self) | {"fingerprint": self.fingerprint}
         self.path(output_dir, task_prefix).write_text(
-            json.dumps(dataclasses.asdict(self), indent=2), encoding="utf-8"
+            json.dumps(payload, indent=2), encoding="utf-8"
         )
 
 
@@ -1174,8 +1354,8 @@ class Annotator:
                 a row keeps one id through several runs. A change of the
                 source is then allowed, because the ids do not depend on the
                 position of a row.
-            allow_selection_change: Whether a selection that does not contain
-                the finished rows is accepted. Only useful when those rows are
+            allow_selection_change: Whether a request that the finished rows
+                do not belong to is accepted. Only useful when those rows are
                 deleted afterwards (``overwrite=True`` in ``run_annotation``).
 
         Returns:
@@ -1183,11 +1363,11 @@ class Annotator:
             and Hugging Face dataset ID when available.
 
         Raises:
-            ValueError: If progress files exist and the requested selection
-                does not contain the rows that they hold: another
-                ``shuffle_seed``, a lower ``max_num_samples``, or a source
-                that changed in another way than appended rows without a
-                shuffle.
+            ValueError: If progress files exist and the request no longer
+                matches the settings that they were annotated with: an edited
+                prompt template or system message, another ``shuffle_seed``, a
+                lower ``max_num_samples``, or a source that changed in another
+                way than appended rows without a shuffle.
         """
         pdout = Path(output_dir)
         pdout.mkdir(exist_ok=True, parents=True)
@@ -1200,31 +1380,58 @@ class Annotator:
                 f"{{{fld}}}", f"{{{value}}}"
             )
 
-        source_signature = (
-            dataset_signature(dataset) if dataset is not None else None
+        components = _preparation_components(
+            prompt_template=prompt_template,
+            system_message=system_message,
+            sort_by_length=sort_by_length,
+            idx_column=idx_column,
+            reuse_idx_column=reuse_idx_column,
+            shuffle_seed=shuffle_seed,
+            preprocess_fn=preprocess_fn,
+            source_signature=(
+                dataset_signature(dataset) if dataset is not None else None
+            ),
         )
         previous = SelectionRecord.read(pdout, task_prefix)
-        # A cache that was built for another cap, seed or source pins the old
-        # selection, so it is rebuilt like a forced preparation.
-        if previous is not None and previous.is_stale(
-            max_num_samples=max_num_samples,
-            shuffle_seed=shuffle_seed,
-            source_signature=source_signature,
-        ):
-            self._logger.info(
-                "The requested selection differs from the recorded one"
-                f" (max_num_samples={previous.max_num_samples},"
-                f" shuffle_seed={previous.shuffle_seed},"
-                f" {previous.source_rows:,} source rows), so the prepared"
-                " data is rebuilt."
-            )
-            force_data_preparation = True
+        changed: list[str] = []
+        if previous is not None:
+            # The output schema has no effect on the prepared data and is
+            # recorded by `run_annotation`, so it is carried over untouched.
+            if "output_schema" in previous.components:
+                components["output_schema"] = previous.components[
+                    "output_schema"
+                ]
+            self._warn_unknown_components(previous, components, pdout)
+            changed = previous.changed_components(components)
+            causes = [_COMPONENT_CHANGES[name] for name in changed]
+            if previous.max_num_samples != max_num_samples:
+                causes.append(
+                    "'max_num_samples' changed from"
+                    f" {previous.max_num_samples} to {max_num_samples}"
+                )
+            # A cache built with other settings holds the old messages or the
+            # old selection, so it is rebuilt like a forced preparation.
+            if causes:
+                self._logger.info(
+                    "The prepared data was built with other settings than the"
+                    f" ones given now ({', '.join(causes)}), so it is rebuilt."
+                )
+                force_data_preparation = True
 
         has_local_cache = prepared_data_path.is_dir() and any(
             prepared_data_path.glob("*")
         )
         if has_local_cache and not force_data_preparation:
             cached_ds = Dataset.load_from_disk(prepared_data_path)
+            self._adopt_record(
+                previous=previous,
+                components=components,
+                cached_rows=len(cached_ds),
+                max_num_samples=max_num_samples,
+                pdout=pdout,
+                task_prefix=task_prefix,
+                origin=f"the cache at '{prepared_data_path}'",
+            )
             return cached_ds, prepared_data_path, hub_id
 
         if hub_id and not force_data_preparation:
@@ -1241,6 +1448,15 @@ class Annotator:
                     f"Restoring prepared data from Hub to local cache at '{prepared_data_path}'..."
                 )
                 cached_ds.save_to_disk(prepared_data_path)
+                self._adopt_record(
+                    previous=previous,
+                    components=components,
+                    cached_rows=len(cached_ds),
+                    max_num_samples=max_num_samples,
+                    pdout=pdout,
+                    task_prefix=task_prefix,
+                    origin=f"the Hub backup in '{hub_id}'",
+                )
                 return cached_ds, prepared_data_path, hub_id
 
         # ... and if all of that fails, prepare the dataset from the source
@@ -1252,13 +1468,15 @@ class Annotator:
             data_files=data_files,
             dataset_split=dataset_split,
         )
+        if "dataset" not in components:
+            components["dataset"] = dataset_signature(source)
+            if previous is not None:
+                changed = previous.changed_components(components)
         record = SelectionRecord(
             max_num_samples=max_num_samples,
-            shuffle_seed=shuffle_seed,
-            source_signature=source_signature or dataset_signature(source),
             source_rows=len(source),
             selected_rows=min(max_num_samples or len(source), len(source)),
-            reuse_idx_column=reuse_idx_column,
+            components=components,
         )
         progress_dir = pdout / f"{task_prefix}{PROGRESS_DS_LOCAL_SUBDIR}"
         if (
@@ -1266,7 +1484,15 @@ class Annotator:
             and not allow_selection_change
             and any(progress_dir.glob("*.jsonl"))
         ):
-            self._check_selection_change(previous, record, source)
+            self._check_reuse(
+                previous=previous,
+                record=record,
+                changed=changed,
+                source=source,
+                shuffle_seed=shuffle_seed,
+                reuse_idx_column=reuse_idx_column,
+                progress_dir=progress_dir,
+            )
 
         # Only now, so that a rejected selection leaves the old artifacts intact
         if has_local_cache:
@@ -1342,65 +1568,189 @@ class Annotator:
 
         return prepared_dataset, prepared_data_path, hub_id
 
-    def _check_selection_change(
+    def _warn_unknown_components(
         self,
         previous: SelectionRecord,
-        record: SelectionRecord,
-        source: Dataset,
+        components: dict[str, str],
+        pdout: Path,
     ) -> None:
-        """Reject a selection that does not contain the finished rows.
+        """Warn about the settings that an older record cannot answer for.
+
+        Args:
+            previous: The record of the finished work.
+            components: The settings of the request.
+            pdout: The annotator's output directory, named in the warning.
+        """
+        unknown = previous.unknown_components(components)
+        if not unknown:
+            return
+        self._logger.warning(
+            f"The record in '{pdout}' was written by a version that did not"
+            f" record {unknown}, so an edit to those since the finished rows"
+            " were annotated is not detected. Their current values are"
+            " recorded now, so a later edit is."
+        )
+
+    def _adopt_record(
+        self,
+        *,
+        previous: SelectionRecord | None,
+        components: dict[str, str],
+        cached_rows: int,
+        max_num_samples: int | None,
+        pdout: Path,
+        task_prefix: str,
+        origin: str,
+    ) -> None:
+        """Record the current settings for prepared data that is reused as is.
+
+        Prepared data without a complete record is taken at face value: there
+        is nothing to compare it against. Recording the settings of the
+        request makes a later edit to them detectable.
+
+        Args:
+            previous: The record of the prepared data, or ``None``.
+            components: The settings of the request.
+            cached_rows: Number of rows in the reused prepared data.
+            max_num_samples: The requested sample cap.
+            pdout: The annotator's output directory.
+            task_prefix: The task prefix of the run.
+            origin: Where the reused prepared data comes from, for the
+                warning.
+        """
+        if previous is None:
+            self._logger.warning(
+                f"The prepared data in {origin} has no record of the settings"
+                " it was built with, so it is reused as it is. The settings"
+                " of this run are recorded now, so a later edit to them is"
+                " detected."
+            )
+            record = SelectionRecord(
+                max_num_samples=max_num_samples,
+                source_rows=cached_rows,
+                selected_rows=cached_rows,
+                components=components,
+            )
+        elif previous.unknown_components(components):
+            record = dataclasses.replace(
+                previous,
+                components={**previous.components, **components},
+            )
+        else:
+            return
+        record.write(pdout, task_prefix)
+
+    def _record_output_schema(
+        self,
+        *,
+        output_dir: Path,
+        task_prefix: str,
+        output_schema: dict[str, Any] | None,
+        overwrite: bool,
+    ) -> None:
+        """Compare the output schema against the record and update it.
+
+        The schema decides which columns a finished row has, so two schemas
+        must not be mixed in one output. It is recorded here rather than in
+        [`prepare_data`][llm_annotator.annotator.Annotator.prepare_data]
+        because it has no effect on the prepared data.
+
+        Args:
+            output_dir: The annotator's output directory.
+            task_prefix: The task prefix of the run.
+            output_schema: The decoded JSON schema, or ``None``.
+            overwrite: Whether the finished rows are discarded anyway.
+
+        Raises:
+            ValueError: If the schema changed and progress files exist.
+        """
+        record = SelectionRecord.read(output_dir, task_prefix)
+        if record is None:
+            return
+
+        component = _schema_component(output_schema)
+        stored = record.components.get("output_schema")
+        if stored == component:
+            return
+
+        if stored is not None:
+            progress_dir = (
+                output_dir / f"{task_prefix}{PROGRESS_DS_LOCAL_SUBDIR}"
+            )
+            if not overwrite and any(progress_dir.glob("*.jsonl")):
+                raise _reuse_error(
+                    progress_dir, [_COMPONENT_CHANGES["output_schema"]]
+                )
+            self._logger.info(
+                "The output schema changed since the last run; it is"
+                " recorded and every sample is annotated with the new one."
+            )
+
+        dataclasses.replace(
+            record,
+            components={**record.components, "output_schema": component},
+        ).write(output_dir, task_prefix)
+
+    def _check_reuse(
+        self,
+        *,
+        previous: SelectionRecord,
+        record: SelectionRecord,
+        changed: list[str],
+        source: Dataset,
+        shuffle_seed: int | None,
+        reuse_idx_column: bool,
+        progress_dir: Path,
+    ) -> None:
+        """Reject a request that the finished rows do not belong to.
 
         With the same seed and source, the first N rows of the shuffled source
         are a prefix of the first M rows for every M > N, so a higher cap only
         adds rows. Without a shuffle, rows that are appended to the source
         leave the ids of the old rows unchanged as well. Every other change
-        gives the finished ids another meaning.
+        gives the finished rows another meaning.
 
         Args:
-            previous: The selection that the progress files were written for.
-            record: The selection that is requested now.
-            source: The source dataset of the requested selection.
+            previous: The record that the progress files were written for.
+            record: The record of the request.
+            changed: Names of the settings that differ from ``previous``.
+            source: The source dataset of the request.
+            shuffle_seed: The requested shuffle seed.
+            reuse_idx_column: Whether the ids come from an existing column,
+                which makes a changed source harmless.
+            progress_dir: Directory that holds the progress files.
 
         Raises:
-            ValueError: If the seed changed, if the source changed in another
-                way than appended rows without a shuffle, or if fewer rows are
-                selected than before.
+            ValueError: If a setting changed that gives the finished rows
+                another meaning, or if fewer rows are selected than before.
         """
-        problem = None
-        if record.shuffle_seed != previous.shuffle_seed:
-            problem = (
-                f"'shuffle_seed' changed from {previous.shuffle_seed} to"
-                f" {record.shuffle_seed}"
-            )
-        elif record.reuse_idx_column:
-            return
-        elif record.source_signature != previous.source_signature:
-            rows_were_appended = (
-                record.shuffle_seed is None
-                and record.source_rows >= previous.source_rows
-                and dataset_signature(
-                    source.select(range(previous.source_rows))
+        causes = []
+        for name in changed:
+            if name == "dataset" and (
+                reuse_idx_column
+                or (
+                    shuffle_seed is None
+                    and record.source_rows >= previous.source_rows
+                    and dataset_signature(
+                        source.select(range(previous.source_rows))
+                    )
+                    == previous.components.get("dataset")
                 )
-                == previous.source_signature
-            )
-            if not rows_were_appended:
-                problem = "the source dataset changed"
+            ):
+                continue
+            causes.append(_COMPONENT_CHANGES[name])
 
-        if problem is None and record.selected_rows < previous.selected_rows:
-            problem = (
+        if (
+            not reuse_idx_column
+            and record.selected_rows < previous.selected_rows
+        ):
+            causes.append(
                 f"the selection shrank from {previous.selected_rows:,} to"
                 f" {record.selected_rows:,} rows"
             )
 
-        if problem is not None:
-            raise ValueError(
-                f"The finished rows cannot be reused: {problem}. A run can"
-                " grow through a higher 'max_num_samples' with the same"
-                " 'shuffle_seed' and an unchanged source dataset, or through"
-                " rows that are appended to a source that is not shuffled."
-                " Restore the old settings, use a new output directory, or"
-                " overwrite the run."
-            )
+        if causes:
+            raise _reuse_error(progress_dir, causes)
 
         if record.selected_rows > previous.selected_rows:
             self._logger.info(
@@ -1494,7 +1844,9 @@ class Annotator:
             Final concatenated annotation dataset.
 
         Raises:
-            ValueError: If no prepared data source can be resolved.
+            ValueError: If no prepared data source can be resolved, or if
+                ``output_schema`` differs from the one that the finished rows
+                were annotated with and ``overwrite`` is off.
             TooManyConsecutiveFailedBatchesError: If
                 ``max_consecutive_failed_batches`` consecutive batches fail
                 entirely.
@@ -1555,6 +1907,12 @@ class Annotator:
             keep_columns.add(idx_column)
 
         root_pdout = Path(output_dir)
+        self._record_output_schema(
+            output_dir=root_pdout,
+            task_prefix=task_prefix,
+            output_schema=output_schema,
+            overwrite=overwrite,
+        )
 
         prepared_path = (
             Path(prepared_data_path) if prepared_data_path else None
@@ -1906,8 +2264,9 @@ class Annotator:
 
         Raises:
             TypeError: If no prompt template is provided.
-            ValueError: If finished rows exist that the requested selection
-                does not contain, and ``overwrite`` is off.
+            ValueError: If finished rows exist that were annotated with
+                other settings than the ones given now, and ``overwrite`` is
+                off.
             TooManyConsecutiveFailedBatchesError: If
                 ``max_consecutive_failed_batches`` consecutive batches fail
                 entirely.
