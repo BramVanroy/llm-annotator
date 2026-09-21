@@ -124,7 +124,7 @@ MIN_AUTO_SAMPLES_PER_OUTPUT_FILE = 1000
 
 
 def _resolve_samples_per_output_file(
-    max_samples_per_output_file: int | Literal["auto"] | None,
+    max_samples_per_output_file: int | Literal["auto"],
     *,
     num_rows: int,
 ) -> int:
@@ -135,7 +135,7 @@ def _resolve_samples_per_output_file(
 
     Args:
         max_samples_per_output_file: ``"auto"``, a positive sample count, or
-            0 (``None`` is read as 0) for a single file of unlimited size.
+            0 for a single file of unlimited size.
         num_rows: Number of rows the run covers, used by ``"auto"``.
 
     Returns:
@@ -158,9 +158,6 @@ def _resolve_samples_per_output_file(
             MIN_AUTO_SAMPLES_PER_OUTPUT_FILE,
             ceil(num_rows * AUTO_OUTPUT_FILE_FRACTION),
         )
-
-    if max_samples_per_output_file is None:
-        return 0
 
     if (
         isinstance(max_samples_per_output_file, bool)
@@ -275,6 +272,49 @@ class _ProgressUploader:
     def close(self) -> None:
         """Wait for an upload that is in flight and stop the thread."""
         self._executor.shutdown(wait=True)
+
+
+def _count_outcomes(
+    dataset: Dataset, task_prefix: str
+) -> tuple[CounterType[str], CounterType[str], CounterType[str]]:
+    """Count the finish reasons, field validity and error types of a run.
+
+    The dataset is read in batches, so a large result does not have to fit
+    in memory at once.
+
+    Args:
+        dataset: The final annotated dataset.
+        task_prefix: Prefix of the internal column names.
+
+    Returns:
+        The counts of ``finish_reason``, of ``valid_fields`` and of
+        ``error_type``. A column the dataset does not hold counts nothing.
+    """
+    finish_reason_counts: CounterType[str] = Counter()
+    valid_fields_counts: CounterType[str] = Counter()
+    error_type_counts: CounterType[str] = Counter()
+    valid_res = {None: "none", True: "valid", False: "invalid"}
+
+    for batch in dataset.iter(batch_size=10_000):
+        if f"{task_prefix}finish_reason" in batch:
+            finish_reason_counts.update(
+                "none" if item is None else item
+                for item in batch[f"{task_prefix}finish_reason"]
+            )
+
+        if f"{task_prefix}valid_fields" in batch:
+            valid_fields_counts.update(
+                valid_res.get(item, "unknown")
+                for item in batch[f"{task_prefix}valid_fields"]
+            )
+
+        if f"{task_prefix}error_type" in batch:
+            error_type_counts.update(
+                "none" if item is None else item
+                for item in batch[f"{task_prefix}error_type"]
+            )
+
+    return finish_reason_counts, valid_fields_counts, error_type_counts
 
 
 def _prompt_fields(prompt_template: str) -> tuple[str, ...]:
@@ -557,11 +597,6 @@ class SelectionRecord:
     selected_rows: int
     components: dict[str, str] = field(default_factory=dict)
 
-    @property
-    def fingerprint(self) -> str:
-        """A single hash over every recorded component."""
-        return get_hash(json.dumps(self.components, sort_keys=True))
-
     def changed_components(self, components: dict[str, str]) -> list[str]:
         """Name the requested settings that differ from the recorded ones.
 
@@ -642,9 +677,8 @@ class SelectionRecord:
             output_dir: The annotator's output directory.
             task_prefix: The task prefix of the run.
         """
-        payload = dataclasses.asdict(self) | {"fingerprint": self.fingerprint}
         self.path(output_dir, task_prefix).write_text(
-            json.dumps(payload, indent=2), encoding="utf-8"
+            json.dumps(dataclasses.asdict(self), indent=2), encoding="utf-8"
         )
 
 
@@ -712,10 +746,10 @@ class Annotator:
     Args:
         client: An initialised [`Client`][llm_annotator.clients.base.Client]
             instance that performs the actual generation.
-        batch_size: Number of samples per inference batch. It depends on the
-            client and its settings which batching is actually used. Batch
-            size here is mostly intended for progress reporting. The client
-            may split the given batch into smaller sub-batches if needed.
+        batch_size: Number of samples handed to the client in one
+            ``batch_generate`` call. It decides how much work is in flight at
+            once, so it is what a provider's rate limit or a vLLM server's
+            ``max_num_seqs`` has to cover.
         num_proc: Number of processes for dataset preprocessing.
         verbose: Whether to print progress information.
 
@@ -1235,32 +1269,30 @@ class Annotator:
                 res[f"{task_prefix}valid"] = is_valid
             results.append(res)
 
-        if f"{task_prefix}valid_fields" in results[0]:
-            n_invalid = sum(
-                1 for res in results if not res[f"{task_prefix}valid_fields"]
-            )
-            if n_invalid == len(results) and self.verbose:
-                self._logger.warning(
-                    "Warning: All samples in the batch failed to produce valid JSON fields."
-                    " This might be exceptional (esp. for smaller batches)"
-                    " but if it happens often it suggests a deeper issue, such"
-                    " as too few 'max_completion_tokens' in options."
-                )
-
-        if f"{task_prefix}valid" in results[0]:
-            n_invalid = sum(
-                1 for res in results if not res[f"{task_prefix}valid"]
-            )
-            if n_invalid == len(results) and self.verbose:
-                self._logger.warning(
-                    "Warning: All samples in the batch failed to produce valid outputs after"
-                    " running the custom validation function."
-                )
+        checks = (
+            (
+                f"{task_prefix}valid_fields",
+                "All samples in the batch failed to produce valid JSON"
+                " fields. This might be exceptional (esp. for smaller"
+                " batches) but if it happens often it suggests a deeper"
+                " issue, such as too few 'max_completion_tokens' in options.",
+            ),
+            (
+                f"{task_prefix}valid",
+                "All samples in the batch failed to produce valid outputs"
+                " after running the custom validation function.",
+            ),
+        )
+        for column, message in checks:
+            if column not in results[0]:
+                continue
+            if self.verbose and all(not res[column] for res in results):
+                self._logger.warning(message)
 
         return results
 
     def _invalid_indices(
-        self, results: list[dict[str, Any]], task_prefix: str
+        self, *, results: list[dict[str, Any]], task_prefix: str
     ) -> list[int]:
         """Return the positions of results that failed schema or custom validation.
 
@@ -1339,7 +1371,9 @@ class Annotator:
         if num_retries_invalid <= 0:
             return results
 
-        invalid_indices = self._invalid_indices(results, task_prefix)
+        invalid_indices = self._invalid_indices(
+            results=results, task_prefix=task_prefix
+        )
         n_retries = 0
         while invalid_indices and n_retries < num_retries_invalid:
             n_retries += 1
@@ -1364,7 +1398,9 @@ class Annotator:
             for local_idx, global_idx in enumerate(invalid_indices):
                 results[global_idx] = retry_results[local_idx]
 
-            invalid_indices = self._invalid_indices(results, task_prefix)
+            invalid_indices = self._invalid_indices(
+                results=results, task_prefix=task_prefix
+            )
 
             if (
                 self.verbose
@@ -2251,7 +2287,6 @@ class Annotator:
                 ``max_consecutive_failed_batches`` consecutive batches fail
                 entirely.
         """
-        upload_every_n_samples = upload_every_n_samples or 0
         # Rejected here so a bad value fails before any data is loaded. The
         # concrete size needs the prepared dataset's row count, so it is
         # resolved again once that dataset is in hand.
@@ -2265,11 +2300,16 @@ class Annotator:
                 " integer"
             )
 
-        if upload_every_n_samples < 0 or not isinstance(
-            upload_every_n_samples, int
+        if upload_every_n_samples is None:
+            upload_every_n_samples = 0
+        if (
+            isinstance(upload_every_n_samples, bool)
+            or not isinstance(upload_every_n_samples, int)
+            or upload_every_n_samples < 0
         ):
             raise ValueError(
-                "upload_every_n_samples must be a positive integer or 0"
+                "'upload_every_n_samples' must be a positive integer or 0,"
+                f" but got {upload_every_n_samples!r}"
             )
         if upload_every_n_samples > 0 and not hub_id:
             upload_every_n_samples = 0
@@ -2287,9 +2327,7 @@ class Annotator:
             keep_columns = set()
         elif isinstance(keep_columns, str):
             keep_columns = {keep_columns}
-        elif keep_columns is True:
-            keep_columns = True
-        else:
+        elif keep_columns is not True:
             try:
                 keep_columns = set(keep_columns)
             except TypeError as exc:
@@ -2400,7 +2438,7 @@ class Annotator:
             extract_prompt_prefix(prompt_template) if prompt_template else None
         )
 
-        pfout = self.get_pfout_name(
+        pfout = self._get_pfout_name(
             process_pdout=process_pdout,
             max_samples_per_output_file=samples_per_output_file,
             processed_n_samples=processed_n_samples,
@@ -2464,7 +2502,7 @@ class Annotator:
                 if time_to_upload or file_is_full:
                     fhout.close()
                     remove_empty_jsonl_files(process_pdout)
-                    pfout = self.get_pfout_name(
+                    pfout = self._get_pfout_name(
                         process_pdout=process_pdout,
                         max_samples_per_output_file=samples_per_output_file,
                         processed_n_samples=processed_n_samples,
@@ -2921,7 +2959,6 @@ class Annotator:
         if not keep_idx_column:
             ds = ds.remove_columns([idx_column])
 
-        # Save final dataset to root directory
         ds.save_to_disk(process_pdout.parent)
 
         if hub_id:
@@ -2933,7 +2970,6 @@ class Annotator:
 
         ds.cleanup_cache_files()
 
-        # Clean up the local prepared-data cache
         cached_input_ds = (
             process_pdout.parent / f"{task_prefix}{PREPARED_DS_LOCAL_SUBDIR}"
         )
@@ -2941,35 +2977,23 @@ class Annotator:
             shutil.rmtree(cached_input_ds, ignore_errors=True)
 
         if hub_id:
-            # Clean up the prepared-data branch on the Hub
-            try:
-                delete_branch(
-                    hub_id,
-                    branch=f"{task_prefix}{PREPARED_DS_BRANCH_SUFF}",
-                    repo_type="dataset",
-                )
-            except Exception as exc:
-                self._logger.warning(
-                    "Failed to delete prepared-data branch"
-                    f" '{task_prefix}{PREPARED_DS_BRANCH_SUFF}' on"
-                    f" '{hub_id}': {exc}"
-                )
-
-            # Clean up the progress upload branch used for JSONL progress backup
-            # These branches can take up a lot of space and are easily forgotten,
-            # so best to clean up
-            try:
-                delete_branch(
-                    hub_id,
-                    branch=f"{task_prefix}{PROGRESS_BACKUP_BRANCH_SUFF}",
-                    repo_type="dataset",
-                )
-            except Exception as exc:
-                self._logger.warning(
-                    "Failed to delete progress branch"
-                    f" '{task_prefix}{PROGRESS_BACKUP_BRANCH_SUFF}' on"
-                    f" '{hub_id}': {exc}"
-                )
+            # Both branches are transient, and they grow large enough that
+            # leaving them behind is a real cost to the repository.
+            for suffix, label in (
+                (PREPARED_DS_BRANCH_SUFF, "prepared-data"),
+                (PROGRESS_BACKUP_BRANCH_SUFF, "progress"),
+            ):
+                try:
+                    delete_branch(
+                        hub_id,
+                        branch=f"{task_prefix}{suffix}",
+                        repo_type="dataset",
+                    )
+                except Exception as exc:
+                    self._logger.warning(
+                        f"Failed to delete {label} branch"
+                        f" '{task_prefix}{suffix}' on '{hub_id}': {exc}"
+                    )
 
         self._add_metadata(
             root_pdout=process_pdout.parent,
@@ -3023,40 +3047,16 @@ class Annotator:
         mtd_dir = root_pdout / METADATA_LOCAL_SUBDIR
         mtd_dir.mkdir(exist_ok=True)
 
-        # Add version info
         mtd_dir.joinpath(VERSION_FILE).write_text(
             json.dumps(get_lib_versions(), indent=4, default=str),
             encoding="utf-8",
         )
 
-        # Get counts for finish_reason and valid_fields
-        finish_reason_counts: CounterType[str] = Counter()
-        valid_fields_counts: CounterType[str] = Counter()
-        valid_res = {None: "none", True: "valid", False: "invalid"}
-        error_type_counts: CounterType[str] = Counter()
-
-        # Iterate to avoid OOM
-        for batch in dataset.iter(batch_size=10_000):
-            if f"{task_prefix}finish_reason" in batch:
-                reasons = [
-                    "none" if item is None else item
-                    for item in batch[f"{task_prefix}finish_reason"]
-                ]
-                finish_reason_counts.update(reasons)
-
-            if f"{task_prefix}valid_fields" in batch:
-                valids = [
-                    valid_res.get(item, "unknown")
-                    for item in batch[f"{task_prefix}valid_fields"]
-                ]
-                valid_fields_counts.update(valids)
-
-            if f"{task_prefix}error_type" in batch:
-                error_types = [
-                    "none" if item is None else item
-                    for item in batch[f"{task_prefix}error_type"]
-                ]
-                error_type_counts.update(error_types)
+        (
+            finish_reason_counts,
+            valid_fields_counts,
+            error_type_counts,
+        ) = _count_outcomes(dataset, task_prefix)
 
         run_summary: dict[str, float] | None = None
         if num_rows_annotated and elapsed_seconds and elapsed_seconds > 0:
@@ -3118,7 +3118,7 @@ class Annotator:
                 path_in_repo=METADATA_LOCAL_SUBDIR,
             )
 
-    def get_pfout_name(
+    def _get_pfout_name(
         self,
         *,
         process_pdout: Path,
@@ -3149,8 +3149,8 @@ class Annotator:
     def push_progress_to_hub(
         self,
         dir_path: Path | str,
-        hub_id: str | None = None,
         *,
+        hub_id: str,
         task_prefix: str = "",
         active_path: Path | None = None,
         active_bytes: int = 0,
@@ -3172,21 +3172,13 @@ class Annotator:
 
         Args:
             dir_path: Directory that holds the ``*.jsonl`` progress files.
-            hub_id: Optional Hugging Face dataset ID to upload into.
+            hub_id: Hugging Face dataset ID to upload into.
             task_prefix: String prefix to use for branch naming.
             active_path: The progress file that the writer has open, when
                 the writer is running.
             active_bytes: How many bytes of ``active_path`` were written
                 when the upload was requested.
-
-        Raises:
-            ValueError: If no ``hub_id`` is given.
         """
-        if not hub_id:
-            raise ValueError(
-                "'hub_id' must be set to push data to the HuggingFace Hub"
-            )
-
         pdout = Path(dir_path)
         branch = f"{task_prefix}{PROGRESS_BACKUP_BRANCH_SUFF}"
         create_repo(hub_id, repo_type="dataset", exist_ok=True, private=True)
@@ -3400,7 +3392,8 @@ class VLLMQueueAnnotator(Annotator):
                     f" '{type(client).__name__}'."
                 )
 
-        # not used here but to satisfy the base class and type-checer
+        # Inherited helpers read `client`, so the pool names its first
+        # member as the one they use.
         self.client = self.clients[0]
         self.max_concurrent_batches_per_client = (
             self._resolve_max_concurrent_batches_per_client(
@@ -3645,11 +3638,7 @@ class VLLMQueueAnnotator(Annotator):
                 self._client_pool.put(client)
 
     def destroy(self) -> None:
-        """Clean up the resources of every client in the pool. Since clients
-        can only be ``VLLMOnlineClient``s, the impact is likely minimal:
-        that class has no meaningful ``destroy`` of its own. It inherits
-        ``OpenAIClient``'s, which only does batch-related cleanup, and vLLM
-        does not support the OpenAI Batch API.
+        """Clean up the resources of every client in the pool.
 
         Every client is destroyed even if some of them raise; the first error
         is re-raised afterwards.
@@ -3927,8 +3916,6 @@ class VLLMQueueAnnotator(Annotator):
         try:
             _fill_queue()
 
-            # start retrieving first results and replacing the completed
-            # jobs with new ones until the work is done
             while pending:
                 done, pending = wait(pending, return_when=FIRST_COMPLETED)
                 for future in done:

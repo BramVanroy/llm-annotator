@@ -1072,10 +1072,10 @@ def test_post_annotate_and_pfout_name(
     )
     assert done.column_names == ["response"]
 
-    single = dummy_annotator.get_pfout_name(
+    single = dummy_annotator._get_pfout_name(
         process_pdout=p, max_samples_per_output_file=0, processed_n_samples=0
     )
-    chunked = dummy_annotator.get_pfout_name(
+    chunked = dummy_annotator._get_pfout_name(
         process_pdout=p, max_samples_per_output_file=10, processed_n_samples=25
     )
     assert single.name == "out.jsonl"
@@ -1105,9 +1105,6 @@ def test_push_dir_to_hub_calls_hf_helpers(
         "llm_annotator.annotator.upload_file",
         lambda *args, **kwargs: called.append("record"),
     )
-
-    with pytest.raises(ValueError, match="must be set"):
-        annotator.push_progress_to_hub(tmp_path, hub_id=None)
 
     annotator.push_progress_to_hub(tmp_path, hub_id="me/test")
     assert called == ["repo", "branch", "upload"]
@@ -2428,14 +2425,13 @@ def test_run_annotation_chunks_output_files_without_hub(
         ("auto", 2_000, 1000),
         (250, 500_000, 250),
         (0, 500_000, 0),
-        (None, 500_000, 0),
     ],
 )
 def test_resolve_samples_per_output_file(
     value: Any, num_rows: int, expected: int
 ) -> None:
     # Verifies "auto" scaling above the floor, the floor itself, and that a
-    # fixed int, 0 and None pass through unchanged (None as 0).
+    # fixed int and 0 pass through unchanged.
     assert (
         _resolve_samples_per_output_file(value, num_rows=num_rows) == expected
     )
@@ -2545,7 +2541,12 @@ def test_selection_record_write_read_round_trip(tmp_path: Path) -> None:
     stored = json.loads(
         (tmp_path / "p_selection.json").read_text(encoding="utf-8")
     )
-    assert stored["fingerprint"] == record.fingerprint
+    assert stored == {
+        "max_num_samples": 10,
+        "source_rows": 40,
+        "selected_rows": 10,
+        "components": {"shuffle_seed": "42", "dataset": "abc123"},
+    }
 
 
 @pytest.mark.parametrize(
