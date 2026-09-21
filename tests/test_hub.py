@@ -484,3 +484,48 @@ def test_restore_round_trip_on_the_hub(
     restored = SelectionRecord.read(tmp_path / "restored")
     assert restored is not None
     assert restored.components == {"prompt_template": "abc"}
+
+
+def test_restored_record_keeps_the_checks_of_the_first_machine(
+    tmp_path: Path,
+    fake_download: Callable[[Path], list[dict[str, Any]]],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Verifies the point of shipping the record with the backup: a second
+    # machine reuses the restored rows without a warning and refuses an
+    # edited prompt, exactly as the first one would.
+    source = Dataset.from_dict({"text": ["a", "b"]})
+    annotator = Annotator(client=EchoClient())
+
+    machine_a = tmp_path / "a"
+    annotator.prepare_data(
+        output_dir=machine_a, prompt_template="Q: {text}", dataset=source
+    )
+    _write_jsonl(machine_a / "progress_backup" / "progress_0.jsonl", [0])
+
+    branch_dir = tmp_path / "branch"
+    branch_dir.mkdir()
+    shutil.copy2(
+        machine_a / "progress_backup" / "progress_0.jsonl", branch_dir
+    )
+    shutil.copy2(machine_a / "selection.json", branch_dir)
+    fake_download(branch_dir)
+
+    machine_b = tmp_path / "b"
+    restore_progress_from_hub(hub_id="me/ds", output_dir=machine_b)
+
+    with caplog.at_level(logging.WARNING, logger="llm_annotator.annotator"):
+        annotator.prepare_data(
+            output_dir=machine_b, prompt_template="Q: {text}", dataset=source
+        )
+    assert not [
+        rec
+        for rec in caplog.records
+        if rec.levelno >= logging.WARNING
+        and rec.name == "llm_annotator.annotator"
+    ]
+
+    with pytest.raises(ValueError, match="cannot be reused"):
+        annotator.prepare_data(
+            output_dir=machine_b, prompt_template="A: {text}", dataset=source
+        )
