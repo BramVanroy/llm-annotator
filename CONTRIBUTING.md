@@ -1,5 +1,8 @@
 # Contributing to llm-annotator
 
+The short version of the rules on this page, written for a coding agent and
+useful for a first contribution too, is in [AGENTS.md](AGENTS.md).
+
 ## Development setup
 
 Everything runs through [uv](https://docs.astral.sh/uv/). The project needs
