@@ -5,9 +5,7 @@ from .base import ProviderRuntimeOptions as ProviderRuntimeOptions
 from .base import Response as Response
 from .claude_client import ClaudeClient as ClaudeClient
 from .claude_client import ClaudeRuntimeOptions as ClaudeRuntimeOptions
-from .exceptions import ConfigurationError as ConfigurationError
 from .exceptions import LLMClientError as LLMClientError
-from .exceptions import ParsingError as ParsingError
 from .exceptions import ProviderError as ProviderError
 from .openai_client import OpenAIClient as OpenAIClient
 from .openai_client import OpenAIRuntimeOptions as OpenAIRuntimeOptions
@@ -28,12 +26,10 @@ __all__ = [
     "Client",
     "ClaudeClient",
     "ClaudeRuntimeOptions",
-    "ConfigurationError",
     "LLMClientError",
     "OnError",
     "OpenAIClient",
     "OpenAIRuntimeOptions",
-    "ParsingError",
     "Provider",
     "ProviderError",
     "ProviderRuntimeOptions",

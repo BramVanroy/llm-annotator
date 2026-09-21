@@ -403,7 +403,7 @@ def _preparation_components(
     ``max_num_samples`` is left out: a run may grow under a higher cap.
 
     Args:
-        prompt_template: The prompt template, after ``prompt_field_swapper``.
+        prompt_template: The prompt template.
         system_message: The system message, or ``None``.
         sort_by_length: The requested prompt ordering.
         idx_column: Name of the sample id column.
@@ -1491,7 +1491,6 @@ class Annotator:
         max_num_samples: int | None = None,
         shuffle_seed: int | None = None,
         preprocess_fn: Callable | None = None,
-        prompt_field_swapper: dict[str, str] | None = None,
         idx_column: str = "idx",
         task_prefix: str = "",
         sort_by_length: bool
@@ -1526,7 +1525,6 @@ class Annotator:
             max_num_samples: Maximum number of samples to prepare.
             shuffle_seed: Seed for dataset shuffling.
             preprocess_fn: Optional function to preprocess the dataset after loading and before applying the prompt template.
-            prompt_field_swapper: Optional mapping to replace template fields.
             idx_column: Column name used as unique identifier. Must not exist in the input dataset.
             task_prefix: Prefix for the internal column names and for the
                 artifacts of this task inside ``output_dir``, so that several
@@ -1566,12 +1564,6 @@ class Annotator:
         pdout.mkdir(exist_ok=True, parents=True)
 
         prepared_data_path = pdout / f"{task_prefix}{PREPARED_DS_LOCAL_SUBDIR}"
-
-        prompt_field_swapper = prompt_field_swapper or {}
-        for fld, value in prompt_field_swapper.items():
-            prompt_template = prompt_template.replace(
-                f"{{{fld}}}", f"{{{value}}}"
-            )
 
         components = _preparation_components(
             prompt_template=prompt_template,
@@ -2484,9 +2476,8 @@ class Annotator:
     def annotate_dataset(
         self,
         output_dir: str | Path,
-        prompt_template: str | None = None,
+        prompt_template: str,
         *,
-        full_prompt_template: str | None = None,
         dataset_name: str | None = None,
         dataset: Dataset | None = None,
         dataset_config: str | None = None,
@@ -2496,7 +2487,6 @@ class Annotator:
         max_num_samples: int | None = None,
         shuffle_seed: int | None = None,
         preprocess_fn: Callable | None = None,
-        prompt_field_swapper: dict[str, str] | None = None,
         idx_column: str = "idx",
         task_prefix: str = "",
         sort_by_length: bool
@@ -2527,11 +2517,14 @@ class Annotator:
         for callers that prefer a single entry point.
 
         Args:
-            output_dir: Directory where annotation output is written.
-            prompt_template: Prompt template with dataset fields. Defaults to
-                ``full_prompt_template`` when provided.
-            full_prompt_template: Backwards-compatible alias for
-                ``prompt_template``.
+            output_dir: Directory where annotation output is written. Every
+                argument below is passed straight through, so the full
+                description of each is in
+                [`prepare_data`][llm_annotator.annotator.Annotator.prepare_data]
+                (data selection and prompting) or in
+                [`run_annotation`][llm_annotator.annotator.Annotator.run_annotation]
+                (inference and output).
+            prompt_template: Prompt template with dataset fields.
             dataset_name: Name or path of the dataset to load.
             dataset: Pre-loaded dataset to annotate instead of loading one.
             dataset_config: Dataset configuration name.
@@ -2541,56 +2534,36 @@ class Annotator:
             max_num_samples: Maximum number of samples to annotate.
             shuffle_seed: Seed for dataset shuffling.
             preprocess_fn: Optional preprocessing callback.
-            prompt_field_swapper: Optional mapping that renames prompt fields.
             idx_column: Column name used as the stable sample identifier.
-            task_prefix: Prefix for the internal column names and for the
-                artifacts of this task inside ``output_dir``, so that several
-                tasks can share one directory and one ``hub_id``. The final
-                dataset in the root of ``output_dir`` and on Hub ``main`` is
-                shared by design: the task that finishes last replaces it, and
-                with ``keep_columns=True`` it holds the columns of the tasks
-                that ran before it.
+            task_prefix: Prefix for this task's columns and artifacts.
             sort_by_length: Whether to sort prompts by length.
             system_message: Optional system message for the chat prompt.
             hub_id: Optional Hub dataset ID for prepared-data cache and
                 JSONL progress backup.
             force_data_preparation: Rebuild prepared data even if cached.
             overwrite: Whether to discard the finished rows of this task and
-                annotate every sample again, see
-                [`run_annotation`][llm_annotator.annotator.Annotator.run_annotation].
-                The prepared data, and the artifacts of every other
-                ``task_prefix`` in the same directory, are kept.
+                annotate every sample again.
             keep_columns: Columns to keep in the final dataset.
             options: Runtime options passed to the client.
-            gen_kwargs: Extra request parameters merged over ``options``,
-                for anything the options dataclass does not name.
+            gen_kwargs: Extra request parameters merged over ``options``.
             output_schema: Optional JSON schema for structured output.
             upload_every_n_samples: Upload checkpoint cadence.
-            max_samples_per_output_file: Samples per JSONL progress
-                file. ``"auto"`` is one percent of the rows with a floor
-                of 1000, so at most 100 files are written and a resume
-                stays cheap. A fixed number trades the samples lost at a
-                crash against the cost of rescanning the files on every
-                resume; 0 writes a single file of unlimited size.
+            max_samples_per_output_file: Samples per JSONL progress file.
             validate_fn: Optional validation callback.
             postprocess_fn: Optional postprocessing callback.
             num_retries_invalid: Number of retries for invalid outputs.
             keep_idx_column: Whether to keep the index column in the result.
             max_consecutive_failed_batches: Abort the run once this many
                 batches in a row come back with every sample errored.
-                Set to 0 to disable.
             reuse_idx_column: Whether an ``idx_column`` that already exists in
-                the dataset is kept as the sample id, see
-                [`prepare_data`][llm_annotator.annotator.Annotator.prepare_data].
+                the dataset is kept as the sample id.
             retry_errors: Annotate rows again that finished with an error in
-                an earlier run, see
-                [`run_annotation`][llm_annotator.annotator.Annotator.run_annotation].
+                an earlier run.
 
         Returns:
             The concatenated annotation dataset.
 
         Raises:
-            TypeError: If no prompt template is provided.
             ValueError: If finished rows exist that were annotated with
                 other settings than the ones given now, and ``overwrite`` is
                 off.
@@ -2598,21 +2571,6 @@ class Annotator:
                 ``max_consecutive_failed_batches`` consecutive batches fail
                 entirely.
         """
-        if prompt_template is None:
-            prompt_template = full_prompt_template
-        elif (
-            full_prompt_template is not None
-            and full_prompt_template != prompt_template
-        ):
-            raise ValueError(
-                "Provide only one of 'prompt_template' or 'full_prompt_template'."
-            )
-
-        if prompt_template is None:
-            raise TypeError(
-                "'prompt_template' or 'full_prompt_template' must be provided."
-            )
-
         prepared_dataset, _, _ = self.prepare_data(
             output_dir=output_dir,
             prompt_template=prompt_template,
@@ -2625,7 +2583,6 @@ class Annotator:
             max_num_samples=max_num_samples,
             shuffle_seed=shuffle_seed,
             preprocess_fn=preprocess_fn,
-            prompt_field_swapper=prompt_field_swapper,
             idx_column=idx_column,
             task_prefix=task_prefix,
             sort_by_length=sort_by_length,
@@ -2689,44 +2646,36 @@ class Annotator:
 
         Args:
             output_dir: Directory where annotation output is written.
+                ``prompts`` and ``prompt_prefix`` build the prompt dataset and
+                its template; every other argument below is passed straight
+                through, so the full description of each is in
+                [`prepare_data`][llm_annotator.annotator.Annotator.prepare_data]
+                (data selection and prompting) or in
+                [`run_annotation`][llm_annotator.annotator.Annotator.run_annotation]
+                (inference and output).
             prompts: A single prompt or a sequence of prompts.
             prompt_prefix: Optional shared prefix used for prefix caching.
             hub_id: Optional Hub dataset ID for prepared-data cache and
                 JSONL progress backup.
             force_data_preparation: Rebuild prepared data even if cached.
             overwrite: Whether to discard the finished rows of this task and
-                annotate every sample again, see
-                [`run_annotation`][llm_annotator.annotator.Annotator.run_annotation].
-                The prepared data, and the artifacts of every other
-                ``task_prefix`` in the same directory, are kept.
+                annotate every sample again.
             options: Runtime options passed to the client.
-            gen_kwargs: Extra request parameters merged over ``options``,
-                for anything the options dataclass does not name.
+            gen_kwargs: Extra request parameters merged over ``options``.
             max_num_samples: Number of times to repeat a single prompt.
             output_schema: Optional JSON schema for structured output.
             idx_column: Column name used as the stable sample identifier.
             upload_every_n_samples: Upload checkpoint cadence.
-            max_samples_per_output_file: Samples per JSONL progress
-                file. ``"auto"`` is one percent of the rows with a floor
-                of 1000, so at most 100 files are written and a resume
-                stays cheap. A fixed number trades the samples lost at a
-                crash against the cost of rescanning the files on every
-                resume; 0 writes a single file of unlimited size.
-            task_prefix: Prefix for the internal column names and for the
-                artifacts of this task inside ``output_dir``, so that several
-                tasks can share one directory and one ``hub_id``. The final
-                dataset in the root of ``output_dir`` and on Hub ``main`` is
-                shared by design: the task that finishes last replaces it.
+            max_samples_per_output_file: Samples per JSONL progress file.
+            task_prefix: Prefix for this task's columns and artifacts.
             validate_fn: Optional validation callback.
             postprocess_fn: Optional postprocessing callback.
             num_retries_invalid: Number of retries for invalid outputs.
             keep_idx_column: Whether to keep the index column in the result.
             max_consecutive_failed_batches: Abort the run once this many
                 batches in a row come back with every sample errored.
-                Set to 0 to disable.
             retry_errors: Annotate rows again that finished with an error in
-                an earlier run, see
-                [`run_annotation`][llm_annotator.annotator.Annotator.run_annotation].
+                an earlier run.
 
         Returns:
             The concatenated annotation dataset.
@@ -3677,13 +3626,25 @@ class VLLMQueueAnnotator(Annotator):
     def _annotate_batch_on_free_client(
         self,
         batch: dict[str, list[Any]],
-        **kwargs: Any,
+        *,
+        options: ProviderRuntimeOptions | None,
+        gen_kwargs: dict[str, Any] | None,
+        task_prefix: str,
+        validate_fn: Callable | None,
+        postprocess_fn: Callable | None,
+        num_retries_invalid: int,
     ) -> tuple[dict[str, list[Any]], list[dict[str, Any]]]:
         """Annotate one batch on the first available client in the pool.
 
         Args:
             batch: Dictionary containing batch data with messages samples.
-            **kwargs: Forwarded to `Annotator._annotate_batch`.
+            options: Runtime options passed to the client.
+            gen_kwargs: Extra request parameters merged over ``options``,
+                for anything the options dataclass does not name.
+            task_prefix: String prefix to use for internal column names.
+            validate_fn: Optional custom validation function.
+            postprocess_fn: Optional postprocessing function.
+            num_retries_invalid: Number of retries for invalid outputs.
 
         Returns:
             The batch together with one result per sample, in order.
@@ -3698,14 +3659,21 @@ class VLLMQueueAnnotator(Annotator):
             is_dead = False
             try:
                 results = self._annotate_batch(
-                    batch=batch, client=client, **kwargs
+                    batch=batch,
+                    client=client,
+                    options=options,
+                    gen_kwargs=gen_kwargs,
+                    task_prefix=task_prefix,
+                    validate_fn=validate_fn,
+                    postprocess_fn=postprocess_fn,
+                    num_retries_invalid=num_retries_invalid,
                 )
                 # The errors of an entirely failed batch are only kept when
                 # the server is healthy. A server that stopped answering
                 # fails every batch regardless of the samples, so its batch
                 # is sent to another server.
                 is_dead = (
-                    self._all_errored(results, kwargs.get("task_prefix", ""))
+                    self._all_errored(results, task_prefix)
                     and not client.is_healthy()
                 )
             finally:
@@ -3831,14 +3799,6 @@ class VLLMQueueAnnotator(Annotator):
             order here, not dataset order.
         """
         batches = prepared_dataset.iter(self.batch_size)
-        batch_kwargs: dict[str, Any] = {
-            "options": options,
-            "gen_kwargs": gen_kwargs,
-            "task_prefix": task_prefix,
-            "validate_fn": validate_fn,
-            "postprocess_fn": postprocess_fn,
-            "num_retries_invalid": num_retries_invalid,
-        }
 
         pool = ThreadPoolExecutor(
             max_workers=cast(int, self.max_workers),
@@ -3867,7 +3827,12 @@ class VLLMQueueAnnotator(Annotator):
                 pool.submit(
                     self._annotate_batch_on_free_client,
                     batch,
-                    **batch_kwargs,
+                    options=options,
+                    gen_kwargs=gen_kwargs,
+                    task_prefix=task_prefix,
+                    validate_fn=validate_fn,
+                    postprocess_fn=postprocess_fn,
+                    num_retries_invalid=num_retries_invalid,
                 )
             )
             return True

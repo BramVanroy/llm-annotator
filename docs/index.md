@@ -105,6 +105,38 @@ with Annotator(client=client) as anno:
     )
 ```
 
+#### Migration
+
+`annotate_dataset` no longer takes `full_prompt_template`, an alias of
+`prompt_template`. Rename the argument:
+
+```python
+# before
+anno.annotate_dataset(output_dir=out, full_prompt_template="Q: {text}")
+# after
+anno.annotate_dataset(output_dir=out, prompt_template="Q: {text}")
+```
+
+`prompt_field_swapper` is gone from `prepare_data`, `annotate_dataset` and
+`generate_dataset`. It renamed a field inside the template, which is one
+`str.replace` at the call site:
+
+```python
+template = "Summarize this document: {content}"
+
+# before
+anno.prepare_data(
+    output_dir=out,
+    prompt_template=template,
+    prompt_field_swapper={"content": "body"},
+)
+# after
+anno.prepare_data(
+    output_dir=out,
+    prompt_template=template.replace("{content}", "{body}"),
+)
+```
+
 ### Two-step staged workflow
 
 For large datasets or SLURM-style pipelines, separate data preparation
@@ -358,6 +390,40 @@ cp slurm/cluster.env.example slurm/cluster.env   # once, per cluster
 ./slurm/submit_pipeline.sh examples/vllm-server-pool/pipeline.yaml
 ```
 
+## Public API
+
+`llm_annotator` exports what the workflow above uses: `Annotator`,
+`VLLMQueueAnnotator`, the four clients with their runtime options classes,
+`Response`, the exceptions (`LLMClientError`, `ProviderError`,
+`TooManyConsecutiveFailedBatchesError`),
+`run_pipeline`, `load_pipeline_config`, `PipelineConfig`,
+`restore_progress_from_hub`, and `configure_logging`, `set_log_level`,
+`get_logger`.
+
+### Migration
+
+Everything else is importable from the module that defines it rather than
+from the package root:
+
+| Name | Import from |
+| --- | --- |
+| `SelectionRecord` | `llm_annotator.annotator` |
+| `OnError`, `Provider`, `ProviderRuntimeOptions` | `llm_annotator.clients.base` |
+| `VLLMBaseRuntimeOptions` | `llm_annotator.clients.vllm_online_client` |
+| `ClientConfig`, `DatasetConfig`, `StepConfig`, `load_config_file` | `llm_annotator.config` |
+| `build_annotator`, `build_client`, `wait_for_servers` | `llm_annotator.pool` |
+| `extract_prompt_prefix`, `get_hash` | `llm_annotator.utils` |
+
+`ConfigurationError` and `ParsingError` are removed: no code raised them.
+`LLMClientError` is the base class to catch for every error of a client.
+
+```python
+# before
+from llm_annotator import build_client
+# after
+from llm_annotator.pool import build_client
+```
+
 ## Why use it
 
 - Run a whole annotation, or a chain of them, from one JSON/YAML config file
@@ -395,4 +461,6 @@ Local docs preview with mike:
 make serve-docs
 ```
 
-The API reference section is generated from source code docstrings.
+The "User API" and "Internals" sections are generated from source code
+docstrings. "User API" covers what the documented workflow uses; "Internals"
+covers the modules that the package builds on.

@@ -7,6 +7,9 @@ import pytest
 
 from llm_annotator.clients.base import Response
 from llm_annotator.clients.claude_client import (
+    CONNECT_TIMEOUT,
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_TIMEOUT,
     ClaudeClient,
     ClaudeRuntimeOptions,
     _extract_system_instruction,
@@ -337,3 +340,35 @@ def test_claude_handle_stop_reason_error_branches(stop_reason: str) -> None:
         client._handle_stop_reason(
             stop_reason=stop_reason, num_output_tokens=3
         )
+
+
+def test_claude_client_passes_the_sdk_defaults(
+    fake_anthropic_module: dict[str, Any],
+) -> None:
+    """The SDK client gets the Anthropic SDK's own timeout and retry count.
+
+    The timeout is an ``httpx.Timeout`` rather than a plain float, so the
+    connect limit stays short while the read limit is the full timeout.
+    """
+    client = ClaudeClient(model="claude-test")
+
+    assert client.timeout == DEFAULT_TIMEOUT
+    assert client.max_retries == DEFAULT_MAX_RETRIES
+    inits = cast(list[Any], fake_anthropic_module["anthropic_init_kwargs"])
+    assert len(inits) == 1
+    assert inits[0]["max_retries"] == DEFAULT_MAX_RETRIES
+    assert inits[0]["timeout"].read == DEFAULT_TIMEOUT
+    assert inits[0]["timeout"].connect == CONNECT_TIMEOUT
+
+
+def test_claude_client_takes_its_own_timeout_and_retries(
+    fake_anthropic_module: dict[str, Any],
+) -> None:
+    # Verifies the constructor arguments reach the SDK client.
+    ClaudeClient(model="claude-test", timeout=45.0, max_retries=7)
+
+    sdk_kwargs = cast(
+        list[Any], fake_anthropic_module["anthropic_init_kwargs"]
+    )[-1]
+    assert sdk_kwargs["timeout"].read == 45.0
+    assert sdk_kwargs["max_retries"] == 7

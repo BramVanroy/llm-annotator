@@ -433,53 +433,67 @@ def _run_step(
     output_schema = step.resolved_output_schema(root)
     options = client_config.build_options(output_schema)
 
-    kwargs: dict[str, Any] = {
-        "output_dir": step_dir / STEP_ANNOTATE_SUBDIR,
-        "task_prefix": task_prefix,
-        "idx_column": config.idx_column,
+    dataset_name: str | None = None
+    dataset_config: str | None = None
+    dataset_split: str | None = None
+    data_dir: str | None = None
+    data_files: str | list[str] | dict[str, str | list[str]] | None = None
+
+    if step.type == "generate":
+        prompt_template = _generate_template(step, root)
+    else:
+        resolved = step.resolved_prompt(root)
+        assert resolved is not None  # guaranteed by StepConfig
+        prompt_template = resolved
+        if dataset is None:
+            source = config.dataset
+            assert source is not None  # guaranteed by PipelineConfig
+            dataset_name = source.name
+            dataset_config = source.config
+            dataset_split = source.split
+            data_dir = source.resolved_data_dir(root)
+            data_files = source.resolved_data_files(root)
+
+    max_num_samples = None
+    shuffle_seed = None
+    if is_first and config.dataset is not None:
+        max_num_samples = config.dataset.max_num_samples
+        shuffle_seed = config.dataset.shuffle_seed
+
+    return annotator.annotate_dataset(
+        output_dir=step_dir / STEP_ANNOTATE_SUBDIR,
+        prompt_template=prompt_template,
+        dataset=dataset,
+        dataset_name=dataset_name,
+        dataset_config=dataset_config,
+        dataset_split=dataset_split,
+        data_dir=data_dir,
+        data_files=data_files,
+        max_num_samples=max_num_samples,
+        shuffle_seed=shuffle_seed,
+        task_prefix=task_prefix,
+        idx_column=config.idx_column,
         # Every input column must survive, otherwise later steps could not
         # reference what earlier steps produced.
-        "keep_columns": True,
-        "options": options,
-        "gen_kwargs": client_config.gen_kwargs or None,
-        "output_schema": output_schema,
-        "system_message": step.resolved_system_prompt(root),
-        "sort_by_length": step.sort_by_length,
-        "num_retries_invalid": step.num_retries_invalid,
-        "max_samples_per_output_file": step.max_samples_per_output_file,
-        "max_consecutive_failed_batches": step.max_consecutive_failed_batches,
-        "upload_every_n_samples": step.upload_every_n_samples,
-        "hub_id": step.hub_id,
-        "overwrite": config.overwrite,
-        "force_data_preparation": step.force_data_preparation,
+        keep_columns=True,
+        options=options,
+        gen_kwargs=client_config.gen_kwargs or None,
+        output_schema=output_schema,
+        system_message=step.resolved_system_prompt(root),
+        sort_by_length=step.sort_by_length,
+        num_retries_invalid=step.num_retries_invalid,
+        max_samples_per_output_file=step.max_samples_per_output_file,
+        max_consecutive_failed_batches=step.max_consecutive_failed_batches,
+        upload_every_n_samples=step.upload_every_n_samples,
+        hub_id=step.hub_id,
+        overwrite=config.overwrite,
+        force_data_preparation=step.force_data_preparation,
         # The ids of the first step identify a row in every later step. Ids
         # that are numbered again by position change when the input grows,
         # and the progress files of a later step would then name other rows.
-        "keep_idx_column": True,
-        "reuse_idx_column": not is_first,
-    }
-
-    if step.type == "generate":
-        kwargs["dataset"] = dataset
-        kwargs["prompt_template"] = _generate_template(step, root)
-    else:
-        kwargs["prompt_template"] = step.resolved_prompt(root)
-        if dataset is not None:
-            kwargs["dataset"] = dataset
-        else:
-            source = config.dataset
-            assert source is not None  # guaranteed by PipelineConfig
-            kwargs["dataset_name"] = source.name
-            kwargs["dataset_config"] = source.config
-            kwargs["dataset_split"] = source.split
-            kwargs["data_dir"] = source.resolved_data_dir(root)
-            kwargs["data_files"] = source.resolved_data_files(root)
-
-    if is_first and config.dataset is not None:
-        kwargs["max_num_samples"] = config.dataset.max_num_samples
-        kwargs["shuffle_seed"] = config.dataset.shuffle_seed
-
-    return annotator.annotate_dataset(**kwargs)
+        keep_idx_column=True,
+        reuse_idx_column=not is_first,
+    )
 
 
 def _resolve_selection(

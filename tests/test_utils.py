@@ -118,14 +118,15 @@ def test_drop_jsonl_rows_drops_matches_and_keeps_untouched_files(
 
 def test_ensure_returns_bool_and_dict() -> None:
     # Verifies return-type guard helpers for bool and dict outputs.
-    assert utils.ensure_returns_bool(lambda: True) is True
-    assert utils.ensure_returns_dict(lambda: {"k": "v"}) == {"k": "v"}
+    sample = {"k": "v"}
+    assert utils.ensure_returns_bool(lambda s: bool(s), sample) is True
+    assert utils.ensure_returns_dict(lambda s: s, sample) == {"k": "v"}
 
     with pytest.raises(TypeError, match="should return a bool"):
-        utils.ensure_returns_bool(lambda: "yes")
+        utils.ensure_returns_bool(lambda s: "yes", sample)
 
     with pytest.raises(TypeError, match="should return a dict"):
-        utils.ensure_returns_dict(lambda: [1, 2])
+        utils.ensure_returns_dict(lambda s: [1, 2], sample)
 
 
 def test_get_lib_versions(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -271,3 +272,81 @@ def test_dataset_signature_is_stable_for_a_bytes_column() -> None:
 
     other = Dataset.from_dict({"data": [b"abc", b"xyz"]})
     assert utils.dataset_signature(first) != utils.dataset_signature(other)
+
+
+def test_yield_jsonl_robust_skips_a_zero_byte_file(tmp_path: Path) -> None:
+    # A zero-byte file is left alone (never opened for reading), and a
+    # normal file next to it still yields its rows.
+    empty = tmp_path / "empty.jsonl"
+    empty.write_text("", encoding="utf-8")
+    normal = tmp_path / "normal.jsonl"
+    normal.write_text(json.dumps({"id": 1}) + "\n", encoding="utf-8")
+
+    rows = list(utils.yield_jsonl_robust([empty, normal], disable_tqdm=True))
+
+    assert rows == [{"id": 1}]
+
+
+def test_get_lib_versions_marks_a_library_not_installed_when_version_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A dependency whose version() call raises is reported as not
+    # installed, while the other dependencies still resolve normally.
+    def _version(name: str) -> str:
+        if name == "torch":
+            raise ModuleNotFoundError(name)
+        return f"{name}-v"
+
+    monkeypatch.setattr(utils, "version", _version)
+    versions = utils.get_lib_versions()
+
+    assert versions["torch"] == "not installed"
+    assert versions["transformers"] == "transformers-v"
+
+
+def test_get_lib_versions_falls_back_to_unknown_for_its_own_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # llm_annotator's own version() call can fail, e.g. when only src/ is on
+    # PYTHONPATH without an installed package; that case reports "unknown".
+    def _version(name: str) -> str:
+        if name == "llm_annotator":
+            raise ModuleNotFoundError(name)
+        return f"{name}-v"
+
+    monkeypatch.setattr(utils, "version", _version)
+    versions = utils.get_lib_versions()
+
+    assert versions["llm_annotator"] == "unknown"
+
+
+@pytest.mark.parametrize(
+    ("value", "min_value", "max_value", "expected"),
+    [
+        (1, 5, 10, False),
+        (15, 5, 10, False),
+        (7, 5, 10, True),
+        (7, None, None, True),
+    ],
+)
+def test_is_in_range(
+    value: int, min_value: int | None, max_value: int | None, expected: bool
+) -> None:
+    # Verifies the inclusive range check for a value below, above, and
+    # inside the bounds, and with both bounds absent.
+    assert utils.is_in_range(value, min_value, max_value) is expected
+
+
+@pytest.mark.parametrize(
+    ("text", "min_length", "max_length", "expected"),
+    [
+        ("ab", 3, 10, False),
+        ("abcdefghijk", 3, 10, False),
+        ("abcde", 3, 10, True),
+    ],
+)
+def test_is_length(
+    text: str, min_length: int | None, max_length: int | None, expected: bool
+) -> None:
+    # Verifies text length validation for too short, too long, and inside.
+    assert utils.is_length(text, min_length, max_length) is expected

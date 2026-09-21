@@ -123,7 +123,11 @@ def main(args: list[str] | None = None) -> None:
     output_schema = get_annotation_response_schema(
         one_sentence_description_max_length=150
     )
-    prompt_template = ANNOTATOR_USER_PROMPT
+    # The template names its input field `content`, so point it at whichever
+    # column the dataset holds the text in.
+    prompt_template = ANNOTATOR_USER_PROMPT.replace(
+        "{content}", f"{{{parsed_args.text_column}}}"
+    )
     system_message = annotator_system_prompt
 
     hub_id = parsed_args.hub_id
@@ -165,7 +169,6 @@ def main(args: list[str] | None = None) -> None:
             dataset_split=parsed_args.dataset_split,
             max_num_samples=parsed_args.max_num_samples,
             system_message=system_message,
-            prompt_field_swapper={"content": parsed_args.text_column},
             sort_by_length=parsed_args.sort_by_length,
             hub_id=hub_id,
             force_data_preparation=parsed_args.force_data_preparation,

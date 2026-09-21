@@ -265,22 +265,25 @@ def drop_jsonl_rows(
 
 
 def ensure_returns_bool(
-    func: Callable[..., Any], *args: Any, **kwargs: Any
+    func: Callable[[dict[str, Any]], Any], sample: dict[str, Any]
 ) -> bool:
-    """Ensure that a callable returns a boolean value.
+    """Call a user validation hook and check that it returned a boolean.
 
     Args:
-        func: Callable to invoke.
-        *args: Positional arguments forwarded to ``func``.
-        **kwargs: Keyword arguments forwarded to ``func``.
+        func: The hook, called with one sample.
+        sample: The sample to pass to ``func``.
 
     Returns:
         The boolean result returned by ``func``.
 
     Raises:
         TypeError: If ``func`` does not return a boolean.
+
+    Examples:
+        >>> ensure_returns_bool(lambda sample: bool(sample), {"a": 1})
+        True
     """
-    result = func(*args, **kwargs)
+    result = func(sample)
     if not isinstance(result, bool):
         raise TypeError(
             f"{func.__name__} should return a bool, got {type(result).__name__}"
@@ -289,22 +292,25 @@ def ensure_returns_bool(
 
 
 def ensure_returns_dict(
-    func: Callable[..., Any], *args: Any, **kwargs: Any
+    func: Callable[[dict[str, Any]], Any], sample: dict[str, Any]
 ) -> dict[str, Any]:
-    """Ensure that a callable returns a dictionary.
+    """Call a user postprocessing hook and check that it returned a dict.
 
     Args:
-        func: Callable to invoke.
-        *args: Positional arguments forwarded to ``func``.
-        **kwargs: Keyword arguments forwarded to ``func``.
+        func: The hook, called with one sample.
+        sample: The sample to pass to ``func``.
 
     Returns:
         The dictionary result returned by ``func``.
 
     Raises:
         TypeError: If ``func`` does not return a dictionary.
+
+    Examples:
+        >>> ensure_returns_dict(lambda sample: {**sample, "b": 2}, {"a": 1})
+        {'a': 1, 'b': 2}
     """
-    result = func(*args, **kwargs)
+    result = func(sample)
     if not isinstance(result, dict):
         raise TypeError(
             f"{func.__name__} should return a dict, got {type(result).__name__}"

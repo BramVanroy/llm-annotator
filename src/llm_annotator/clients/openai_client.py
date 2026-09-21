@@ -21,12 +21,32 @@ from llm_annotator.utils import add_schema_additional_properties_false
 
 
 if TYPE_CHECKING:
+    from openai import OpenAI
     from openai.types.chat.chat_completion import ChatCompletion
 
 from dataclasses import dataclass
 
 
 logger = get_logger(__name__)
+
+DEFAULT_TIMEOUT = 600.0
+"""Seconds one request may take, the OpenAI SDK's own default.
+
+``DEFAULT_TIMEOUT`` in ``openai/_constants.py`` is
+``httpx.Timeout(timeout=600, connect=5.0)``."""
+
+DEFAULT_MAX_RETRIES = 2
+"""How often the OpenAI SDK retries a failed request, its own default
+(``DEFAULT_MAX_RETRIES`` in ``openai/_constants.py``)."""
+
+CONNECT_TIMEOUT = 5.0
+"""Seconds to wait for the TCP connection of one request, apart from the
+generation itself.
+
+httpx reads a plain float timeout as all four of its limits, so a long
+``timeout`` would also let a host that drops packets rather than refusing the
+connection hold a request for the full duration. This is the OpenAI SDK's own
+connect timeout (``DEFAULT_TIMEOUT.connect`` in ``openai/_constants.py``)."""
 
 
 @dataclass(slots=True, frozen=True)
@@ -111,6 +131,10 @@ class OpenAIClient(Client[T_OpenAIOptions]):
         max_workers: int | None = None,
         base_url: str | None = None,
         api_key: str | None = None,
+        timeout: float = DEFAULT_TIMEOUT,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        use_batch_api: bool = False,
+        batch_poll_interval: float = 10.0,
         on_error: OnError = "warn",
     ) -> None:
         """Initialize the OpenAI client.
@@ -122,6 +146,20 @@ class OpenAIClient(Client[T_OpenAIOptions]):
             base_url: Base URL for the OpenAI API endpoint.
             api_key: OpenAI API key. If omitted, the SDK will use
                 ``OPENAI_API_KEY`` from the environment.
+            timeout: Seconds one request may take. The default is the SDK's
+                own (``DEFAULT_TIMEOUT`` in ``openai/_constants.py``).
+            max_retries: How often the SDK retries a request it can retry
+                (connection errors, timeouts, and the status codes 408, 409,
+                429 and 5xx). The default is the SDK's own
+                (``DEFAULT_MAX_RETRIES`` in ``openai/_constants.py``).
+            use_batch_api: Whether
+                [`batch_generate`][llm_annotator.clients.openai_client.OpenAIClient.batch_generate]
+                submits its requests to the OpenAI Batch API instead of
+                sending them over a thread pool. The Batch API has a
+                completion window of up to 24 hours and costs less, at the
+                price of latency.
+            batch_poll_interval: Seconds between two status polls of a running
+                Batch API job. Only read when ``use_batch_api`` is ``True``.
             on_error: Error behavior when generation fails. Valid options are:
                 - ``"raise"``: raise a
                   [`ProviderError`][llm_annotator.clients.exceptions.ProviderError]
@@ -131,18 +169,40 @@ class OpenAIClient(Client[T_OpenAIOptions]):
                   ``error`` set.
                 - ``"warn"``: log a warning and return an error ``Response``.
         """
-        from openai import OpenAI
-
         super().__init__(
             model=model, max_workers=max_workers, on_error=on_error
         )
         self._api_key = api_key
         self._base_url = base_url
-        self._client = OpenAI(api_key=self._api_key, base_url=base_url)
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.use_batch_api = use_batch_api
+        self.batch_poll_interval = batch_poll_interval
+        self._client = self._build_sdk_client()
         self._active_batches: dict[str, list[str]] = {}
         """Batch API jobs that have not been cleaned up yet, each mapped to the
         ids of the files it owns: the uploaded input file, plus the output and
         error files once the job reports them."""
+
+    def _build_sdk_client(self) -> OpenAI:
+        """Build the OpenAI SDK client this client sends its requests with.
+
+        Override this in a subclass that needs other transport settings than
+        ``timeout`` and ``max_retries`` cover. It runs once, at the end of
+        ``__init__``, and reads the attributes set before it.
+
+        Returns:
+            The SDK client.
+        """
+        import httpx
+        from openai import OpenAI
+
+        return OpenAI(
+            api_key=self._api_key,
+            base_url=self._base_url,
+            timeout=httpx.Timeout(self.timeout, connect=CONNECT_TIMEOUT),
+            max_retries=self.max_retries,
+        )
 
     def _process_response(self, response: ChatCompletion) -> Response:
         """Process OpenAI response and handle stop reasons.
@@ -262,7 +322,6 @@ class OpenAIClient(Client[T_OpenAIOptions]):
         messages: list[list[dict[str, str]]],
         options: OpenAIRuntimeOptions,
         gen_kwargs: dict[str, Any] | None,
-        poll_interval: float,
     ) -> list[Response]:
         """Run the OpenAI Batch API path for ``batch_generate``.
 
@@ -278,7 +337,6 @@ class OpenAIClient(Client[T_OpenAIOptions]):
             messages: One list of message dicts per request.
             options: Generation options applied to every request in the batch.
             gen_kwargs: Extra kwargs merged into every request body.
-            poll_interval: Seconds to wait between status-poll calls.
 
         Returns:
             Responses in the same order as the input ``messages``.
@@ -309,9 +367,9 @@ class OpenAIClient(Client[T_OpenAIOptions]):
         while batch.status not in terminal_statuses:
             logger.info(
                 f"Batch {batch_id} status: {batch.status}. Polling again"
-                f" in {poll_interval} seconds..."
+                f" in {self.batch_poll_interval} seconds..."
             )
-            time.sleep(poll_interval)
+            time.sleep(self.batch_poll_interval)
             batch = self._client.batches.retrieve(batch_id)
 
         result_files = [
@@ -495,26 +553,17 @@ class OpenAIClient(Client[T_OpenAIOptions]):
         messages: list[list[dict[str, str]]],
         options: T_OpenAIOptions | None = None,
         gen_kwargs: dict[str, Any] | None = None,
-        use_batch_api: bool = False,
-        poll_interval: float = 10.0,
     ) -> list[Response]:
         """Generate responses for a batch of inputs.
 
-        By default, requests are dispatched in parallel using a thread pool.
-        When ``use_batch_api=True``, the OpenAI Batch API is used instead:
-        all requests are submitted as a single batch job and results are
-        retrieved once the job completes. The Batch API supports a completion
-        window of up to 24 hours and offers lower cost, but adds latency.
+        The requests go out over a thread pool, or as one OpenAI Batch API job
+        when the client was built with ``use_batch_api=True``.
 
         Args:
             messages: List of message lists, one per request.
             options: Optional generation configuration.
             gen_kwargs: Additional provider-specific generation kwargs that are not covered by the standard options.
                 Has precedence over ``options``.
-            use_batch_api: When ``True``, use the OpenAI Batch API instead of
-                concurrent individual requests. Defaults to ``False``.
-            poll_interval: Seconds between batch status polls. Only used when
-                ``use_batch_api=True``. Defaults to ``10.0``.
 
         Returns:
             A list of Response objects in the same order as the input. A
@@ -524,13 +573,11 @@ class OpenAIClient(Client[T_OpenAIOptions]):
         Raises:
             ProviderError: If a request fails and ``on_error`` is ``"raise"``.
         """
-        if use_batch_api:
+        if self.use_batch_api:
             resolved = cast(
                 OpenAIRuntimeOptions, options or self._default_options()
             )
-            return self._execute_batch_api(
-                messages, resolved, gen_kwargs, poll_interval
-            )
+            return self._execute_batch_api(messages, resolved, gen_kwargs)
 
         return self._generate_in_threads(
             messages=messages,

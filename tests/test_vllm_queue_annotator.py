@@ -363,7 +363,14 @@ def test_per_client_concurrency_cannot_change_mid_run() -> None:
     worker = threading.Thread(
         target=annotator._annotate_batch_on_free_client,
         args=(batch,),
-        kwargs={"options": None},
+        kwargs={
+            "options": None,
+            "gen_kwargs": None,
+            "task_prefix": "",
+            "validate_fn": None,
+            "postprocess_fn": None,
+            "num_retries_invalid": 5,
+        },
         daemon=True,
     )
     worker.start()
@@ -392,7 +399,14 @@ def test_checked_out_client_is_not_requeued_after_shutdown() -> None:
     worker = threading.Thread(
         target=annotator._annotate_batch_on_free_client,
         args=(batch,),
-        kwargs={"options": None},
+        kwargs={
+            "options": None,
+            "gen_kwargs": None,
+            "task_prefix": "",
+            "validate_fn": None,
+            "postprocess_fn": None,
+            "num_retries_invalid": 5,
+        },
         daemon=True,
     )
     worker.start()
