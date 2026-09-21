@@ -120,6 +120,7 @@ def fake_vllm_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     )
     monkeypatch.setitem(__import__("sys").modules, "torch", fake_torch)
 
+    state["distributed"] = fake_dist_mod
     return state
 
 
@@ -485,3 +486,43 @@ def test_destroy_is_idempotent(
     client.destroy()
     assert client._pipe is None
     assert collected["called"] >= 1
+
+
+def test_destroy_logs_failed_steps_and_continues(
+    fake_vllm_runtime: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Verifies a failing clean-up step is logged by name and the rest still run.
+    collected = {"called": 0}
+
+    def _collect() -> int:
+        collected["called"] += 1
+        return 0
+
+    monkeypatch.setattr(gc, "collect", _collect)
+
+    def _raise() -> None:
+        raise RuntimeError("teardown boom")
+
+    fake_vllm_runtime["distributed"].destroy_model_parallel = _raise
+
+    client = VLLMOfflineClient(model="m")
+    client._ensure_pipeline_loaded()
+    monkeypatch.setattr(
+        client._pipe.llm_engine.engine_core,  # type: ignore[union-attr]
+        "shutdown",
+        _raise,
+    )
+
+    with caplog.at_level("WARNING"):
+        client.destroy()
+
+    warnings = [record.getMessage() for record in caplog.records]
+    assert any(
+        "destroy model parallel" in message and "teardown boom" in message
+        for message in warnings
+    )
+    assert any("shut down engine core" in message for message in warnings)
+    assert client._pipe is None
+    assert collected["called"] == 1

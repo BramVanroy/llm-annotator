@@ -568,45 +568,65 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
 
         return responses
 
+    @contextmanager
+    def _cleanup_step(self, name: str) -> Iterator[None]:
+        """Run one clean-up step and log a failure instead of raising it.
+
+        Args:
+            name: Name of the step, used in the warning.
+
+        Yields:
+            Control to the body of the step.
+        """
+        try:
+            yield
+        except Exception as exc:
+            self._logger.warning(f"vLLM clean-up step '{name}' failed: {exc}")
+
     def destroy(self) -> None:
         """Free GPU memory and clean up all vLLM resources.
 
-        Safe to call multiple times; subsequent calls after the first are
-        no-ops. Also invoked automatically when the client is used as a
-        context manager.
+        Every step runs even when an earlier one fails, and a failed step is
+        logged at warning level with its name and the exception. Safe to call
+        multiple times; subsequent calls after the first are no-ops. Also
+        invoked automatically when the client is used as a context manager.
         """
         if self._pipe is None:
             return
 
-        try:
-            from torch import cuda
-            from vllm.distributed import (
-                destroy_distributed_environment,
-                destroy_model_parallel,
-            )
+        pipe = self._pipe
+        self._pipe = None
+
+        with self._cleanup_step("destroy model parallel"):
+            from vllm.distributed import destroy_model_parallel
 
             destroy_model_parallel()
+
+        with self._cleanup_step("destroy distributed environment"):
+            from vllm.distributed import destroy_distributed_environment
+
             destroy_distributed_environment()
 
-            try:
-                self._pipe.llm_engine.model_executor.shutdown()
-                del self._pipe.llm_engine.model_executor
-            except Exception:
-                pass
-            try:
-                self._pipe.llm_engine.engine_core.shutdown()
-                del self._pipe.llm_engine.engine_core
-            except Exception:
-                pass
+        with self._cleanup_step("shut down model executor"):
+            pipe.llm_engine.model_executor.shutdown()
+            del pipe.llm_engine.model_executor
 
-            del self._pipe.llm_engine
-            del self._pipe
+        with self._cleanup_step("shut down engine core"):
+            pipe.llm_engine.engine_core.shutdown()
+            del pipe.llm_engine.engine_core
+
+        with self._cleanup_step("release the engine"):
+            del pipe.llm_engine
+
+        # The last reference to the engine has to go before the allocator can
+        # hand its blocks back.
+        del pipe
+
+        with self._cleanup_step("free GPU memory"):
+            from torch import cuda
+
             cuda.empty_cache()
             gc.collect()
-        except Exception:
-            pass
-        finally:
-            self._pipe = None
 
     def _handle_stop_reason(
         self, *, stop_reason: str | None, num_output_tokens: int | None
