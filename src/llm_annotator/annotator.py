@@ -2462,12 +2462,14 @@ class Annotator:
             # Closing the generator lets alternative execution strategies
             # (e.g. the multi-server queue) shut their workers down when the
             # writer stops early because of an error or interruption.
+            # The uploader is joined first: its thread is not a daemon, and
+            # closing the batch generator may raise.
+            if uploader is not None:
+                uploader.close()
             close_batches = getattr(annotated_batches, "close", None)
             if callable(close_batches):
                 close_batches()
             fhout.close()
-            if uploader is not None:
-                uploader.close()
 
         elapsed_seconds = perf_counter() - run_started
 
