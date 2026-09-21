@@ -10,6 +10,7 @@ from datasets import Dataset
 from pydantic import ValidationError
 
 import llm_annotator.pipeline as pipeline_mod
+import llm_annotator.pool as pool_mod
 from llm_annotator.annotator import (
     Annotator,
     SelectionRecord,
@@ -159,14 +160,16 @@ def built_clients(monkeypatch: pytest.MonkeyPatch) -> list[EchoClient]:
     created: list[EchoClient] = []
 
     def fake_build_client(
-        self: ClientConfig, root: Path
+        client_config: ClientConfig, root: Path
     ) -> Client[Any] | list[Client[Any]]:
         _ = root
-        client = EchoClient(model=self.model or "echo", **self.init)
+        client = EchoClient(
+            model=client_config.model or "echo", **client_config.init
+        )
         created.append(client)
         return client
 
-    monkeypatch.setattr(ClientConfig, "build_client", fake_build_client)
+    monkeypatch.setattr(pool_mod, "build_client", fake_build_client)
     return created
 
 
@@ -212,8 +215,19 @@ def rating_schema() -> dict[str, Any]:
     }
 
 
-def two_step_config(tmp_path: Path, **overrides: Any) -> PipelineConfig:
-    """Build a write-then-rate pipeline over a local dataset."""
+def two_step_config(
+    tmp_path: Path,
+    second_client: dict[str, Any] | None = None,
+    **overrides: Any,
+) -> PipelineConfig:
+    """Build a write-then-rate pipeline over a local dataset.
+
+    Args:
+        tmp_path: Directory the config and its dataset live in.
+        second_client: Replaces the second step's client block, before the
+            config is validated.
+        overrides: Top-level config keys to replace.
+    """
     data: dict[str, Any] = {
         "output_dir": tmp_path / "out",
         "config_dir": tmp_path,
@@ -241,6 +255,8 @@ def two_step_config(tmp_path: Path, **overrides: Any) -> PipelineConfig:
         ],
     }
     data.update(overrides)
+    if second_client is not None:
+        data["steps"][1]["client"] = second_client
     return PipelineConfig.model_validate(data)
 
 
@@ -479,9 +495,10 @@ def test_keep_messages_retains_the_column(
 def test_client_is_reused_when_settings_match(
     tmp_path: Path, built_clients: list[EchoClient]
 ) -> None:
-    config = two_step_config(tmp_path)
     # Same model for both steps: the (expensive) client must be built once.
-    config.steps[1].client = {"options": {"max_completion_tokens": 16}}
+    config = two_step_config(
+        tmp_path, second_client={"options": {"max_completion_tokens": 16}}
+    )
     run_pipeline(config)
     assert len(built_clients) == 1
 
@@ -546,12 +563,12 @@ def test_filter_invalid_drops_unparseable_rows(
     # Only the first step is broken, so the pipeline must stop there rather
     # than hand a half-empty dataset to step 2.
     def fake_build_client(
-        self: ClientConfig, root: Path
+        client_config: ClientConfig, root: Path
     ) -> Client[Any] | list[Client[Any]]:
         _ = root
-        return BrokenJSONClient(model=self.model or "echo")
+        return BrokenJSONClient(model=client_config.model or "echo")
 
-    monkeypatch.setattr(ClientConfig, "build_client", fake_build_client)
+    monkeypatch.setattr(pool_mod, "build_client", fake_build_client)
 
     config = two_step_config(tmp_path)
     config.steps[0].filter_invalid = True
@@ -593,17 +610,19 @@ def failing_clients(
     """Route every client construction to a client that fails "document 0"."""
     created: list[FailingTextClient] = []
 
-    def fake_build_client(self: ClientConfig, root: Path) -> Client[Any]:
+    def fake_build_client(
+        client_config: ClientConfig, root: Path
+    ) -> Client[Any]:
         _ = root
         client = FailingTextClient(
             fail_texts=frozenset({"document 0"}),
-            model=self.model or "echo",
-            **self.init,
+            model=client_config.model or "echo",
+            **client_config.init,
         )
         created.append(client)
         return client
 
-    monkeypatch.setattr(ClientConfig, "build_client", fake_build_client)
+    monkeypatch.setattr(pool_mod, "build_client", fake_build_client)
     return created
 
 
@@ -636,16 +655,16 @@ def test_retry_errors_true_redoes_the_same_rows_in_every_selected_step(
     retried_clients: list[EchoClient] = []
 
     def fake_healthy_build_client(
-        self: ClientConfig, root: Path
+        client_config: ClientConfig, root: Path
     ) -> Client[Any]:
         _ = root
-        client = EchoClient(model=self.model or "echo", **self.init)
+        client = EchoClient(
+            model=client_config.model or "echo", **client_config.init
+        )
         retried_clients.append(client)
         return client
 
-    monkeypatch.setattr(
-        ClientConfig, "build_client", fake_healthy_build_client
-    )
+    monkeypatch.setattr(pool_mod, "build_client", fake_healthy_build_client)
 
     final = run_pipeline(two_step_config(tmp_path), retry_errors=True)
 
@@ -1414,16 +1433,15 @@ def test_batch_size_follows_the_step(
         return original(self, *args, **kwargs)
 
     def fake_build_client(
-        self: ClientConfig, root: Path
+        client_config: ClientConfig, root: Path
     ) -> Client[Any] | list[Client[Any]]:
         _ = root
-        return EchoClient(model=self.model or "echo")
+        return EchoClient(model=client_config.model or "echo")
 
-    monkeypatch.setattr(ClientConfig, "build_client", fake_build_client)
+    monkeypatch.setattr(pool_mod, "build_client", fake_build_client)
     monkeypatch.setattr(Annotator, "annotate_dataset", spy)
 
-    config = two_step_config(tmp_path)
-    config.steps[1].client = {"batch_size": 1}
+    config = two_step_config(tmp_path, second_client={"batch_size": 1})
     run_pipeline(config)
     assert seen == [2, 1]
 
@@ -1441,12 +1459,12 @@ def test_max_consecutive_failed_batches_follows_the_step(
         return original(self, *args, **kwargs)
 
     def fake_build_client(
-        self: ClientConfig, root: Path
+        client_config: ClientConfig, root: Path
     ) -> Client[Any] | list[Client[Any]]:
         _ = root
-        return EchoClient(model=self.model or "echo")
+        return EchoClient(model=client_config.model or "echo")
 
-    monkeypatch.setattr(ClientConfig, "build_client", fake_build_client)
+    monkeypatch.setattr(pool_mod, "build_client", fake_build_client)
     monkeypatch.setattr(Annotator, "annotate_dataset", spy)
 
     config = two_step_config(tmp_path)
@@ -1473,16 +1491,23 @@ def test_queue_settings_follow_the_step(
         return original(self, *args, **kwargs)
 
     def fake_build_client(
-        self: ClientConfig, root: Path
+        client_config: ClientConfig, root: Path
     ) -> Client[Any] | list[Client[Any]]:
         _ = root
-        return [PoolClient(model=self.model or "echo") for _ in range(2)]
+        return [
+            PoolClient(model=client_config.model or "echo") for _ in range(2)
+        ]
 
-    monkeypatch.setattr(ClientConfig, "build_client", fake_build_client)
+    monkeypatch.setattr(pool_mod, "build_client", fake_build_client)
     monkeypatch.setattr(Annotator, "annotate_dataset", spy)
 
+    # Same cache key as step 1, so the pool is reused rather than rebuilt.
     config = two_step_config(
         tmp_path,
+        second_client={
+            "queue_size": 3,
+            "max_concurrent_batches_per_client": 1,
+        },
         client={
             "provider": "vllm_online",
             "model": "m",
@@ -1493,11 +1518,6 @@ def test_queue_settings_follow_the_step(
             "max_concurrent_batches_per_client": 2,
         },
     )
-    # Same cache key as step 1, so the pool is reused rather than rebuilt.
-    config.steps[1].client = {
-        "queue_size": 3,
-        "max_concurrent_batches_per_client": 1,
-    }
     run_pipeline(config)
     assert seen == [(8, 2), (3, 1)]
 
@@ -1674,14 +1694,14 @@ def test_pipeline_growth_recovers_from_a_crash_during_extension(
     created: list[EchoClient] = []
 
     def fake_build_client(
-        self: ClientConfig, root: Path
+        client_config: ClientConfig, root: Path
     ) -> Client[Any] | list[Client[Any]]:
         _ = root
-        client = FlakyClient(model=self.model or "echo")
+        client = FlakyClient(model=client_config.model or "echo")
         created.append(client)
         return client
 
-    monkeypatch.setattr(ClientConfig, "build_client", fake_build_client)
+    monkeypatch.setattr(pool_mod, "build_client", fake_build_client)
 
     with pytest.raises(RuntimeError, match="boom"):
         run_pipeline(growth_config(tmp_path, big_source, max_num_samples=20))

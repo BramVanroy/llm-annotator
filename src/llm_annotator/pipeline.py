@@ -56,6 +56,7 @@ from llm_annotator.config import (
     load_pipeline_config,
 )
 from llm_annotator.logging_utils import configure_logging, get_logger
+from llm_annotator.pool import build_annotator
 from llm_annotator.utils import dataset_signature, drop_jsonl_rows
 
 
@@ -684,8 +685,8 @@ def run_pipeline(
             if annotator is None or client_key != active_client_key:
                 if annotator is not None:
                     annotator.destroy()
-                annotator = client_config.build_annotator(
-                    config.config_dir, verbose=config.verbose
+                annotator = build_annotator(
+                    client_config, config.config_dir, verbose=config.verbose
                 )
                 active_client_key = client_key
             else:

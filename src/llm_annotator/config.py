@@ -4,6 +4,11 @@ As much as possible is validated at config validation time but functional elemen
 like preprocess/postprocess/validation functions are not configurable here. If you
 need such functionality, you need to write your own Python script that uses the
 library's API directly.
+
+This module holds the models, their validation and the pure factory parts. The
+live clients and annotators a config describes are built by
+[`pool`][llm_annotator.pool], which is also where the ``/health`` polling and
+the pool watcher live.
 """
 
 from __future__ import annotations
@@ -13,9 +18,6 @@ import glob
 import inspect
 import json
 import re
-import threading
-import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_args
 
@@ -24,6 +26,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     field_validator,
     model_validator,
 )
@@ -31,18 +34,10 @@ from pydantic import (
 from llm_annotator.annotator import (
     DEFAULT_CPU_COUNT,
     QUEUE_BATCHES_PER_SLOT,
-    Annotator,
     VLLMQueueAnnotator,
 )
 from llm_annotator.clients.base import Client, ProviderRuntimeOptions
-from llm_annotator.clients.vllm_online_client import (
-    VLLMOnlineClient,
-    server_is_healthy,
-)
-from llm_annotator.logging_utils import get_logger
 
-
-LOGGER = get_logger("config")
 
 ProviderName = Literal["openai", "claude", "vllm_online", "vllm_offline"]
 StepType = Literal["annotate", "generate"]
@@ -357,60 +352,6 @@ def _client_class(provider: ProviderName) -> type[Client[Any]]:
             f" with `uv sync --extra {extras[provider]}`."
         ) from exc
     raise ValueError(f"Unknown provider '{provider}'.")
-
-
-def wait_for_servers(
-    base_urls: list[str], timeout: float, min_servers: int = 1
-) -> list[str]:
-    """Block until the requested number of vLLM servers answer ``/health``.
-
-    Args:
-        base_urls: vLLM base URLs (each ending in ``/v1``).
-        timeout: Maximum number of seconds to wait for the pool as a whole.
-        min_servers: Number of ready servers required to continue.
-
-    Raises:
-        TimeoutError: If fewer than ``min_servers`` are reachable after
-            ``timeout``.
-    """
-    pending = list(dict.fromkeys(base_urls))
-    if not 1 <= min_servers <= len(pending):
-        raise ValueError(
-            f"'min_servers' must be between 1 and {len(pending)}, got"
-            f" {min_servers}."
-        )
-
-    ready: list[str] = []
-    deadline = time.monotonic() + timeout
-    while pending:
-        remaining = deadline - time.monotonic()
-        if remaining < 0:
-            break
-        with ThreadPoolExecutor(max_workers=len(pending)) as pool:
-            results = zip(
-                pending,
-                pool.map(
-                    lambda url: server_is_healthy(
-                        url, min(5, max(remaining, 0))
-                    ),
-                    pending,
-                ),
-                strict=True,
-            )
-            newly_ready = []
-            for url, is_ready in results:
-                if is_ready:
-                    ready.append(url)
-                    newly_ready.append(url)
-        pending = [url for url in pending if url not in newly_ready]
-        if len(ready) >= min_servers:
-            return ready
-        time.sleep(min(5, max(0, deadline - time.monotonic())))
-
-    raise TimeoutError(
-        f"Only {len(ready)} of {min_servers} required vLLM server(s) became"
-        f" ready within {timeout:g}s."
-    )
 
 
 class _StrictBase(BaseModel):
@@ -1159,161 +1100,6 @@ class ClientConfig(_StrictBase):
             )
         return _options_class(self.provider)(**self.options)
 
-    def build_client(self, root: Path) -> Client[Any] | list[Client[Any]]:
-        """Instantiate the client, or one client per server for a pool.
-
-        Args:
-            root: Directory that relative paths and globs resolve against.
-
-        Returns:
-            A single client, or a list of clients when a pool is configured.
-        """
-        kwargs = dict(self.init)
-        if self.model is not None:
-            kwargs["model"] = self.model
-        if self.provider == "vllm_offline":
-            engine_kwargs = self.engine.as_llm_kwargs()
-            # `extra` names arguments this class does not, so it can only
-            # travel as the client's own passthrough.
-            kwargs.update(
-                {
-                    k: v
-                    for k, v in engine_kwargs.items()
-                    if k not in self.engine.extra
-                }
-            )
-            if self.engine.extra:
-                kwargs["extra_vllm_kwargs"] = dict(self.engine.extra)
-
-        if not self.is_pool():
-            return _client_class(self.provider)(**kwargs)
-
-        # A pool is `vllm_online`-only (enforced in validation), so the server
-        # client is named directly here rather than looked up: only it takes
-        # the `base_url` that distinguishes one pool member from the next.
-        base_urls = self.resolve_base_urls(root)
-        if self.wait_for_servers:
-            # The pool source is read once here, so it can name fewer servers
-            # than `min_servers` while the rest are still starting. Waiting for
-            # more servers than it names could never succeed; the ones that
-            # arrive later are admitted by the watcher instead.
-            min_ready = min(
-                self.pool.min_servers, len(dict.fromkeys(base_urls))
-            )
-            LOGGER.info(
-                f"Waiting up to {self.wait_for_servers:g}s for"
-                f" {min_ready} vLLM server(s) to become ready..."
-            )
-            base_urls = wait_for_servers(
-                base_urls, self.wait_for_servers, min_ready
-            )
-
-        return [VLLMOnlineClient(base_url=url, **kwargs) for url in base_urls]
-
-    def build_annotator(self, root: Path, verbose: bool = False) -> Annotator:
-        """Instantiate the annotator that drives this client.
-
-        A pool of servers yields a
-        [`VLLMQueueAnnotator`][llm_annotator.annotator.VLLMQueueAnnotator];
-        everything else yields a plain
-        [`Annotator`][llm_annotator.annotator.Annotator].
-
-        Args:
-            root: Directory that relative paths and globs resolve against.
-            verbose: Whether the annotator should log progress information.
-
-        Returns:
-            The annotator, ready to run.
-        """
-        one_or_more_clients = self.build_client(root)
-        if isinstance(one_or_more_clients, list):
-            LOGGER.info(
-                f"Annotating over {len(one_or_more_clients)} vLLM server(s)."
-            )
-            expected_servers = self._expected_pool_size(root)
-            annotator = VLLMQueueAnnotator(
-                clients=one_or_more_clients,
-                batch_size=self.batch_size,
-                queue_size=self.queue_size,
-                max_concurrent_batches_per_client=(
-                    self.max_concurrent_batches_per_client
-                ),
-                max_workers=(
-                    expected_servers * self.max_concurrent_batches_per_client
-                ),
-                num_proc=self.num_proc,
-                verbose=verbose,
-            )
-            self._watch_pool(root, annotator)
-            return annotator
-        return Annotator(
-            client=one_or_more_clients,
-            batch_size=self.batch_size,
-            num_proc=self.num_proc,
-            verbose=verbose,
-        )
-
-    def _expected_pool_size(self, root: Path) -> int:
-        """Return how many distinct vLLM servers this pool can grow to."""
-        if self.base_urls:
-            return self.configured_servers()
-        try:
-            return max(
-                self.pool.servers,
-                len(list(dict.fromkeys(self.resolve_base_urls(root)))),
-            )
-        except ValueError:
-            return self.pool.servers
-
-    def _watch_pool(self, root: Path, annotator: VLLMQueueAnnotator) -> None:
-        """Add configured vLLM servers to an active pool once they are ready.
-
-        A server is a candidate whenever the pool does not hold it, so this
-        admits a server that starts late as well as one that the annotator
-        evicted and that answers ``/health`` again.
-        """
-        kwargs = dict(self.init)
-        if self.model is not None:
-            kwargs["model"] = self.model
-
-        def discover() -> list[str]:
-            try:
-                return self.resolve_base_urls(root)
-            except ValueError:
-                return []
-
-        def watch() -> None:
-            while not annotator.is_shutting_down:
-                pooled_urls = annotator.client_base_urls()
-                candidates = [
-                    url for url in discover() if url not in pooled_urls
-                ]
-                with ThreadPoolExecutor(
-                    max_workers=len(candidates) or 1
-                ) as pool:
-                    readiness = list(
-                        pool.map(
-                            lambda url: server_is_healthy(url, 5), candidates
-                        )
-                    )
-
-                for url, is_ready in zip(candidates, readiness, strict=True):
-                    if annotator.is_shutting_down:
-                        return
-                    if is_ready:
-                        annotator.add_client_for_base_url(
-                            url,
-                            lambda base_url: VLLMOnlineClient(
-                                base_url=base_url, **kwargs
-                            ),
-                        )
-                if annotator.wait_for_shutdown(timeout=1):
-                    return
-
-        threading.Thread(
-            target=watch, name="vllm-pool-watcher", daemon=True
-        ).start()
-
 
 class StepConfig(_StrictBase):
     """One annotation pass over the dataset produced by the previous step.
@@ -1602,6 +1388,9 @@ class PipelineConfig(_StrictBase):
     log_level: str = "INFO"
     config_dir: Path = Field(default_factory=Path.cwd)
 
+    _step_clients: dict[str, ClientConfig] = PrivateAttr(default_factory=dict)
+    """Merged client per step name, filled while the config is validated."""
+
     @model_validator(mode="after")
     def _resolve_output_dir(self) -> "PipelineConfig":
         """Resolve a relative ``output_dir`` against ``config_dir``."""
@@ -1682,6 +1471,12 @@ class PipelineConfig(_StrictBase):
 
         The step's block is only validated here, after merging, because on its
         own it is a fragment that need not name a ``provider`` or ``model``.
+        The result is kept per step name, so the merge and its validation run
+        once per step rather than once per caller. Validation fills that cache
+        for every step, and a config is not changed after it is loaded: the
+        command line reaches a step's client through
+        ``step_client_overrides``, which is applied to the decoded mapping
+        before validation.
 
         Args:
             step: The step whose effective client settings are wanted.
@@ -1694,6 +1489,10 @@ class PipelineConfig(_StrictBase):
                 merged result is not a valid client configuration. The
                 offending step is named either way.
         """
+        cached = self._step_clients.get(step.name)
+        if cached is not None:
+            return cached
+
         if not step.client:
             if self.client is None:
                 raise ValueError(
@@ -1701,6 +1500,7 @@ class PipelineConfig(_StrictBase):
                     " top-level 'client' block to share one across steps, or"
                     " a 'client' block to this step."
                 )
+            self._step_clients[step.name] = self.client
             return self.client
 
         override = dict(step.client)
@@ -1724,11 +1524,14 @@ class PipelineConfig(_StrictBase):
                         }
 
         try:
-            return ClientConfig.model_validate(merged)
+            client = ClientConfig.model_validate(merged)
         except ValueError as exc:
             raise ValueError(
                 f"Step '{step.name}': invalid 'client' block. {exc}"
             ) from exc
+
+        self._step_clients[step.name] = client
+        return client
 
     def step_dir(self, index: int) -> Path:
         """Get the directory holding one step's artifacts.
@@ -1939,5 +1742,4 @@ __all__ = [
     "StepKind",
     "load_config_file",
     "load_pipeline_config",
-    "wait_for_servers",
 ]
