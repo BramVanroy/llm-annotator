@@ -7,9 +7,9 @@ the assistant turn between `<think>` tags. Both are `messages` datasets, which
 is what TRL's `SFTTrainer` and friends read directly.
 
 ```sh
-uv run --frozen examples/wiki-nl-persona-qa/build_sft.py \
-    --judged examples/wiki-nl-persona-qa/outputs/judge/final \
-    --out examples/wiki-nl-persona-qa/outputs/sft
+uv run --frozen case-studies/wiki-nl-persona-qa/build_sft.py \
+    --judged case-studies/wiki-nl-persona-qa/outputs/judge/final \
+    --out case-studies/wiki-nl-persona-qa/outputs/sft
 ```
 """
 
@@ -237,7 +237,7 @@ def main(args: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--judged",
-        default="examples/wiki-nl-persona-qa/outputs/judge/final",
+        default="case-studies/wiki-nl-persona-qa/outputs/judge/final",
         help="The judge pipeline's <output_dir>/final directory.",
     )
     parser.add_argument(

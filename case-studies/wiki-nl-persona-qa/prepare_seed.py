@@ -7,9 +7,9 @@ sounding like the same person asking the same kind of question, at the same
 length, about every article.
 
 ```sh
-uv run examples/wiki-nl-persona-qa/prepare_seed.py \
+uv run case-studies/wiki-nl-persona-qa/prepare_seed.py \
     --num-samples 50000 --num-proc 16 \
-    --out examples/wiki-nl-persona-qa/outputs/seed
+    --out case-studies/wiki-nl-persona-qa/outputs/seed
 ```
 """
 

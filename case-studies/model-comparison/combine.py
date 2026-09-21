@@ -12,8 +12,8 @@ This script does two things:
    ``judge/pipeline.yaml`` to score in a single pass.
 
 ```sh
-uv run examples/model-comparison/combine.py \
-    --out examples/model-comparison/outputs/combined-qa
+uv run case-studies/model-comparison/combine.py \
+    --out case-studies/model-comparison/outputs/combined-qa
 ```
 """
 
@@ -27,13 +27,13 @@ from typing import Any
 
 DEFAULT_INPUTS = {
     "granite-4.1-3b": (
-        "examples/model-comparison/outputs/generate/granite-4.1-3b/final"
+        "case-studies/model-comparison/outputs/generate/granite-4.1-3b/final"
     ),
     "granite-4.1-8b": (
-        "examples/model-comparison/outputs/generate/granite-4.1-8b/final"
+        "case-studies/model-comparison/outputs/generate/granite-4.1-8b/final"
     ),
     "gemma-4-26b-a4b": (
-        "examples/model-comparison/outputs/generate/gemma-4-26b-a4b/final"
+        "case-studies/model-comparison/outputs/generate/gemma-4-26b-a4b/final"
     ),
 }
 
