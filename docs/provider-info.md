@@ -159,6 +159,12 @@ Three constructor arguments size that:
   `None` sends all of them. Lower it only for a server shared with other
   jobs.
 
+Every request in flight holds one thread of the client process, which waits for
+the server and uses no CPU meanwhile. A pool has `servers` x
+`max_concurrent_batches_per_client` x `batch_size` of them: 4 servers with the
+defaults (4 batches of 256) is 4096 threads. If the client job hits a thread or
+process limit (`ulimit -u`), lower `batch_size` or set `max_workers`.
+
 From a config file they are `init` keys:
 
 ```yaml
