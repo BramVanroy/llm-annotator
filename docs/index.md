@@ -143,8 +143,8 @@ with Annotator(client=client, verbose=True) as anno:
 
     # Step 2: run generation against the prepared data.
     # If this step fails, re-run it with hub_id=HUB_ID and the same
-    # output_dir:  the prepared data is restored from Hub automatically and
-    # the samples already in the progress files are skipped.
+    # output_dir: the prepared data is restored from Hub automatically and
+    # the samples already in the local progress files are skipped.
     ds = anno.run_annotation(
         output_dir="outputs/imdb-sentiment",
         prompt_template="Classify the sentiment: {text}",
@@ -153,6 +153,19 @@ with Annotator(client=client, verbose=True) as anno:
         upload_every_n_samples=500,
     )
 ```
+
+On a machine that has no local progress files (a purged scratch directory,
+or a run that moves to another cluster), restore the progress backup from
+the Hub before running step 2:
+
+```sh
+python scripts/restore_progress_from_hub.py --hub-id my-org/imdb-sentiment --output-dir outputs/imdb-sentiment
+```
+
+Step 2 refuses to start when the repository has a progress backup while the
+local progress directory is empty, so a forgotten restore cannot replace the
+backup with a run that starts from zero. Pass `overwrite=True` to delete the
+backup and annotate every row again.
 
 To force a fresh preparation even when local or Hub artifacts exist, pass
 `force_data_preparation=True` to `prepare_data` (or to `annotate_dataset`).

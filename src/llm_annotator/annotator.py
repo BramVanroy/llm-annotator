@@ -43,6 +43,8 @@ from huggingface_hub import (
     create_branch,
     create_repo,
     delete_branch,
+    list_repo_refs,
+    upload_file,
     upload_folder,
     upload_large_folder,
 )
@@ -1862,6 +1864,49 @@ class Annotator:
                     f" which usually means it does not exist: {exc}"
                 )
 
+    def _check_progress_backup_branch(
+        self, *, hub_id: str, output_dir: Path, task_prefix: str
+    ) -> None:
+        """Refuse to overwrite a Hub backup with a run that starts from zero.
+
+        A run with no local progress files writes its first progress file
+        under the same name as the one on the backup branch, so the next
+        upload replaces the backed-up rows with fewer ones. Called only when
+        the local progress directory is empty.
+
+        Args:
+            hub_id: The dataset repository that the run backs up to.
+            output_dir: The annotator's output directory.
+            task_prefix: The task prefix of the run.
+
+        Raises:
+            ValueError: If the repository has a backup branch for this task.
+        """
+        branch = f"{task_prefix}{PROGRESS_BACKUP_BRANCH_SUFF}"
+        try:
+            refs = list_repo_refs(hub_id, repo_type="dataset")
+        except Exception as exc:
+            self._logger.debug(
+                f"Could not list the branches of '{hub_id}', so the progress"
+                f" backup on '{branch}' is not checked: {exc}"
+            )
+            return
+
+        if branch not in {ref.name for ref in refs.branches}:
+            return
+
+        prefix_flag = f" --task-prefix {task_prefix}" if task_prefix else ""
+        raise ValueError(
+            f"'{hub_id}' has a progress backup on the branch '{branch}',"
+            f" while '{output_dir}' holds no progress files. This run would"
+            " annotate every row again and its first upload would replace"
+            " the backup with fewer rows. Restore the backup first:\n"
+            "    python scripts/restore_progress_from_hub.py --hub-id"
+            f" {hub_id} --output-dir {output_dir}{prefix_flag}\n"
+            "Pass overwrite=True to delete the backup branch and annotate"
+            " every row again."
+        )
+
     @destroy_on_error
     def run_annotation(
         self,
@@ -1963,9 +2008,13 @@ class Annotator:
         Raises:
             ValueError: If no prepared data source can be resolved, if a
                 top-level property of the schema has the name of a column that
-                the annotator writes itself, or if ``output_schema`` differs
+                the annotator writes itself, if ``output_schema`` differs
                 from the one that the finished rows were annotated with while
-                ``overwrite`` is off.
+                ``overwrite`` is off, or if ``hub_id`` has a progress backup
+                while the local progress directory is empty. Restore that
+                backup with
+                [`restore_progress_from_hub`][llm_annotator.hub.restore_progress_from_hub],
+                or pass ``overwrite`` to discard it.
             TooManyConsecutiveFailedBatchesError: If
                 ``max_consecutive_failed_batches`` consecutive batches fail
                 entirely.
@@ -2112,6 +2161,17 @@ class Annotator:
         root_pdout.mkdir(exist_ok=True, parents=True)
         process_pdout = root_pdout / f"{task_prefix}{PROGRESS_DS_LOCAL_SUBDIR}"
         process_pdout.mkdir(exist_ok=True, parents=True)
+
+        if (
+            hub_id
+            and upload_every_n_samples > 0
+            and not any(process_pdout.glob("*.jsonl"))
+        ):
+            self._check_progress_backup_branch(
+                hub_id=hub_id,
+                output_dir=root_pdout,
+                task_prefix=task_prefix,
+            )
 
         if retry_errors:
             retried_rows = drop_jsonl_rows(
@@ -2889,12 +2949,18 @@ class Annotator:
         """Upload the output directory to Hugging Face Hub.
 
         Creates a dataset repository and uploads all annotation files,
-        excluding cached input data. Uses a separate branch for uploads.
+        excluding cached input data. Uses a separate branch for uploads. The
+        selection record next to ``dir_path`` is uploaded with them, so that
+        a machine which restores the backup keeps the checks on the settings
+        of the run.
 
         Args:
             dir_path: Path to the directory containing annotation files.
             hub_id: Optional Hugging Face dataset ID to upload into.
             task_prefix: String prefix to use for branch naming.
+
+        Raises:
+            ValueError: If no ``hub_id`` is given.
         """
         if not hub_id:
             raise ValueError(
@@ -2917,6 +2983,17 @@ class Annotator:
             revision=f"{task_prefix}{PROGRESS_BACKUP_BRANCH_SUFF}",
             print_report=False,
         )
+
+        record_path = SelectionRecord.path(Path(dir_path).parent, task_prefix)
+        if record_path.is_file():
+            upload_file(
+                path_or_fileobj=str(record_path),
+                path_in_repo=record_path.name,
+                repo_id=hub_id,
+                repo_type="dataset",
+                revision=f"{task_prefix}{PROGRESS_BACKUP_BRANCH_SUFF}",
+            )
+
         if self.verbose:
             self._logger.info(
                 "Backed-up data to the HF Hub:"

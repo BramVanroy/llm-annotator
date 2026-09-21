@@ -159,6 +159,7 @@ nav:
       - Annotator: api/annotator.md
       - Pipeline: api/pipeline.md
       - Config: api/config.md
+      - Hub restore: api/hub.md
       - Pool: api/pool.md
       - Clients:
           - Base: api/clients/base.md

@@ -1137,12 +1137,141 @@ def test_push_dir_to_hub_calls_hf_helpers(
         "llm_annotator.annotator.upload_large_folder",
         lambda *args, **kwargs: called.append("upload"),
     )
+    monkeypatch.setattr(
+        "llm_annotator.annotator.upload_file",
+        lambda *args, **kwargs: called.append("record"),
+    )
 
     with pytest.raises(ValueError, match="must be set"):
         annotator.push_progress_to_hub(tmp_path, hub_id=None)
 
     annotator.push_progress_to_hub(tmp_path, hub_id="me/test")
     assert called == ["repo", "branch", "upload"]
+
+
+def test_push_progress_to_hub_uploads_the_selection_record(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Verifies the record next to the progress directory travels with the
+    # backup, so a restore keeps the checks on the run's settings.
+    uploads: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        "llm_annotator.annotator.create_repo", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        "llm_annotator.annotator.create_branch", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        "llm_annotator.annotator.upload_large_folder", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        "llm_annotator.annotator.upload_file",
+        lambda *a, **kw: uploads.append(kw),
+    )
+
+    progress_dir = tmp_path / "qa_progress_backup"
+    progress_dir.mkdir()
+    SelectionRecord(
+        max_num_samples=None,
+        source_rows=1,
+        selected_rows=1,
+        components={"prompt_template": "abc"},
+    ).write(tmp_path, "qa_")
+
+    Annotator(client=DummyClient()).push_progress_to_hub(
+        progress_dir, hub_id="me/test", task_prefix="qa_"
+    )
+
+    assert len(uploads) == 1
+    assert uploads[0]["path_in_repo"] == "qa_selection.json"
+    assert uploads[0]["revision"] == "qa_progress_backup"
+    assert uploads[0]["repo_type"] == "dataset"
+
+
+def test_run_annotation_refuses_to_overwrite_a_hub_backup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Verifies a run that starts with no local progress files stops instead
+    # of replacing the Hub backup with its own, shorter files.
+    prepared_ds = Dataset.from_dict(
+        {"idx": [0], "qa_messages": [[{"role": "user", "content": "Q"}]]}
+    )
+    branch = types.SimpleNamespace(name="qa_progress_backup")
+    monkeypatch.setattr(
+        "llm_annotator.annotator.list_repo_refs",
+        lambda *a, **kw: types.SimpleNamespace(branches=[branch]),
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        Annotator(client=DummyClient()).run_annotation(
+            output_dir=tmp_path / "out",
+            prompt_template="Q: {text}",
+            prepared_dataset=prepared_ds,
+            task_prefix="qa_",
+            hub_id="me/test",
+            upload_every_n_samples=1,
+        )
+
+    message = str(excinfo.value)
+    assert "restore_progress_from_hub.py" in message
+    assert "--task-prefix qa_" in message
+    assert "overwrite=True" in message
+
+
+def test_run_annotation_starts_when_the_backup_branch_is_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Verifies an ordinary first run, and a repository that cannot be
+    # listed, both go ahead.
+    prepared_ds = Dataset.from_dict(
+        {"idx": [0], "messages": [[{"role": "user", "content": "Q"}]]}
+    )
+    monkeypatch.setattr(
+        "llm_annotator.annotator.create_repo", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        "llm_annotator.annotator.create_branch", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        "llm_annotator.annotator.upload_large_folder", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        "llm_annotator.annotator.upload_file", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        "llm_annotator.annotator.delete_branch", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        "llm_annotator.annotator.upload_folder", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(Dataset, "push_to_hub", lambda *a, **kw: None)
+
+    monkeypatch.setattr(
+        "llm_annotator.annotator.list_repo_refs",
+        lambda *a, **kw: types.SimpleNamespace(branches=[]),
+    )
+    empty = Annotator(client=DummyClient()).run_annotation(
+        output_dir=tmp_path / "empty",
+        prompt_template="Q: {text}",
+        prepared_dataset=prepared_ds,
+        hub_id="me/test",
+        upload_every_n_samples=1,
+    )
+    assert len(empty) == 1
+
+    def _no_repo(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("no such repository")
+
+    monkeypatch.setattr("llm_annotator.annotator.list_repo_refs", _no_repo)
+    unreachable = Annotator(client=DummyClient()).run_annotation(
+        output_dir=tmp_path / "unreachable",
+        prompt_template="Q: {text}",
+        prepared_dataset=prepared_ds,
+        hub_id="me/test",
+        upload_every_n_samples=1,
+    )
+    assert len(unreachable) == 1
 
 
 def test_run_annotation_pushes_progress_to_the_prefixed_branch(
@@ -1181,6 +1310,13 @@ def test_run_annotation_pushes_progress_to_the_prefixed_branch(
     )
     monkeypatch.setattr(
         "llm_annotator.annotator.upload_folder", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        "llm_annotator.annotator.upload_file", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        "llm_annotator.annotator.list_repo_refs",
+        lambda *a, **kw: types.SimpleNamespace(branches=[]),
     )
     monkeypatch.setattr(Dataset, "push_to_hub", lambda *a, **kw: None)
 

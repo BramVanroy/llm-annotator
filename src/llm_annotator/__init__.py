@@ -35,6 +35,7 @@ from .config import PipelineConfig as PipelineConfig
 from .config import StepConfig as StepConfig
 from .config import load_config_file as load_config_file
 from .config import load_pipeline_config as load_pipeline_config
+from .hub import restore_progress_from_hub as restore_progress_from_hub
 from .logging_utils import configure_logging as configure_logging
 from .logging_utils import get_logger as get_logger
 from .logging_utils import set_log_level as set_log_level
@@ -79,6 +80,7 @@ __all__ = [
     "get_logger",
     "load_config_file",
     "load_pipeline_config",
+    "restore_progress_from_hub",
     "run_pipeline",
     "set_log_level",
     "wait_for_servers",

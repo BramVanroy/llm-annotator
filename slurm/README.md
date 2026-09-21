@@ -282,6 +282,15 @@ the steps:
 ./slurm/submit_pipeline.sh --steps rate-qa my-pipeline.yaml
 ```
 
+A purged scratch directory is a different case. The prepared data comes back
+from its Hub branch on its own; the JSONL progress files do not. Restore a
+step's progress backup before you resubmit, with that step's own directory
+(`<output_dir>/<NN>-<step>/annotate/`) and prefix (`<step>_`):
+
+```sh
+python scripts/restore_progress_from_hub.py --hub-id user/my-dataset --output-dir outputs/qa/02-rate-qa/annotate --task-prefix rate-qa_
+```
+
 ## Running a step yourself
 
 The scripts add nothing the CLI cannot do, so any step can be run by hand — from
