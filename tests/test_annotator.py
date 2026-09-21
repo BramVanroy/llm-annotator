@@ -1954,6 +1954,30 @@ def test_post_annotate_deletes_hub_branches(
     assert ("owner/output", "prepared_dataset") in deleted
 
 
+def test_overwrite_deletes_only_the_progress_branch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Verifies overwrite drops the Hub backup of the discarded rows and
+    # leaves the prepared-data branch, like it does on disk.
+    annotator = Annotator(client=DummyClient())
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    deleted: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "llm_annotator.annotator.delete_branch",
+        lambda repo_id, *, branch, repo_type: deleted.append(
+            (repo_id, branch)
+        ),
+    )
+
+    annotator._remove_task_output(
+        root_pdout=out_dir, task_prefix="qa_", hub_id="owner/output"
+    )
+
+    assert deleted == [("owner/output", "qa_progress_backup")]
+
+
 def test_get_skip_idxs_repairs_truncated_last_line(
     tmp_path: Path, dummy_annotator: Annotator
 ) -> None:
