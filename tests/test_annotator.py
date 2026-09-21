@@ -1134,7 +1134,7 @@ def test_push_dir_to_hub_calls_hf_helpers(
         lambda *args, **kwargs: called.append("branch"),
     )
     monkeypatch.setattr(
-        "llm_annotator.annotator.upload_large_folder",
+        "llm_annotator.annotator.upload_folder",
         lambda *args, **kwargs: called.append("upload"),
     )
     monkeypatch.setattr(
@@ -1163,7 +1163,7 @@ def test_push_progress_to_hub_uploads_the_selection_record(
         "llm_annotator.annotator.create_branch", lambda *a, **kw: None
     )
     monkeypatch.setattr(
-        "llm_annotator.annotator.upload_large_folder", lambda *a, **kw: None
+        "llm_annotator.annotator.upload_folder", lambda *a, **kw: None
     )
     monkeypatch.setattr(
         "llm_annotator.annotator.upload_file",
@@ -1234,16 +1234,13 @@ def test_run_annotation_starts_when_the_backup_branch_is_absent(
         "llm_annotator.annotator.create_branch", lambda *a, **kw: None
     )
     monkeypatch.setattr(
-        "llm_annotator.annotator.upload_large_folder", lambda *a, **kw: None
+        "llm_annotator.annotator.upload_folder", lambda *a, **kw: None
     )
     monkeypatch.setattr(
         "llm_annotator.annotator.upload_file", lambda *a, **kw: None
     )
     monkeypatch.setattr(
         "llm_annotator.annotator.delete_branch", lambda *a, **kw: None
-    )
-    monkeypatch.setattr(
-        "llm_annotator.annotator.upload_folder", lambda *a, **kw: None
     )
     monkeypatch.setattr(Dataset, "push_to_hub", lambda *a, **kw: None)
 
@@ -1300,16 +1297,18 @@ def test_run_annotation_pushes_progress_to_the_prefixed_branch(
         "llm_annotator.annotator.create_branch",
         lambda *a, **kw: branches.append(kw["branch"]),
     )
+
+    def _record_upload(*args: Any, **kwargs: Any) -> None:
+        # The metadata upload shares this helper and has no revision.
+        if "revision" in kwargs:
+            revisions.append(kwargs["revision"])
+
     monkeypatch.setattr(
-        "llm_annotator.annotator.upload_large_folder",
-        lambda *a, **kw: revisions.append(kw["revision"]),
+        "llm_annotator.annotator.upload_folder", _record_upload
     )
     monkeypatch.setattr(
         "llm_annotator.annotator.delete_branch",
         lambda *a, **kw: deleted.append(kw["branch"]),
-    )
-    monkeypatch.setattr(
-        "llm_annotator.annotator.upload_folder", lambda *a, **kw: None
     )
     monkeypatch.setattr(
         "llm_annotator.annotator.upload_file", lambda *a, **kw: None

@@ -20,6 +20,7 @@ from os import cpu_count
 from pathlib import Path
 from queue import Empty, SimpleQueue
 from threading import Event, Lock
+from time import perf_counter
 from typing import (
     Any,
     Callable,
@@ -46,7 +47,6 @@ from huggingface_hub import (
     list_repo_refs,
     upload_file,
     upload_folder,
-    upload_large_folder,
 )
 from tqdm import tqdm
 
@@ -69,6 +69,7 @@ from llm_annotator.utils import (
     extract_prompt_prefix,
     get_hash,
     get_lib_versions,
+    read_jsonl_idx,
     remove_empty_jsonl_files,
 )
 
@@ -98,6 +99,9 @@ PREPARED_DS_LOCAL_SUBDIR = "prepared_dataset"
 PROGRESS_BACKUP_BRANCH_SUFF = "progress_backup"
 PROGRESS_DS_LOCAL_SUBDIR = "progress_backup"
 SELECTION_RECORD_FILE = "selection.json"
+# Where the bytes of the progress file that the writer has open are copied
+# to while a background backup uploads them.
+PROGRESS_UPLOAD_FILE = "progress_upload.jsonl"
 METADATA_LOCAL_SUBDIR = "metadata"
 METADATA_FILE_SUFF = "annotation_metadata.json"
 VERSION_FILE = "_version.json"
@@ -171,6 +175,107 @@ def _resolve_samples_per_output_file(
         )
 
     return max_samples_per_output_file
+
+
+def _copy_file_prefix(*, src: Path, dest: Path, num_bytes: int) -> None:
+    """Copy the first bytes of a file to another path.
+
+    Args:
+        src: File to read from.
+        dest: File to write. An existing file is replaced.
+        num_bytes: How many bytes to copy. A shorter source is copied whole.
+    """
+    remaining = num_bytes
+    with src.open("rb") as fhin, dest.open("wb") as fhout:
+        while remaining > 0:
+            chunk = fhin.read(min(remaining, 1024 * 1024))
+            if not chunk:
+                break
+            fhout.write(chunk)
+            remaining -= len(chunk)
+
+
+class _ProgressUploader:
+    """Run the Hub progress backups of one run off the writer loop.
+
+    The writer calls ``request`` when a cycle is due and goes on to the next
+    batch while the upload runs on one background thread. A request that
+    arrives while the previous upload still runs is dropped, since the next
+    one carries the same rows and the ones after them. A failed upload is
+    logged at warning level and the run continues: the progress files on
+    disk are the copy that a resume reads, and the backup is caught up by
+    the next cycle or by the upload at the end of the run.
+    """
+
+    def __init__(
+        self,
+        *,
+        annotator: "Annotator",
+        process_pdout: Path,
+        hub_id: str,
+        task_prefix: str,
+    ) -> None:
+        """Start the background thread that the uploads run on.
+
+        Args:
+            annotator: The annotator whose ``push_progress_to_hub`` is run.
+            process_pdout: Directory that holds the ``*.jsonl`` files.
+            hub_id: Hugging Face dataset ID to upload into.
+            task_prefix: String prefix to use for branch naming.
+        """
+        self._annotator = annotator
+        self._process_pdout = process_pdout
+        self._hub_id = hub_id
+        self._task_prefix = task_prefix
+        self._executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="progress-upload"
+        )
+        self._future: Future[None] | None = None
+
+    def request(self, *, active_path: Path, active_bytes: int) -> None:
+        """Start an upload cycle unless the previous one still runs.
+
+        Args:
+            active_path: The progress file that the writer has open.
+            active_bytes: How many bytes of that file are written.
+        """
+        if self._future is not None and not self._future.done():
+            LOGGER.debug(
+                "The previous Hub backup is still running, so this cycle is"
+                " skipped. The next one uploads the same rows and more."
+            )
+            return
+
+        self._future = self._executor.submit(
+            self._upload, active_path, active_bytes
+        )
+
+    def _upload(self, active_path: Path, active_bytes: int) -> None:
+        """Upload one cycle and turn a failure into a warning.
+
+        Args:
+            active_path: The progress file that the writer has open.
+            active_bytes: How many bytes of that file are written.
+        """
+        try:
+            self._annotator.push_progress_to_hub(
+                self._process_pdout,
+                hub_id=self._hub_id,
+                task_prefix=self._task_prefix,
+                active_path=active_path,
+                active_bytes=active_bytes,
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                f"Backing up the progress files to '{self._hub_id}' failed:"
+                f" {exc}. The run continues; the files in"
+                f" '{self._process_pdout}' are unaffected and the next"
+                " backup uploads them again."
+            )
+
+    def close(self) -> None:
+        """Wait for an upload that is in flight and stop the thread."""
+        self._executor.shutdown(wait=True)
 
 
 def _bookkeeping_columns(
@@ -654,7 +759,9 @@ class Annotator:
         """Get indices of samples that have already been processed.
 
         Scans existing output files to determine which samples can be skipped
-        in resumed processing.
+        in resumed processing. Only the id is read out of every line
+        (``read_jsonl_idx``), unless a split or config filter is given, which
+        needs the whole row.
 
         A hard crash can leave a partially written final line behind. The code here
         is robust so that it can delete the last non-parseable JSON line and still recover.
@@ -675,6 +782,8 @@ class Annotator:
         if not (process_pdout.exists() and process_pdout.is_dir()):
             return ids_done
 
+        with_row = bool(dataset_split or dataset_config)
+
         for pfin in sorted(process_pdout.glob("*.jsonl")):
             # skip and remove empty files
             if pfin.stat().st_size == 0:
@@ -690,7 +799,9 @@ class Annotator:
                         continue
 
                     try:
-                        row = json.loads(raw_line)
+                        sample_idx, row = read_jsonl_idx(
+                            raw_line, idx_column, with_row=with_row
+                        )
                     except (json.JSONDecodeError, UnicodeDecodeError):
                         # Only the very last line can legitimately be broken.
                         # If a "next" line exists, the file is corrupt (mid-file
@@ -699,32 +810,32 @@ class Annotator:
                             raise
                         truncated = True
                         break
-
-                    valid_bytes += len(raw_line)
-
-                    if idx_column not in row:
+                    except (KeyError, TypeError) as exc:
                         raise ValueError(
                             f"Expected index column '{idx_column}' not found in existing output file '{pfin}'."
                             " Cannot determine which samples to skip on resume. Please check your configuration"
                             " and ensure the index column is included in the output."
-                        )
+                        ) from exc
+
+                    valid_bytes += len(raw_line)
 
                     # Filter on dataset split/config
-                    if (
-                        dataset_split
-                        and "dataset_split" in row
-                        and row["dataset_split"] != dataset_split
-                    ):
-                        continue
+                    if row is not None:
+                        if (
+                            dataset_split
+                            and "dataset_split" in row
+                            and row["dataset_split"] != dataset_split
+                        ):
+                            continue
 
-                    if (
-                        dataset_config
-                        and "dataset_config" in row
-                        and row["dataset_config"] != dataset_config
-                    ):
-                        continue
+                        if (
+                            dataset_config
+                            and "dataset_config" in row
+                            and row["dataset_config"] != dataset_config
+                        ):
+                            continue
 
-                    ids_done.add(row[idx_column])
+                    ids_done.add(sample_idx)
 
             if truncated:
                 self._logger.warning(
@@ -2232,6 +2343,21 @@ class Annotator:
         )
         fhout = pfout.open("a", encoding="utf-8")
 
+        uploader = (
+            _ProgressUploader(
+                annotator=self,
+                process_pdout=process_pdout,
+                hub_id=hub_id,
+                task_prefix=task_prefix,
+            )
+            if hub_id and upload_every_n_samples > 0
+            else None
+        )
+
+        run_started = perf_counter()
+        annotated_n_rows = 0
+        annotated_n_tokens = 0
+
         self._warm_up(
             system_message=system_message,
             prompt_prefix=prompt_template_prefix,
@@ -2251,10 +2377,13 @@ class Annotator:
         def write_rows(rows: list[dict[str, Any]]) -> None:
             """Append rows to the progress files and upload when it is time."""
             nonlocal fhout, processed_n_samples
+            nonlocal annotated_n_rows, annotated_n_tokens
             for row in rows:
                 fhout.write(json.dumps(row, default=str) + "\n")
                 fhout.flush()
                 processed_n_samples += 1
+                annotated_n_rows += 1
+                annotated_n_tokens += row.get(f"{task_prefix}num_tokens") or 0
 
                 time_to_upload = (
                     upload_every_n_samples > 0
@@ -2271,18 +2400,17 @@ class Annotator:
                 if time_to_upload or file_is_full:
                     fhout.close()
                     remove_empty_jsonl_files(process_pdout)
-                    if time_to_upload and hub_id:
-                        self.push_progress_to_hub(
-                            process_pdout,
-                            hub_id=hub_id,
-                            task_prefix=task_prefix,
-                        )
                     pfout = self.get_pfout_name(
                         process_pdout=process_pdout,
                         max_samples_per_output_file=samples_per_output_file,
                         processed_n_samples=processed_n_samples,
                     )
                     fhout = pfout.open("a", encoding="utf-8")
+                    if time_to_upload and uploader is not None:
+                        uploader.request(
+                            active_path=pfout,
+                            active_bytes=pfout.stat().st_size,
+                        )
 
         # Rows of batches in which every sample errored. They are written once
         # a later batch succeeds and dropped when the run aborts, so that the
@@ -2291,8 +2419,11 @@ class Annotator:
         consecutive_failed_batches = 0
         try:
             for batch, results in annotated_batches:
+                # The id comes first so that a resume can read it from the
+                # start of the line instead of parsing the whole row.
                 rows = [
                     {
+                        idx_column: batch[idx_column][i],
                         **{
                             k: v[i]
                             for k, v in batch.items()
@@ -2335,6 +2466,10 @@ class Annotator:
             if callable(close_batches):
                 close_batches()
             fhout.close()
+            if uploader is not None:
+                uploader.close()
+
+        elapsed_seconds = perf_counter() - run_started
 
         remove_empty_jsonl_files(process_pdout)
         if hub_id and upload_every_n_samples > 0:
@@ -2348,6 +2483,9 @@ class Annotator:
             hub_id=hub_id,
             keep_idx_column=keep_idx_column,
             task_prefix=task_prefix,
+            num_rows_annotated=annotated_n_rows,
+            num_output_tokens=annotated_n_tokens,
+            elapsed_seconds=elapsed_seconds,
         )
 
     @destroy_on_error
@@ -2711,6 +2849,9 @@ class Annotator:
         hub_id: str | None = None,
         keep_idx_column: bool = False,
         task_prefix: str = "",
+        num_rows_annotated: int = 0,
+        num_output_tokens: int = 0,
+        elapsed_seconds: float | None = None,
     ) -> Dataset:
         """Build the final dataset out of the progress files and clean up.
 
@@ -2727,6 +2868,10 @@ class Annotator:
             hub_id: Optional Hugging Face dataset ID for uploads and cleanup.
             keep_idx_column: Whether to keep the idx_column in the final dataset before uploading and returning.
             task_prefix: Prefix used for the local cache directory name and the upload branch names.
+            num_rows_annotated: How many rows this invocation annotated.
+            num_output_tokens: How many output tokens this invocation
+                generated.
+            elapsed_seconds: How long this invocation generated for.
 
         Returns:
             The concatenated dataset of all annotation results (invalid samples are NOT removed)
@@ -2811,6 +2956,9 @@ class Annotator:
             dataset=ds,
             task_prefix=task_prefix,
             hub_id=hub_id,
+            num_rows_annotated=num_rows_annotated,
+            num_output_tokens=num_output_tokens,
+            elapsed_seconds=elapsed_seconds,
         )
 
         return ds
@@ -2821,6 +2969,10 @@ class Annotator:
         dataset: Dataset,
         task_prefix: str,
         hub_id: str | None = None,
+        *,
+        num_rows_annotated: int = 0,
+        num_output_tokens: int = 0,
+        elapsed_seconds: float | None = None,
     ) -> None:
         """Write counts and library versions to the metadata subdirectory.
 
@@ -2831,11 +2983,22 @@ class Annotator:
         task. Both are uploaded to the ``metadata`` folder of the Hub
         repository when ``hub_id`` is given.
 
+        The ``run_summary`` of that file covers this invocation only: the
+        rows and the output tokens that it generated, and the seconds from
+        the warm-up to its last written row. A resumed run therefore reports
+        its own throughput and not the average over every invocation. It is
+        ``null`` when the invocation generated nothing, which is what a run
+        that finds every row already annotated does.
+
         Args:
             root_pdout: The root output directory path.
             dataset: The final annotated dataset.
             task_prefix: String prefix to use for internal column names.
             hub_id: Optional Hugging Face dataset ID to upload metadata to.
+            num_rows_annotated: How many rows this invocation annotated.
+            num_output_tokens: How many output tokens this invocation
+                generated. An errored row reports no tokens and counts as 0.
+            elapsed_seconds: How long this invocation generated for.
         """
         mtd_dir = root_pdout / METADATA_LOCAL_SUBDIR
         mtd_dir.mkdir(exist_ok=True)
@@ -2875,10 +3038,34 @@ class Annotator:
                 ]
                 error_type_counts.update(error_types)
 
+        run_summary: dict[str, float] | None = None
+        if num_rows_annotated and elapsed_seconds and elapsed_seconds > 0:
+            run_summary = {
+                "num_rows": num_rows_annotated,
+                "num_output_tokens": num_output_tokens,
+                "elapsed_seconds": round(elapsed_seconds, 2),
+                "rows_per_second": round(
+                    num_rows_annotated / elapsed_seconds, 2
+                ),
+                "output_tokens_per_second": round(
+                    num_output_tokens / elapsed_seconds, 2
+                ),
+            }
+            self._logger.info(
+                f"This run annotated {num_rows_annotated:,} row(s) and"
+                f" {num_output_tokens:,} output token(s) in"
+                f" {elapsed_seconds:,.1f}s:"
+                f" {run_summary['rows_per_second']:,.2f} row(s) per second"
+                f" and {run_summary['output_tokens_per_second']:,.2f} output"
+                " token(s) per second. Rows that an earlier run of the same"
+                " output directory annotated are not counted."
+            )
+
         mtd = {
             "finish_reason_counts": dict(finish_reason_counts),
             "valid_fields_counts": dict(valid_fields_counts),
             "error_type_counts": dict(error_type_counts),
+            "run_summary": run_summary,
         }
 
         mtd_dir.joinpath(f"{task_prefix}{METADATA_FILE_SUFF}").write_text(
@@ -2945,19 +3132,32 @@ class Annotator:
         hub_id: str | None = None,
         *,
         task_prefix: str = "",
+        active_path: Path | None = None,
+        active_bytes: int = 0,
     ) -> None:
-        """Upload the output directory to Hugging Face Hub.
+        """Upload the progress files of a run to the Hugging Face Hub.
 
-        Creates a dataset repository and uploads all annotation files,
-        excluding cached input data. Uses a separate branch for uploads. The
-        selection record next to ``dir_path`` is uploaded with them, so that
-        a machine which restores the backup keeps the checks on the settings
-        of the run.
+        Creates the dataset repository and its
+        ``<task_prefix>progress_backup`` branch, and uploads the ``*.jsonl``
+        files of ``dir_path`` plus the selection record next to it, which is
+        what ``llm_annotator.hub.restore_progress_from_hub`` reads back.
+
+        ``active_path`` names the progress file that the writer has open, so
+        that a background upload does not read a file while it grows. That
+        file is left out of the folder upload and its first ``active_bytes``
+        bytes are copied out and uploaded from the copy, which ends on a
+        line boundary. Uploading the file itself would hash it and then read
+        it again, and for a file that grew in between the stored object no
+        longer matches the checksum of the commit.
 
         Args:
-            dir_path: Path to the directory containing annotation files.
+            dir_path: Directory that holds the ``*.jsonl`` progress files.
             hub_id: Optional Hugging Face dataset ID to upload into.
             task_prefix: String prefix to use for branch naming.
+            active_path: The progress file that the writer has open, when
+                the writer is running.
+            active_bytes: How many bytes of ``active_path`` were written
+                when the upload was requested.
 
         Raises:
             ValueError: If no ``hub_id`` is given.
@@ -2967,37 +3167,57 @@ class Annotator:
                 "'hub_id' must be set to push data to the HuggingFace Hub"
             )
 
+        pdout = Path(dir_path)
+        branch = f"{task_prefix}{PROGRESS_BACKUP_BRANCH_SUFF}"
         create_repo(hub_id, repo_type="dataset", exist_ok=True, private=True)
         create_branch(
             hub_id,
             repo_type="dataset",
-            branch=f"{task_prefix}{PROGRESS_BACKUP_BRANCH_SUFF}",
+            branch=branch,
             exist_ok=True,
         )
 
-        upload_large_folder(
+        upload_folder(
             repo_id=hub_id,
             repo_type="dataset",
-            folder_path=str(dir_path),
-            private=True,
-            revision=f"{task_prefix}{PROGRESS_BACKUP_BRANCH_SUFF}",
-            print_report=False,
+            folder_path=str(pdout),
+            revision=branch,
+            allow_patterns=["*.jsonl"],
+            ignore_patterns=(
+                [active_path.name] if active_path is not None else None
+            ),
         )
 
-        record_path = SelectionRecord.path(Path(dir_path).parent, task_prefix)
+        if active_path is not None and active_bytes > 0:
+            staged = pdout.parent / f"{task_prefix}{PROGRESS_UPLOAD_FILE}"
+            try:
+                _copy_file_prefix(
+                    src=active_path, dest=staged, num_bytes=active_bytes
+                )
+                upload_file(
+                    path_or_fileobj=str(staged),
+                    path_in_repo=active_path.name,
+                    repo_id=hub_id,
+                    repo_type="dataset",
+                    revision=branch,
+                )
+            finally:
+                staged.unlink(missing_ok=True)
+
+        record_path = SelectionRecord.path(pdout.parent, task_prefix)
         if record_path.is_file():
             upload_file(
                 path_or_fileobj=str(record_path),
                 path_in_repo=record_path.name,
                 repo_id=hub_id,
                 repo_type="dataset",
-                revision=f"{task_prefix}{PROGRESS_BACKUP_BRANCH_SUFF}",
+                revision=branch,
             )
 
         if self.verbose:
             self._logger.info(
                 "Backed-up data to the HF Hub:"
-                f" https://huggingface.co/datasets/{hub_id}/tree/{task_prefix}{PROGRESS_BACKUP_BRANCH_SUFF}"
+                f" https://huggingface.co/datasets/{hub_id}/tree/{branch}"
             )
 
 
