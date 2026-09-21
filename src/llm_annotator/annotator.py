@@ -106,7 +106,7 @@ VERSION_FILE = "_version.json"
 FINAL_DS_FILES = ("dataset_info.json", "state.json")
 FINAL_DS_SHARD_GLOB = "data-*-of-*.arrow"
 
-# How many batches a vLLM pool keeps queued per concurrent request slot when
+# How many batches a vLLM pool keeps queued per concurrent batch slot when
 # `queue_size` is not given. One batch per slot would keep every server busy;
 # the extra three absorb the time between a batch finishing and the next one
 # being dispatched.
@@ -2977,7 +2977,7 @@ class VLLMQueueAnnotator(Annotator):
     it keeps a bounded queue of batches in flight over a pool of vLLM server clients,
     handing each batch to whichever server is free. The process can be simplified as:
 
-    - add each client to a queue once per allowed concurrent request;
+    - add each client to a queue once per allowed concurrent batch;
     - for each batch:
         - pop a client from the queue;
         - send the batch to that client;
@@ -3000,16 +3000,16 @@ class VLLMQueueAnnotator(Annotator):
         queue_size: Maximum number of batches in flight (dispatched but not yet
             written out). This bounds memory, *not* the amount of work: the
             full dataset is always annotated. ``None`` resolves to four batches
-            per concurrent request slot, and any lower value is raised to the
+            per concurrent batch slot, and any lower value is raised to the
             number of slots, since a smaller queue would leave servers idle.
             After initialisation the attribute always holds the resolved value.
             A config-driven run rejects a too-small value when the config
             loads instead of raising it here.
-        max_concurrent_batches_per_client: Maximum number of simultaneous
-            batch requests sent to each server. This is independent of
-            ``batch_size``. Defaults to four for high throughput.
+        max_concurrent_batches_per_client: Maximum number of batches each
+            server handles at once. This is independent of ``batch_size``.
+            Defaults to four for high throughput.
         max_workers: Maximum worker threads used for batch annotation. It can
-            exceed the initially available request slots when additional servers
+            exceed the initially available batch slots when additional servers
             are expected to join, allowing workers to wait for and immediately
             use those late-ready servers.
         batch_size: Maximum number of samples sent to a worker in one request.
@@ -3105,7 +3105,7 @@ class VLLMQueueAnnotator(Annotator):
 
     @property
     def _max_workers(self) -> int:
-        """Return the total number of concurrent batch requests."""
+        """Return the total number of batches the pool runs at once."""
         return len(self.clients) * self.max_concurrent_batches_per_client
 
     def _resolve_max_concurrent_batches_per_client(
@@ -3130,7 +3130,7 @@ class VLLMQueueAnnotator(Annotator):
         Args:
             queue_size: Requested number of batches in flight, or ``None`` to
                 derive it from the number of slots.
-            num_slots: Concurrent request slots in the pool, that is, servers
+            num_slots: Concurrent batch slots in the pool, that is, servers
                 times ``max_concurrent_batches_per_client``.
 
         Returns:
@@ -3176,7 +3176,7 @@ class VLLMQueueAnnotator(Annotator):
         if queue_size is not None and resolved > queue_size:
             self._logger.warning(
                 f"'queue_size' ({queue_size}) is smaller than the number of"
-                f" concurrent batch requests ({self._max_workers}), which"
+                f" batches the pool runs at once ({self._max_workers}), which"
                 " would leave servers idle. We're raising it to that number as a"
                 " sensible minimal value."
             )
@@ -3433,7 +3433,7 @@ class VLLMQueueAnnotator(Annotator):
                 return batch, results
 
     def _acquire_client(self) -> Client[Any]:
-        """Block until a client has a free request slot and check it out.
+        """Block until a client has a free batch slot and check it out.
 
         Returns:
             The checked-out client.
@@ -3444,7 +3444,7 @@ class VLLMQueueAnnotator(Annotator):
         while True:
             if self._shutdown_started.is_set():
                 raise RuntimeError(
-                    "Cannot start a new batch request after shutdown begins."
+                    "Cannot start a new batch after shutdown begins."
                 )
             try:
                 client = self._client_pool.get(timeout=1)
@@ -3454,7 +3454,7 @@ class VLLMQueueAnnotator(Annotator):
         with self._clients_lock:
             if self._shutdown_started.is_set():
                 raise RuntimeError(
-                    "Cannot start a new batch request after shutdown begins."
+                    "Cannot start a new batch after shutdown begins."
                 )
             self._checked_out_clients += 1
         return client

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 import llm_annotator.pool as pool_mod
+from llm_annotator.clients.vllm_online_client import VLLMOnlineClient
 from llm_annotator.config import ClientConfig, PoolConfig
 from llm_annotator.pool import (
     _watch_pool,
@@ -79,6 +80,33 @@ def test_build_annotator_counts_unique_pool_members(
 
     assert isinstance(annotator, FakeAnnotator)
     assert seen["max_workers"] == 8
+
+
+def test_build_client_forwards_init_to_every_pool_member(
+    fake_openai_module: dict[str, Any], tmp_path: Path
+) -> None:
+    """A pool member is built from `init`, plus the base URL of its server."""
+    _ = fake_openai_module
+    client_config = ClientConfig(
+        provider="vllm_online",
+        model="m",
+        base_urls=["http://a:8000/v1", "http://b:8000/v1"],
+        wait_for_servers=0,
+        init={"timeout": 60.0, "max_retries": 0, "max_workers": 8},
+    )
+
+    clients = build_client(client_config, tmp_path)
+
+    assert isinstance(clients, list)
+    members = [cast(VLLMOnlineClient, client) for client in clients]
+    assert [member.base_url for member in members] == [
+        "http://a:8000/v1",
+        "http://b:8000/v1",
+    ]
+    for member in members:
+        assert member.timeout == 60.0
+        assert member.max_retries == 0
+        assert member.max_workers == 8
 
 
 def test_pool_watcher_stops_after_destroy(

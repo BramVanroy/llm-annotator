@@ -185,7 +185,15 @@ def test_unknown_init_key_names_the_accepted_ones() -> None:
     [
         ("openai", {"api_key": "k", "base_url": "u", "max_workers": 2}),
         ("claude", {"api_key": "k", "on_error": "raise"}),
-        ("vllm_online", {"base_url": "http://a:8000/v1"}),
+        (
+            "vllm_online",
+            {
+                "base_url": "http://a:8000/v1",
+                "timeout": 7200.0,
+                "max_retries": 0,
+                "max_workers": 64,
+            },
+        ),
         ("vllm_offline", {"language_model_only": False, "on_error": "raise"}),
     ],
 )
@@ -1181,7 +1189,7 @@ def pool_client(**overrides: Any) -> dict[str, Any]:
 
 
 def test_queue_size_below_the_pool_minimum_is_rejected() -> None:
-    # 4 servers x 4 concurrent requests each = 16 requests in flight, so a
+    # 4 servers x 4 concurrent batches each = 16 batches in flight, so a
     # queue of 8 could never fill the pool.
     with pytest.raises(ValidationError, match="minimum of 16"):
         ClientConfig.model_validate(

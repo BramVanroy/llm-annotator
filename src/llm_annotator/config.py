@@ -46,7 +46,7 @@ StepKind = Literal["vllm_pool", "vllm_online", "vllm_offline", "api"]
 """What a step needs in order to run, as reported by ``--describe-steps``."""
 
 DEFAULT_MAX_CONCURRENT_BATCHES = 4
-"""Simultaneous batch requests per vLLM server unless a step says otherwise."""
+"""Simultaneous batches per vLLM server unless a step says otherwise."""
 
 LOCAL_DATASET_BUILDERS = frozenset(
     {
@@ -656,16 +656,16 @@ class ClientConfig(_StrictBase):
             be absolute, which is what a job scheduler writing into a scratch
             directory needs.
         queue_size: Batches kept in flight across the pool. ``null`` derives
-            it from the pool, at four batches per concurrent request slot. A
+            it from the pool, at four batches per concurrent batch slot. A
             pool runs ``servers`` times ``max_concurrent_batches_per_client``
-            requests at once, and a queue below that number would leave
+            batches at once, and a queue below that number would leave
             servers idle, so it is rejected. Sizes a pool, so it is accepted
             for ``vllm_online`` only.
-        max_concurrent_batches_per_client: Maximum simultaneous batch requests
-            sent to each vLLM server. Independent of ``batch_size``: each of
-            these requests carries ``batch_size`` samples, so one server holds
-            up to their product. Sizes a pool, so it is accepted for
-            ``vllm_online`` only.
+        max_concurrent_batches_per_client: Maximum number of batches handled
+            at once by each vLLM server. Independent of ``batch_size``: each
+            batch carries ``batch_size`` samples, so one server holds up to
+            their product. Sizes a pool, so it is accepted for ``vllm_online``
+            only.
         wait_for_servers: Seconds to wait for the ``/health`` endpoints of
             ``pool.min_servers`` servers, or of every server the pool source
             names when it names fewer, before starting. ``0`` disables the
@@ -868,11 +868,11 @@ class ClientConfig(_StrictBase):
                 f"'queue_size' is {self.queue_size}, below the minimum of"
                 f" {minimum} for this step: {servers} server(s) times"
                 f" {self.max_concurrent_batches_per_client}"
-                " concurrent request(s) each"
+                " concurrent batch(es) each"
                 " ('max_concurrent_batches_per_client'). A queue smaller than"
                 " that leaves servers idle. Set 'queue_size' to at least"
                 f" {minimum}, or remove it to keep"
-                f" {QUEUE_BATCHES_PER_SLOT} batches queued per request slot"
+                f" {QUEUE_BATCHES_PER_SLOT} batches queued per batch slot"
                 f" ({QUEUE_BATCHES_PER_SLOT * minimum})."
             )
 

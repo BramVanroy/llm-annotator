@@ -9,8 +9,6 @@ which lives here.
 
 from __future__ import annotations
 
-import secrets
-import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -23,12 +21,33 @@ from llm_annotator.clients.base import (
     Response,
     reject_multiple_responses,
 )
-from llm_annotator.clients.exceptions import ConfigurationError, ProviderError
+from llm_annotator.clients.exceptions import ConfigurationError
 from llm_annotator.clients.openai_client import OpenAIClient
 from llm_annotator.logging_utils import get_logger
 
 
 LOGGER = get_logger("clients.vllm_online")
+
+MAX_CONNECTIONS = 8192
+"""How many sockets one client may hold open to its server at once.
+
+The OpenAI SDK caps its HTTP client at 1000 connections
+(``DEFAULT_CONNECTION_LIMITS`` in ``openai/_constants.py``), and a pooled run
+can ask for more: a ``batch_size`` of 1024 times the default
+``max_concurrent_batches_per_client`` of 4 is 4096 requests in flight through
+one client. Above the cap httpx queues the rest, which would keep part of a
+batch from reaching the server that is supposed to schedule it."""
+
+CONNECT_TIMEOUT = 5.0
+"""Seconds to wait for the TCP connection of one request, apart from the
+generation itself.
+
+A host that drops packets rather than refusing the connection (a node that
+crashed, say) answers neither, so without a short connect timeout every
+request of the batch would sit there for the full ``timeout`` before
+[`VLLMQueueAnnotator`][llm_annotator.annotator.VLLMQueueAnnotator] gets the
+errors it evicts the server on. This is the OpenAI SDK's own connect
+timeout."""
 
 
 def server_is_healthy(base_url: str, timeout: float) -> bool:
@@ -152,9 +171,8 @@ class VLLMOnlineRuntimeOptions(VLLMBaseRuntimeOptions):
     chat_template: str | None = None
     mm_processor_kwargs: dict[str, Any] | None = None
 
-    # Payload keys vLLM accepts but the OpenAI SDK's typed create() does not.
-    # On the SDK path they have to travel inside extra_body; the raw batch
-    # endpoint takes them at the top level like everything else.
+    # Payload keys vLLM accepts but the OpenAI SDK's typed create() does not,
+    # so they have to travel inside extra_body.
     _VLLM_ONLY_KEYS: ClassVar[frozenset[str]] = frozenset(
         {
             "top_k",
@@ -167,14 +185,27 @@ class VLLMOnlineRuntimeOptions(VLLMBaseRuntimeOptions):
     )
 
     def to_payload(self) -> dict[str, Any]:
-        """Build the flat JSON body for vLLM's own endpoints.
+        """Build the flat JSON body for vLLM's chat-completions route.
 
-        Suitable for a request made directly against the server, where every
-        parameter sits at the top level of the body.
+        A ``json_schema`` becomes a ``response_format`` of type
+        ``json_schema``, which is the form vLLM 0.29 reads on
+        ``/v1/chat/completions``: ``structured_outputs_from_response_format``
+        (``vllm/entrypoints/generate/base/protocol.py``) turns it into the
+        engine's ``StructuredOutputsParams(json=...)``, and it overrides a
+        ``structured_outputs`` block in the same body.
+        [`split_payload`][llm_annotator.clients.vllm_online_client.VLLMOnlineRuntimeOptions.split_payload]
+        divides the result over the SDK's typed arguments and ``extra_body``.
 
         Returns:
             A dict of vLLM server request parameters, including all shared
             base fields.
+
+        Examples:
+            >>> fmt = VLLMOnlineRuntimeOptions(
+            ...     json_schema={"type": "object"}
+            ... ).to_payload()["response_format"]
+            >>> fmt["type"], fmt["json_schema"]["name"]
+            ('json_schema', 'response')
         """
         payload = VLLMBaseRuntimeOptions.to_payload(self)
         if self.max_completion_tokens is not None:
@@ -186,6 +217,15 @@ class VLLMOnlineRuntimeOptions(VLLMBaseRuntimeOptions):
             payload["chat_template_kwargs"] = self.chat_template_kwargs
         if self.mm_processor_kwargs is not None:
             payload["mm_processor_kwargs"] = self.mm_processor_kwargs
+        if self.json_schema is not None:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "response",
+                    "schema": self.json_schema,
+                    "strict": True,
+                },
+            }
         if self.extra_body:
             payload.update(self.extra_body)
         return payload
@@ -225,7 +265,16 @@ class VLLMOnlineRuntimeOptions(VLLMBaseRuntimeOptions):
 
 
 class VLLMOnlineClient(OpenAIClient[VLLMOnlineRuntimeOptions]):
-    """Client for a running vLLM OpenAI-compatible server."""
+    """Client for a running vLLM OpenAI-compatible server.
+
+    A batch is one ``/v1/chat/completions`` request per conversation, sent
+    concurrently. The server batches the requests it holds continuously, so
+    they are scheduled together on the GPU, every request carries its own
+    ``usage`` (which fills ``num_output_tokens`` per sample), and a
+    conversation that fails is a single error
+    [`Response`][llm_annotator.clients.base.Response] rather than a failure of
+    the whole batch.
+    """
 
     provider_type = Provider.VLLM_ONLINE
 
@@ -233,6 +282,9 @@ class VLLMOnlineClient(OpenAIClient[VLLMOnlineRuntimeOptions]):
         self,
         model: str | None = None,
         base_url: str = "http://localhost:8000/v1",
+        max_workers: int | None = None,
+        timeout: float = 3600.0,
+        max_retries: int = 2,
         on_error: OnError = "warn",
     ) -> None:
         """Initialize the online vLLM client.
@@ -241,15 +293,55 @@ class VLLMOnlineClient(OpenAIClient[VLLMOnlineRuntimeOptions]):
             model: Model identifier. When omitted, the server is asked which
                 model it serves.
             base_url: Base URL for the vLLM API endpoint.
+            max_workers: Maximum number of requests
+                [`batch_generate`][llm_annotator.clients.vllm_online_client.VLLMOnlineClient.batch_generate]
+                sends at once. ``None`` sends the whole batch, which is what
+                lets the server schedule it as one workload. Lower it only to
+                protect a server that is shared with other jobs.
+            timeout: Seconds one request may spend reading its answer. It
+                covers the wait in the server's queue as well as the
+                generation itself, so a value below the time a full batch
+                needs turns a healthy run into errors. The default of one hour
+                fits a loaded server that holds thousands of prompts. Making
+                the connection has its own, short limit
+                (``CONNECT_TIMEOUT``).
+            max_retries: How often the OpenAI SDK retries a request. It
+                retries connection errors, request timeouts and the status
+                codes 408, 409, 429 and 5xx, with an exponential backoff of
+                0.5 to 8 seconds. Two retries cover a server that restarts
+                without letting a broken pool member stall a batch for long.
             on_error: Error behavior when generation fails.
         """
+        import httpx
+        from openai import DefaultHttpxClient, OpenAI
+
         super().__init__(
             model=model or "",
+            max_workers=max_workers,
             api_key="EMPTY",
             base_url=base_url,
             on_error=on_error,
         )
         self.base_url = base_url
+        self.timeout = timeout
+        self.max_retries = max_retries
+        # Replaces the client the base constructor built on the SDK's
+        # hosted-API defaults (600 s per request, 1000 sockets), both of which
+        # a server that holds a full pool batch runs past. The timeout is a
+        # Timeout rather than the plain float, because httpx reads a float as
+        # all four of its limits, connect included.
+        self._client = OpenAI(
+            api_key="EMPTY",
+            base_url=base_url,
+            timeout=httpx.Timeout(timeout, connect=CONNECT_TIMEOUT),
+            max_retries=max_retries,
+            http_client=DefaultHttpxClient(
+                limits=httpx.Limits(
+                    max_connections=MAX_CONNECTIONS,
+                    max_keepalive_connections=MAX_CONNECTIONS,
+                )
+            ),
+        )
 
         if model is None:
             models = self._client.models.list()
@@ -279,8 +371,6 @@ class VLLMOnlineClient(OpenAIClient[VLLMOnlineRuntimeOptions]):
         API (``top_k``, ``chat_template_kwargs``, ...) are not part of the
         OpenAI SDK's typed ``create()`` signature and have to be nested under
         ``extra_body``.
-        [`batch_generate`][llm_annotator.clients.vllm_online_client.VLLMOnlineClient.batch_generate]
-        needs no such split: it posts the body itself.
 
         Args:
             messages: List of message dicts with "role" and "content" keys.
@@ -301,15 +391,6 @@ class VLLMOnlineClient(OpenAIClient[VLLMOnlineRuntimeOptions]):
         resolved = options or self._default_options()
         request_payload, extra_body = resolved.split_payload()
         request_payload.update({"model": self.model, "messages": messages})
-        if resolved.json_schema is not None:
-            request_payload["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "response",
-                    "schema": resolved.json_schema,
-                    "strict": True,
-                },
-            }
         request_payload.update(gen_kwargs or {})
         if extra_body:
             request_payload["extra_body"] = extra_body
@@ -336,21 +417,15 @@ class VLLMOnlineClient(OpenAIClient[VLLMOnlineRuntimeOptions]):
         use_batch_api: bool = False,
         poll_interval: float = 10.0,
     ) -> list[Response]:
-        """Generate responses for a batch of inputs using vLLM's native batch endpoint.
+        """Generate one response per conversation, all in flight at once.
 
-        Sends all conversations in a single request to ``/v1/chat/completions/batch``.
-        The OpenAI Batch API is not supported; passing ``use_batch_api=True`` raises
-        a [`ConfigurationError`][llm_annotator.clients.exceptions.ConfigurationError].
-
-        !!! note "No per-sample token counts on this path"
-
-            That endpoint reports one ``usage`` block for the whole batch
-            rather than one per choice, so ``num_output_tokens`` is ``None`` on
-            every [`Response`][llm_annotator.clients.base.Response] it returns,
-            and a step's ``{prefix}num_tokens`` column is ``None`` with it.
-            Everything else, including ``reasoning``, is per sample as usual.
-            Use [`generate`][llm_annotator.clients.vllm_online_client.VLLMOnlineClient.generate]
-            or the offline provider when the token counts matter.
+        Each conversation is its own ``/v1/chat/completions`` request. vLLM
+        schedules whatever requests it holds as one continuous batch, so the
+        GPU sees the same workload as a single combined request would give it,
+        while the result stays per sample: response, ``usage`` and error
+        belong to one conversation and cannot be mixed up. The OpenAI Batch
+        API is not supported; ``use_batch_api=True`` raises a
+        [`ConfigurationError`][llm_annotator.clients.exceptions.ConfigurationError].
 
         Args:
             messages: List of message lists, where each list is a conversation.
@@ -370,99 +445,24 @@ class VLLMOnlineClient(OpenAIClient[VLLMOnlineRuntimeOptions]):
 
         Raises:
             ConfigurationError: If ``use_batch_api=True``.
-            ProviderError: If the batch request fails and ``on_error`` is
-                ``"raise"``.
+            ProviderError: If a request fails and ``on_error`` is ``"raise"``.
             ValueError: If the request asks for more than one response.
         """
         if use_batch_api:
             raise ConfigurationError(
-                "The vLLM server client does not support the OpenAI Batch API."
-                " Set use_batch_api=False (the default) to use vLLM's native"
-                " batch endpoint instead."
+                "The vLLM server client does not support the OpenAI Batch"
+                " API. Leave use_batch_api at False: a batch is sent as one"
+                " chat-completions request per conversation, which the server"
+                " schedules together."
             )
-        # avoid unused variable warning for poll_interval, which is ignored
         _ = poll_interval
-        import httpx
-        from openai.types.chat.chat_completion import ChatCompletion
-
-        options = options or self._default_options()
-        # Construct batch request payload following vLLM batch API format
-        request_payload: dict[str, Any] = options.to_payload()
-        request_payload["model"] = self.model
-        request_payload["messages"] = messages
-        if options.json_schema is not None:
-            # TODO: test. Maybe we need "structured_outputs"
-            # https://docs.vllm.ai/en/latest/serving/openai_compatible_server/#extra-parameters_1
-            request_payload["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "response",
-                    "schema": options.json_schema,
-                    "strict": True,
-                },
-            }
-        request_payload.update(gen_kwargs or {})
-        reject_multiple_responses(request_payload)
-
-        try:
-            # The batch endpoint is at /v1/chat/completions/batch
-            batch_url = f"{self._base_url}/chat/completions/batch"
-            # Re-use the underlying httpx client
-            http_client = self._client._client
-            response = http_client.post(batch_url, json=request_payload)
-            response.raise_for_status()
-            data = response.json()
-        except httpx.HTTPStatusError as exc:
-            # exc's own message drops the response body, which is where
-            # vLLM puts the actual reason (e.g. context length, unsupported
-            # param), so surface it explicitly instead of just the status.
-            error_response = self._handle_error(
-                ProviderError(
-                    f"vLLM batch endpoint returned"
-                    f" {exc.response.status_code}: {exc.response.text}"
-                ),
-                context="vLLM batch request failed",
-            )
-            return [error_response for _ in messages]
-        except Exception as exc:
-            error_response = self._handle_error(
-                exc, context="vLLM batch request failed"
-            )
-            return [error_response for _ in messages]
-
-        # Process batch response: convert each choice to a Response object
-        responses: list[Response] = []
-        for idx, choice in enumerate(data.get("choices", [])):
-            # Use random hash as id and current unix timestamp (int) as created
-            # so that we can use self._process_response from super
-            dummy_response = ChatCompletion(
-                id=f"chatcmpl-{secrets.token_hex(12)}",
-                object="chat.completion",
-                created=int(time.time()),
-                model=self.model,
-                choices=[choice],
-            )
-            try:
-                resp = self._process_response(response=dummy_response)
-            except Exception as exc:
-                resp = self._handle_error(
-                    exc,
-                    context=f"vLLM batch response processing failed at index {idx}",
-                )
-
-            responses.append(resp)
-
-        if len(responses) < len(messages):
-            padding = len(messages) - len(responses)
-            err = self._handle_error(
-                ProviderError(
-                    "vLLM batch response returned fewer choices than requested."
-                ),
-                context="vLLM batch response validation failed",
-            )
-            responses.extend([err for _ in range(padding)])
-
-        return responses
+        return self._generate_in_threads(
+            messages=messages,
+            options=options,
+            gen_kwargs=gen_kwargs,
+            max_workers=self.max_workers or len(messages),
+            context="vLLM request failed",
+        )
 
     def _default_options(self) -> VLLMOnlineRuntimeOptions:
         """Return default runtime options for vLLM requests."""

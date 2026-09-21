@@ -346,8 +346,8 @@ def test_submit_pipeline_prints_the_pool_concurrency(tmp_path: Path) -> None:
     process = _run_submit(tmp_path, config_path)
 
     assert process.returncode == 0, process.stderr
-    # 4 concurrent requests per server times the default batch size of 256,
-    # over four servers, with four batches queued per request slot.
+    # 4 concurrent batches per server times the default batch size of 256,
+    # over four servers, with four batches queued per batch slot.
     assert (
         "up to 1024 requests per server, 4096 over the pool,"
         " queue of 64 batches" in process.stdout
