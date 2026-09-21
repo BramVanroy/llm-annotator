@@ -157,40 +157,6 @@ def dummy_annotator() -> Annotator:
     return Annotator(client=DummyClient(), batch_size=2, verbose=True)
 
 
-def test_get_skip_idxs_with_filters(
-    tmp_path: Path, dummy_annotator: Annotator
-) -> None:
-    # Verifies skip-index discovery respects dataset_split and dataset_config filters.
-    p = tmp_path / "out"
-    p.mkdir()
-    (p / "out.jsonl").write_text(
-        "\n".join(
-            [
-                json.dumps(
-                    {
-                        "idx": 1,
-                        "dataset_split": "train",
-                        "dataset_config": "en",
-                    }
-                ),
-                json.dumps(
-                    {"idx": 2, "dataset_split": "test", "dataset_config": "en"}
-                ),
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    only_train = dummy_annotator._get_skip_idxs(
-        process_pdout=p,
-        idx_column="idx",
-        dataset_split="train",
-        dataset_config="en",
-    )
-    assert only_train == {1}
-
-
 def test_load_dataset_validation_errors(
     tmp_path: Path, dummy_annotator: Annotator
 ) -> None:
@@ -3683,31 +3649,6 @@ def test_get_skip_idxs_skips_blank_lines(
     result = dummy_annotator._get_skip_idxs(process_pdout=p, idx_column="idx")
 
     assert result == {1, 2}
-
-
-def test_get_skip_idxs_skips_a_row_with_a_different_dataset_config(
-    tmp_path: Path, dummy_annotator: Annotator
-) -> None:
-    # Verifies a row recorded under another dataset_config is not counted as
-    # done for the config that was asked for.
-    p = tmp_path / "out"
-    p.mkdir()
-    (p / "out.jsonl").write_text(
-        "\n".join(
-            [
-                json.dumps({"idx": 1, "dataset_config": "en"}),
-                json.dumps({"idx": 2, "dataset_config": "fr"}),
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    result = dummy_annotator._get_skip_idxs(
-        process_pdout=p, idx_column="idx", dataset_config="fr"
-    )
-
-    assert result == {2}
 
 
 def test_prepare_data_sort_by_length_orders_prompts(tmp_path: Path) -> None:

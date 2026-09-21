@@ -752,22 +752,17 @@ class Annotator:
         *,
         process_pdout: Path,
         idx_column: str,
-        dataset_split: str | None = None,
-        dataset_config: str | None = None,
     ) -> set[int]:
         """Get indices of samples that have already been processed.
 
         Scans existing output files to determine which samples can be skipped
-        in resumed processing.
-
-        A hard crash can leave a partially written final line behind. The code here
-        is robust so that it can delete the last non-parseable JSON line and still recover.
+        in resumed processing. A hard crash can leave a partially written
+        final line behind, so the last line of a file is dropped when it does
+        not parse.
 
         Args:
             process_pdout: Output directory path to scan for existing files.
             idx_column: Column name used as unique identifier.
-            dataset_split: Only count rows from this split, when recorded.
-            dataset_config: Only count rows from this config, when recorded.
 
         Returns:
             Set of indices that have already been processed.
@@ -780,7 +775,6 @@ class Annotator:
             return ids_done
 
         for pfin in sorted(process_pdout.glob("*.jsonl")):
-            # skip and remove empty files
             if pfin.stat().st_size == 0:
                 pfin.unlink()
                 continue
@@ -812,21 +806,6 @@ class Annotator:
                             " Cannot determine which samples to skip on resume. Please check your configuration"
                             " and ensure the index column is included in the output."
                         )
-
-                    # Filter on dataset split/config
-                    if (
-                        dataset_split
-                        and "dataset_split" in row
-                        and row["dataset_split"] != dataset_split
-                    ):
-                        continue
-
-                    if (
-                        dataset_config
-                        and "dataset_config" in row
-                        and row["dataset_config"] != dataset_config
-                    ):
-                        continue
 
                     ids_done.add(row[idx_column])
 
@@ -2013,8 +1992,6 @@ class Annotator:
         prepared_data_path: str | Path | None = None,
         hub_id: str | None = None,
         overwrite: bool = False,
-        dataset_split: str | None = None,
-        dataset_config: str | None = None,
         keep_columns: str | Iterable[str] | bool | None = None,
         options: ProviderRuntimeOptions | None = None,
         gen_kwargs: dict[str, Any] | None = None,
@@ -2055,8 +2032,6 @@ class Annotator:
                 [`prepare_data`][llm_annotator.annotator.Annotator.prepare_data]
                 to rebuild it. It also keeps the artifacts of every other
                 ``task_prefix`` in the same directory.
-            dataset_split: Dataset split used for skip filtering.
-            dataset_config: Dataset config used for skip filtering.
             keep_columns: Columns to keep in output. ``True`` for all.
             options: Runtime options passed to the client.
             gen_kwargs: Extra request parameters merged over ``options``,
@@ -2281,12 +2256,9 @@ class Annotator:
                 " progress files; they are annotated again ('retry_errors')."
             )
 
-        # Get indices from the local
         skip_idxs = self._get_skip_idxs(
             process_pdout=process_pdout,
             idx_column=idx_column,
-            dataset_split=dataset_split,
-            dataset_config=dataset_config,
         )
         processed_n_samples = len(skip_idxs)
 
