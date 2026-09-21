@@ -855,19 +855,20 @@ class Annotator:
         Raises:
             ValueError: If configuration is invalid or required fields are missing.
         """
-        # only set for VLLMOfflineClient, which cannot be pickled for multiprocessing
+        num_proc = self.num_proc
         pipeline_loaded = getattr(self.client, "_pipeline_loaded", False)
 
         if (
-            self.num_proc is not None
+            num_proc is not None
             and isinstance(self.client, VLLMOfflineClient)
             and pipeline_loaded
         ):
             self._logger.warning(
-                "num_proc>1 cannot be used with VLLMOfflineClient because the loaded model "
-                "cannot be pickled for multiprocessing. Setting num_proc=None."
+                "num_proc>1 cannot be used with VLLMOfflineClient because the"
+                " loaded model cannot be pickled for multiprocessing. This"
+                " dataset is mapped in a single process."
             )
-            self.num_proc = None
+            num_proc = None
 
         if max_num_samples is not None and max_num_samples <= 0:
             raise ValueError(
@@ -904,60 +905,53 @@ class Annotator:
         if max_num_samples:
             dataset = dataset.select(range(min(max_num_samples, len(dataset))))
 
-        if dataset is not None:
-            # Validate that the dataset contains all fields required by the
-            # prompt template. Tests expect a ValueError when a required
-            # field is missing
-            if prompt_fields:
-                missing = [
-                    fld
-                    for fld in prompt_fields
-                    if fld not in dataset.column_names
-                ]
-                if missing:
-                    raise ValueError(
-                        f"Template contains field '{missing[0]}' not present in dataset."
-                        f" Available columns: {dataset.column_names}"
-                    )
-
-            if preprocess_fn is not None:
-                dataset = preprocess_fn(dataset=dataset)
-
-            dataset = dataset.map(
-                _create_messages,
-                num_proc=self.num_proc,
-                fn_kwargs={
-                    "prompt_fields": prompt_fields,
-                    "prompt_template": prompt_template,
-                    "task_prefix": task_prefix,
-                    "system_message": system_message,
-                },
-                desc="Applying prompt template",
+        missing = [
+            fld for fld in prompt_fields if fld not in dataset.column_names
+        ]
+        if missing:
+            raise ValueError(
+                f"Template contains field '{missing[0]}' not present in dataset."
+                f" Available columns: {dataset.column_names}"
             )
 
-            if sort_by_length:
-                if self.verbose:
-                    self._logger.info(
-                        "Sorting dataset roughly by prompt length for more efficient batching (longest first)..."
-                    )
-                dataset = dataset.map(
-                    lambda msgs: {
-                        f"{task_prefix}messages_chars": len(
-                            json.dumps(msgs, default=str)
-                        )
-                    },
-                    num_proc=self.num_proc,
-                    input_columns=[f"{task_prefix}messages"],
-                )
-                # Sort by longest first to trigger OOM as soon as possible
-                if sort_by_length == "shortest_first":
-                    do_reverse = False
-                else:
-                    do_reverse = True
+        if preprocess_fn is not None:
+            dataset = preprocess_fn(dataset=dataset)
 
-                dataset = dataset.sort(
-                    f"{task_prefix}messages_chars", reverse=do_reverse
-                ).remove_columns([f"{task_prefix}messages_chars"])
+        dataset = dataset.map(
+            _create_messages,
+            num_proc=num_proc,
+            fn_kwargs={
+                "prompt_fields": prompt_fields,
+                "prompt_template": prompt_template,
+                "task_prefix": task_prefix,
+                "system_message": system_message,
+            },
+            desc="Applying prompt template",
+        )
+
+        if sort_by_length:
+            if self.verbose:
+                self._logger.info(
+                    "Sorting dataset roughly by prompt length for more efficient batching (longest first)..."
+                )
+            dataset = dataset.map(
+                lambda msgs: {
+                    f"{task_prefix}messages_chars": len(
+                        json.dumps(msgs, default=str)
+                    )
+                },
+                num_proc=num_proc,
+                input_columns=[f"{task_prefix}messages"],
+            )
+            # Sort by longest first to trigger OOM as soon as possible
+            if sort_by_length == "shortest_first":
+                do_reverse = False
+            else:
+                do_reverse = True
+
+            dataset = dataset.sort(
+                f"{task_prefix}messages_chars", reverse=do_reverse
+            ).remove_columns([f"{task_prefix}messages_chars"])
 
         return dataset
 
@@ -1101,7 +1095,8 @@ class Annotator:
                 to dispatch a batch to a specific worker.
 
         Returns:
-            List of processed output dictionaries for each sample in the batch.
+            List of processed output dictionaries for each sample in the batch,
+            empty for a batch without samples.
 
         Raises:
             ValueError: If the client did not return exactly one response per
@@ -1109,6 +1104,9 @@ class Annotator:
         """
         output_schema = options.json_schema if options is not None else None
         messages = batch[f"{task_prefix}messages"]
+        if not messages:
+            return []
+
         client = client if client is not None else self.client
         responses = client.batch_generate(
             messages=messages,
@@ -1421,7 +1419,7 @@ class Annotator:
             dataset_split: Specific split to load (optional).
             max_num_samples: Maximum number of samples to prepare.
             shuffle_seed: Seed for dataset shuffling.
-            preprocess_fn: Optional function to preprocess the dataset after loading and before ap  plying the prompt template.
+            preprocess_fn: Optional function to preprocess the dataset after loading and before applying the prompt template.
             prompt_field_swapper: Optional mapping to replace template fields.
             idx_column: Column name used as unique identifier. Must not exist in the input dataset.
             task_prefix: Prefix for the internal column names and for the
@@ -2656,22 +2654,24 @@ class Annotator:
         keep_idx_column: bool = False,
         task_prefix: str = "",
     ) -> Dataset:
-        """Clean up after annotation is complete.
+        """Build the final dataset out of the progress files and clean up.
 
-        Removes empty output files and performs any final cleanup operations.
-        Deletes the local prepared-data cache directory and the two temporary
-        Hub branches (``JSONL_BACKUP_BRANCH`` and ``prepared_cache``) once
-        they are no longer needed.
+        Concatenates the progress files, sorts them by ``idx_column`` and
+        keeps the first row of every repeated id. The result is written to the
+        root of the output directory and, with a ``hub_id``, pushed to the
+        ``main`` branch of that repository. Afterwards the local prepared-data
+        cache and the two temporary Hub branches are removed and the metadata
+        of the run is written.
 
         Args:
-            pdout: Output directory path to clean up.
-            hub_id: Optional Hugging Face dataset ID for uploads and cleanup.
+            process_pdout: Directory that holds the ``*.jsonl`` progress files.
             idx_column: Column name used as unique identifier.
+            hub_id: Optional Hugging Face dataset ID for uploads and cleanup.
             keep_idx_column: Whether to keep the idx_column in the final dataset before uploading and returning.
-            task_prefix: Prefix used for the local cache directory name and the upload branch name.
+            task_prefix: Prefix used for the local cache directory name and the upload branch names.
 
         Returns:
-            The concatenated dataset of all annotation results (JSON-invalid samples are NOT removed)
+            The concatenated dataset of all annotation results (invalid samples are NOT removed)
         """
         ds = self._load_progress_files(process_pdout).sort(idx_column)
 

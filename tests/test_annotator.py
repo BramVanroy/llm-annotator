@@ -1529,7 +1529,9 @@ def test_load_dataset_handles_loaded_vllm_pipeline_and_sorting(
         task_prefix="pre_",
     )
 
-    assert annotator.num_proc is None
+    # The guard applies to this call only; the setting itself is untouched,
+    # so a later call with another client still uses it.
+    assert annotator.num_proc == 2
     assert "pre_messages" in loaded.column_names
     assert "pre_messages_chars" not in loaded.column_names
 
@@ -2031,6 +2033,25 @@ def test_process_batch_rejects_short_response_list(
             },
             options=None,
         )
+
+
+def test_process_batch_on_an_empty_batch_returns_nothing(
+    dummy_annotator: Annotator,
+) -> None:
+    # Verifies a batch without samples returns an empty result and sends no
+    # request, instead of raising an IndexError.
+    client = cast(DummyClient, dummy_annotator.client)
+    client.batch_generate = types.MethodType(  # type: ignore[method-assign]
+        lambda self, *, messages, options=None, gen_kwargs=None: (
+            _ for _ in ()
+        ).throw(AssertionError("the client was called for an empty batch")),
+        client,
+    )
+
+    assert (
+        dummy_annotator._process_batch(batch={"messages": []}, options=None)
+        == []
+    )
 
 
 def test_run_annotation_without_prompt_template(tmp_path: Path) -> None:
