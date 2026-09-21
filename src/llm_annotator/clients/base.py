@@ -59,6 +59,40 @@ class ProviderRuntimeOptions:
         return {}
 
 
+def reject_multiple_responses(payload: dict[str, Any]) -> None:
+    """Raise when a request asks the provider for more than one response.
+
+    Every client reads the first response of a request and drops the rest, so
+    a higher ``n`` spends tokens on output that is never stored. The check
+    covers ``n`` at the top level of the payload and inside a nested
+    ``extra_body``, which is where the vLLM server client puts the parameters
+    the OpenAI SDK does not accept.
+
+    Args:
+        payload: The final request payload, after ``gen_kwargs`` and
+            ``extra_body`` were merged in.
+
+    Raises:
+        ValueError: If the payload sets ``n`` to anything other than 1.
+
+    Examples:
+        >>> reject_multiple_responses({"n": 1, "temperature": 0.0})
+        >>> reject_multiple_responses(
+        ...     {"extra_body": {"n": 4}}
+        ... )  # doctest: +ELLIPSIS
+        Traceback (most recent call last):
+            ...
+        ValueError: 'n' is 4, but one response per sample is read...
+    """
+    for body in (payload, payload.get("extra_body") or {}):
+        count = body.get("n")
+        if count is not None and count != 1:
+            raise ValueError(
+                f"'n' is {count}, but one response per sample is read and the"
+                " others are dropped. Remove 'n' or set it to 1."
+            )
+
+
 @dataclass(slots=True, frozen=True)
 class Response:
     """Structured response object returned by provider clients."""
@@ -308,4 +342,5 @@ __all__ = [
     "Provider",
     "ProviderRuntimeOptions",
     "Response",
+    "reject_multiple_responses",
 ]

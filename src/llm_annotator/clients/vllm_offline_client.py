@@ -13,6 +13,7 @@ from llm_annotator.clients.base import (
     OnError,
     Provider,
     Response,
+    reject_multiple_responses,
 )
 from llm_annotator.clients.exceptions import ProviderError
 from llm_annotator.clients.vllm_online_client import VLLMBaseRuntimeOptions
@@ -31,7 +32,7 @@ class VLLMOfflineRuntimeOptions(VLLMBaseRuntimeOptions):
     [`VLLMBaseRuntimeOptions`][llm_annotator.clients.vllm_online_client.VLLMBaseRuntimeOptions],
     which carries everything both vLLM clients spell the same way
     (``temperature``, ``top_p``, ``top_k``, ``repetition_penalty``,
-    ``presence_penalty``, ``frequency_penalty``, ``stop``, ``seed``, ``n``,
+    ``presence_penalty``, ``frequency_penalty``, ``stop``, ``seed``,
     ``chat_template_kwargs`` and ``extra_body``), with the
     ``SamplingParams`` fields that only in-process inference offers.
 
@@ -497,10 +498,13 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
 
         Returns:
             A list of Response objects, one per input conversation, in the
-            same order as the input.
+            same order as the input. A failed call gives one error Response per
+            conversation when ``on_error`` is ``"warn"`` or ``"ignore"``.
 
         Raises:
-            ProviderError: If the model is not loaded or the vLLM call fails.
+            ProviderError: If the model is not loaded or the vLLM call fails,
+                and ``on_error`` is ``"raise"``.
+            ValueError: If the request asks for more than one response.
         """
         self._ensure_pipeline_loaded()
         if self._pipe is None:
@@ -523,6 +527,7 @@ class VLLMOfflineClient(Client[VLLMOfflineRuntimeOptions]):
         resolved = options or VLLMOfflineRuntimeOptions()
         payload = resolved.to_payload()
         payload.update(gen_kwargs or {})
+        reject_multiple_responses(payload)
         try:
             sampling_params = SamplingParams(**payload)
         except TypeError as exc:

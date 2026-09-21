@@ -13,6 +13,7 @@ from llm_annotator.clients.base import (
     Provider,
     ProviderRuntimeOptions,
     Response,
+    reject_multiple_responses,
 )
 from llm_annotator.clients.exceptions import ProviderError
 from llm_annotator.logging_utils import get_logger
@@ -226,6 +227,7 @@ class OpenAIClient(Client[T_OpenAIOptions]):
                 },
             }
         body.update(gen_kwargs or {})
+        reject_multiple_responses(body)
         return {
             "custom_id": f"request-{idx}",
             "method": "POST",

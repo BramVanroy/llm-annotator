@@ -526,3 +526,25 @@ def test_destroy_logs_failed_steps_and_continues(
     assert any("shut down engine core" in message for message in warnings)
     assert client._pipe is None
     assert collected["called"] == 1
+
+
+def test_batch_generate_rejects_multiple_responses(
+    fake_vllm_runtime: dict[str, Any],
+) -> None:
+    # Verifies a request for more than one response per sample is rejected.
+    client = VLLMOfflineClient(model="m", on_error="ignore")
+
+    with pytest.raises(ValueError, match="one response per sample"):
+        client.batch_generate(
+            messages=[[{"role": "user", "content": "x"}]],
+            gen_kwargs={"n": 2},
+        )
+
+    assert fake_vllm_runtime["chat_calls"] == []
+    client.destroy()
+
+
+def test_runtime_options_reject_multiple_responses_in_extra_body() -> None:
+    # Verifies 'n' inside extra_body is rejected when the options are built.
+    with pytest.raises(ValueError, match="one response per sample"):
+        VLLMOfflineRuntimeOptions(extra_body={"n": 3})
