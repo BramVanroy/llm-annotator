@@ -1961,6 +1961,131 @@ class Annotator:
             " every row again."
         )
 
+    def _resolve_output_schema(
+        self,
+        *,
+        output_schema: str | dict[str, Any] | None,
+        options: ProviderRuntimeOptions | None,
+        task_prefix: str,
+        idx_column: str,
+    ) -> tuple[dict[str, Any] | None, ProviderRuntimeOptions | None]:
+        """Decode an output schema and carry it into the runtime options.
+
+        Args:
+            output_schema: The schema as JSON text or a mapping, or ``None``.
+            options: The runtime options of the run, or ``None``.
+            task_prefix: The task prefix of the run.
+            idx_column: Name of the sample id column.
+
+        Returns:
+            The decoded schema and the options that hold it.
+
+        Raises:
+            TypeError: If ``output_schema`` does not decode to a mapping.
+            ValueError: If the schema is given twice, or if one of its
+                top-level properties has the name of a column that the
+                annotator writes itself.
+        """
+        if output_schema is not None:
+            if isinstance(output_schema, str):
+                output_schema = json.loads(output_schema)
+            if not isinstance(output_schema, dict):
+                raise TypeError("'output_schema' must decode to a dictionary.")
+            if options is not None and options.json_schema is not None:
+                raise ValueError(
+                    "Provide 'output_schema' OR set 'options.json_schema', not both."
+                )
+            options = dataclasses.replace(
+                options or ProviderRuntimeOptions(),
+                json_schema=output_schema,
+            )
+
+        schema = options.json_schema if options is not None else None
+        if schema:
+            reserved = _bookkeeping_columns(
+                task_prefix=task_prefix, idx_column=idx_column
+            )
+            taken = sorted(set(schema.get("properties", {})) & reserved)
+            if taken:
+                names = ", ".join(f"'{name}'" for name in taken)
+                raise ValueError(
+                    f"The output schema property names {names} are also the"
+                    " names of columns that the annotator writes for every"
+                    " sample. Pick other names in the schema, or give the run"
+                    " another 'task_prefix' or 'idx_column'."
+                )
+
+        return output_schema, options
+
+    def _resolve_prepared_dataset(
+        self,
+        *,
+        prepared_dataset: Dataset | None,
+        prepared_data_path: str | Path | None,
+        hub_id: str | None,
+        task_prefix: str,
+        idx_column: str,
+    ) -> Dataset:
+        """Find the prepared data among the three sources that may hold it.
+
+        The dataset in hand wins, then the local cache, then the Hub backup.
+        A source that fails to load is a warning, so the next one still gets
+        a turn.
+
+        Args:
+            prepared_dataset: Prepared data the caller already holds.
+            prepared_data_path: Local path of a prepared-data cache.
+            hub_id: Hugging Face dataset ID that holds a prepared-data branch.
+            task_prefix: The task prefix of the run.
+            idx_column: Name of the sample id column.
+
+        Returns:
+            The prepared dataset.
+
+        Raises:
+            ValueError: If no source yields prepared data, or if the prepared
+                data has no ``idx_column``.
+        """
+        if prepared_dataset is None and prepared_data_path:
+            try:
+                prepared_dataset = Dataset.load_from_disk(
+                    Path(prepared_data_path)
+                )
+            except Exception as exc:
+                self._logger.warning(
+                    f"Failed to load prepared dataset from local path '{prepared_data_path}'."
+                    f" This might be because the file does not exist or is not a valid dataset. Error: {exc}"
+                )
+
+        if prepared_dataset is None and hub_id:
+            try:
+                prepared_dataset = load_dataset(
+                    hub_id,
+                    revision=f"{task_prefix}{PREPARED_DS_BRANCH_SUFF}",
+                    split="train",
+                )
+            except Exception as exc:
+                self._logger.warning(
+                    f"Failed to load prepared dataset from Hub ID '{hub_id}' with revision '{PREPARED_DS_BRANCH_SUFF}'."
+                    f" This might be because the dataset or revision does not exist, or due to network issues. Error: {exc}"
+                )
+
+        if prepared_dataset is None:
+            raise ValueError(
+                "No prepared data found. Provide 'prepared_dataset', "
+                "'prepared_data_path' (locally saved dataset), or 'hub_id' (cloud-saved dataset)."
+                " If needed, first run 'prepare_data' to create the prepared dataset."
+            )
+
+        if idx_column not in prepared_dataset.column_names:
+            raise ValueError(
+                f"Expected index column '{idx_column}' not found in prepared dataset."
+                " This column is required for tracking processed samples and resuming on failure."
+                " Please ensure the prepared dataset includes the index column with name matching 'idx_column' argument."
+            )
+
+        return prepared_dataset
+
     @destroy_on_error
     def run_annotation(
         self,
@@ -2092,35 +2217,12 @@ class Annotator:
         if upload_every_n_samples > 0 and not hub_id:
             upload_every_n_samples = 0
 
-        if output_schema is not None:
-            if isinstance(output_schema, str):
-                output_schema = json.loads(output_schema)
-            if not isinstance(output_schema, dict):
-                raise TypeError("'output_schema' must decode to a dictionary.")
-            if options is not None and options.json_schema is not None:
-                raise ValueError(
-                    "Provide 'output_schema' OR set 'options.json_schema', not both."
-                )
-            # Inject the output_schema into options for use in _process_output
-            options = dataclasses.replace(
-                options or ProviderRuntimeOptions(),
-                json_schema=output_schema,
-            )
-
-        schema = options.json_schema if options is not None else None
-        if schema:
-            reserved = _bookkeeping_columns(
-                task_prefix=task_prefix, idx_column=idx_column
-            )
-            taken = sorted(set(schema.get("properties", {})) & reserved)
-            if taken:
-                names = ", ".join(f"'{name}'" for name in taken)
-                raise ValueError(
-                    f"The output schema property names {names} are also the"
-                    " names of columns that the annotator writes for every"
-                    " sample. Pick other names in the schema, or give the run"
-                    " another 'task_prefix' or 'idx_column'."
-                )
+        output_schema, options = self._resolve_output_schema(
+            output_schema=output_schema,
+            options=options,
+            task_prefix=task_prefix,
+            idx_column=idx_column,
+        )
 
         self._ignored_keys = set()
 
@@ -2149,44 +2251,13 @@ class Annotator:
             overwrite=overwrite,
         )
 
-        prepared_path = (
-            Path(prepared_data_path) if prepared_data_path else None
+        prepared_dataset = self._resolve_prepared_dataset(
+            prepared_dataset=prepared_dataset,
+            prepared_data_path=prepared_data_path,
+            hub_id=hub_id,
+            task_prefix=task_prefix,
+            idx_column=idx_column,
         )
-        if prepared_dataset is None and prepared_data_path:
-            try:
-                prepared_dataset = Dataset.load_from_disk(prepared_path)
-            except Exception as exc:
-                self._logger.warning(
-                    f"Failed to load prepared dataset from local path '{prepared_data_path}'."
-                    f" This might be because the file does not exist or is not a valid dataset. Error: {exc}"
-                )
-
-        if prepared_dataset is None and hub_id:
-            try:
-                prepared_dataset = load_dataset(
-                    hub_id,
-                    revision=f"{task_prefix}{PREPARED_DS_BRANCH_SUFF}",
-                    split="train",
-                )
-            except Exception as exc:
-                self._logger.warning(
-                    f"Failed to load prepared dataset from Hub ID '{hub_id}' with revision '{PREPARED_DS_BRANCH_SUFF}'."
-                    f" This might be because the dataset or revision does not exist, or due to network issues. Error: {exc}"
-                )
-
-        if prepared_dataset is None:
-            raise ValueError(
-                "No prepared data found. Provide 'prepared_dataset', "
-                "'prepared_data_path' (locally saved dataset), or 'hub_id' (cloud-saved dataset)."
-                " If needed, first run 'prepare_data' to create the prepared dataset."
-            )
-
-        if idx_column not in prepared_dataset.column_names:
-            raise ValueError(
-                f"Expected index column '{idx_column}' not found in prepared dataset."
-                " This column is required for tracking processed samples and resuming on failure."
-                " Please ensure the prepared dataset includes the index column with name matching 'idx_column' argument."
-            )
 
         samples_per_output_file = _resolve_samples_per_output_file(
             max_samples_per_output_file, num_rows=len(prepared_dataset)
