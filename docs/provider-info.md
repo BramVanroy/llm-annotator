@@ -155,8 +155,8 @@ client.batch_generate(messages=messages)
 
 Every client's `batch_generate` now takes the same three arguments
 (`messages`, `options`, `gen_kwargs`). `VLLMOnlineClient` does not accept
-`use_batch_api` at all, so the `ConfigurationError` it raised for
-`use_batch_api=True` is gone with it.
+`use_batch_api`: as an `init` key of a `vllm_online` step it fails when the
+config loads, as an unknown key.
 
 ### Anthropic Claude
 

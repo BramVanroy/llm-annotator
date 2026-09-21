@@ -395,7 +395,7 @@ cp slurm/cluster.env.example slurm/cluster.env   # once, per cluster
 `llm_annotator` exports what the workflow above uses: `Annotator`,
 `VLLMQueueAnnotator`, the four clients with their runtime options classes,
 `Response`, the exceptions (`LLMClientError`, `ProviderError`,
-`ConfigurationError`, `TooManyConsecutiveFailedBatchesError`),
+`TooManyConsecutiveFailedBatchesError`),
 `run_pipeline`, `load_pipeline_config`, `PipelineConfig`,
 `restore_progress_from_hub`, and `configure_logging`, `set_log_level`,
 `get_logger`.
@@ -409,11 +409,13 @@ from the package root:
 | --- | --- |
 | `SelectionRecord` | `llm_annotator.annotator` |
 | `OnError`, `Provider`, `ProviderRuntimeOptions` | `llm_annotator.clients.base` |
-| `ParsingError` | `llm_annotator.clients.exceptions` |
 | `VLLMBaseRuntimeOptions` | `llm_annotator.clients.vllm_online_client` |
 | `ClientConfig`, `DatasetConfig`, `StepConfig`, `load_config_file` | `llm_annotator.config` |
 | `build_annotator`, `build_client`, `wait_for_servers` | `llm_annotator.pool` |
 | `extract_prompt_prefix`, `get_hash` | `llm_annotator.utils` |
+
+`ConfigurationError` and `ParsingError` are removed: no code raised them.
+`LLMClientError` is the base class to catch for every error of a client.
 
 ```python
 # before

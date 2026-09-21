@@ -3,7 +3,6 @@ from .annotator import VLLMQueueAnnotator as VLLMQueueAnnotator
 from .clients.base import Response as Response
 from .clients.claude_client import ClaudeClient as ClaudeClient
 from .clients.claude_client import ClaudeRuntimeOptions as ClaudeRuntimeOptions
-from .clients.exceptions import ConfigurationError as ConfigurationError
 from .clients.exceptions import LLMClientError as LLMClientError
 from .clients.exceptions import ProviderError as ProviderError
 from .clients.exceptions import (
@@ -34,7 +33,6 @@ __all__ = [
     "Annotator",
     "ClaudeClient",
     "ClaudeRuntimeOptions",
-    "ConfigurationError",
     "LLMClientError",
     "OpenAIClient",
     "OpenAIRuntimeOptions",
