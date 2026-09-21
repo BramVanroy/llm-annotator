@@ -81,8 +81,8 @@ interchangeable and the file suffix decides how it is parsed.
 
 ## Paths are relative to the config
 
-Every path inside a config file -- `output_dir`, `prompt_file`,
-`system_prompt_file`, `output_schema_file`, `hosts_file`, `dataset.path` --
+Every path inside a config file (`output_dir`, `prompt_file`,
+`system_prompt_file`, `output_schema_file`, `hosts_file`, `dataset.path`)
 resolves against the directory holding the config file, never against your
 current working directory. A config directory is therefore self-contained and
 can be copied to a cluster or shared with a colleague as a unit.
@@ -132,7 +132,7 @@ is parsed, and it has to hold a JSON object.
 
 Each step writes several kinds of column:
 
-* **Schema properties.** Every top-level property of `output_schema` becomes a
+- Schema properties: every top-level property of `output_schema` becomes a
   column under its own name. A schema with `question` and `answer` produces
   exactly those two columns, which is what the next step's prompt refers to.
   A property that a response leaves out is `None` on that row, and a key that
@@ -140,11 +140,11 @@ Each step writes several kinds of column:
   per run), so every row of a step has the same columns. A property may not be
   called `idx` or carry the name of a bookkeeping column of the same step; such
   a schema is refused before the step's first request.
-* **Bookkeeping columns**, namespaced by the step's `task_prefix` (which
+- Bookkeeping columns, namespaced by the step's `task_prefix` (which
   defaults to `<name>_`): `{prefix}response`, `{prefix}finish_reason`,
   `{prefix}num_tokens`, `{prefix}error`, `{prefix}error_type`,
   `{prefix}reasoning` and, when a schema is set, `{prefix}valid_fields`.
-* The **`idx_column`** (`idx` by default). It identifies a row from the first
+- The `idx_column` (`idx` by default). It identifies a row from the first
   step onward, so every step's `output/` keeps it. It is removed from
   `final/` and from the dataset pushed to the Hub. See
   [Growing a run](growing-a-run.md) for what this makes possible.
@@ -167,7 +167,7 @@ whenever the request carries a thinking budget. Without a parser a reasoning
 model returns its trace inside `{prefix}response`, tags and all, and this column
 stays `None`.
 
-Because schema properties are *not* prefixed, two steps that use the same
+Because schema properties are not prefixed, two steps that use the same
 property name would collide. Use `rename` to give a step's output its final
 name:
 
@@ -191,11 +191,12 @@ overwriting it.
 
 Two further knobs tidy up between steps:
 
-* `drop_columns` removes columns you no longer need.
-* `filter_invalid: true` drops rows whose `{prefix}valid_fields` is still
+- `drop_columns` removes columns you no longer need.
+- `filter_invalid: true` drops rows whose `{prefix}valid_fields` is still
   `false` after all retries, so a broken generation is not carried into the next
-  step. It requires a schema, and it fails loudly if *every* row was invalid --
-  usually a sign that `max_completion_tokens` is too small for the schema.
+  step. It requires a schema, and it fails loudly when every row was invalid,
+  which is usually a sign that `max_completion_tokens` is too small for the
+  schema.
 
 The rendered `{prefix}messages` column is dropped once a step finishes, so an
 N-step pipeline does not accumulate N copies of every prompt. Set
@@ -205,14 +206,14 @@ N-step pipeline does not accumulate N copies of every prompt. Set
 
 A client can be described at the top level, per step, or both:
 
-* **Top level only** -- every step runs on it. Best when one model does all the
+- Top level only: every step runs on it. Best when one model does all the
   work.
-* **Top level plus a step block** -- the step's keys are merged over the
+- Top level plus a step block: the step's keys are merged over the
   defaults. Merging is one level deep: `init` and `options` are merged
   key-by-key, so a step that only changes `max_completion_tokens` need not
   repeat the rest. A step that switches `provider` is the exception, described
   below.
-* **Per step only** -- omit the top-level block entirely. Best when every step
+- Per step only: omit the top-level block entirely. Best when every step
   uses a different model and there is no sensible shared default; each step's
   block then has to name its own `provider` and `model`.
 
@@ -257,7 +258,7 @@ steps:
 ```
 
 `provider` accepts exactly `openai`, `claude`, `vllm_online` (a running vLLM
-server) or `vllm_offline` (in-process vLLM) — no other spellings are
+server) or `vllm_offline` (in-process vLLM). No other spelling is
 recognized. See [Provider setup](provider-info.md) for authentication.
 
 ### Where a setting goes
@@ -305,7 +306,7 @@ The groups do not overlap, and the config says so rather than letting a value
 sit in two places: an engine setting written under `init` is rejected at load
 time, and `engine` on a hosted provider is too.
 
-`engine` is the same block for both vLLM providers — same field names, same
+`engine` is the same block for both vLLM providers, with the same field names and the same
 meaning. A `vllm_offline` step turns it into `vllm.LLM(...)` keyword arguments;
 a `vllm_online` step whose servers still have to be started turns it into
 `vllm serve` flags, which `llm-annotate <config> --serve-args <step>` prints for
@@ -446,8 +447,8 @@ llm-annotate cfg.yaml --steps rate-qa
 
 produces the same dataset as one `llm-annotate cfg.yaml`. The selection has to be
 contiguous, since skipping a step in the middle would drop the columns the next
-prompt reads. Only the run that includes the **last** step writes
-`<output_dir>/final/` and pushes to the Hub — a partial run has a partial
+prompt reads. Only the run that includes the last step writes
+`<output_dir>/final/` and pushes to the Hub, because a partial run has a partial
 dataset and must not publish it as finished.
 
 This is what lets a scheduler give each step its own resources while one config
@@ -516,7 +517,7 @@ Qwen/Qwen3-8B
 8192
 ```
 
-One argument per line is what keeps a value containing spaces intact —
+One argument per line is what keeps a value containing spaces intact, and
 `--speculative-config` takes a JSON object. `--host` and `--port` are absent by
 design: the port has to be probed on the node, because two servers of one pool
 can land on the same machine.
@@ -543,9 +544,9 @@ submitter for SLURM, with everything cluster-specific in one small
 
 Long pipelines are restartable at two levels:
 
-* **Within a step**, the usual JSONL progress files under the step's
+- Within a step, the usual JSONL progress files under the step's
   `annotate/` directory mean an interrupted step continues where it stopped.
-* **Between steps**, a finished step writes its result to
+- Between steps, a finished step writes its result to
   `<output_dir>/<NN>-<name>/output/`. Re-running the same config loads that
   snapshot and skips the step, so a pipeline that dies in step three does not
   repeat steps one and two.
@@ -607,8 +608,8 @@ Editing a step's `prompt`, `system_prompt`, `sort_by_length` or output schema an
 same config does not mix old and new answers. The step whose setting changed is not loaded from its
 snapshot:
 
-* With no progress files for that step yet, it is rebuilt with the new setting.
-* With finished rows already on disk, the run stops with a `ValueError` that names what changed and
+- With no progress files for that step yet, it is rebuilt with the new setting.
+- With finished rows already on disk, the run stops with a `ValueError` that names what changed and
   the command that resolves it, before anything is deleted:
 
   ```text
@@ -691,7 +692,7 @@ The same key is a keyword argument of `annotate_dataset`, `run_annotation` and
 
 ## Pushing to the Hub
 
-The top-level `hub_id` is the **final** dataset only; it is pushed once, after
+The top-level `hub_id` is the final dataset only; it is pushed once, after
 the last step:
 
 ```yaml

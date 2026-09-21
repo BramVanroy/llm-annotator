@@ -152,8 +152,8 @@ It does not work here, for two independent reasons:
   side-by-side columns of one row; `combine.py` wants them stacked as separate
   rows instead.
 - The four stages want four different sampling profiles as well as four
-  different models. That part is no longer a blocker -- `engine:` is per step,
-  and each server job reads its own with `llm-annotate --serve-args` -- but
+  different models. That part is no longer a blocker (`engine:` is per step,
+  and each server job reads its own with `llm-annotate --serve-args`), but
   folding the stages back together would mean every generator step also carrying
   a `rename` map for a column nothing downstream reads side by side.
 

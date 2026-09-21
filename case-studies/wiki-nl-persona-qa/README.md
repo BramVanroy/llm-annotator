@@ -86,19 +86,19 @@ Half a million questions written from one prompt collapse into one voice asking
 one kind of question, at one length. Four cheap levers spread them out, all
 decided in `prepare_seed.py` rather than by the model:
 
-- **Persona.** A one-sentence Belgian-Dutch persona per article ("Ilse Sebrechts
+- Persona: A one-sentence Belgian-Dutch persona per article ("Ilse Sebrechts
   is een uiterst gedisciplineerde verzekeringsconsulent uit Oostende...") shapes
   which detail the question picks up and how formally it is phrased. Personas
   are drawn with replacement, so the pool of 300k covers any run size.
-- **Question type.** One of six Dutch instructions (feit, definitie, uitleg,
+- Question type: One of six Dutch instructions (feit, definitie, uitleg,
   chronologie, vergelijking, gevolg), assigned at random. Letting the model pick
   its own type instead collapses onto "feit" for most articles, which is exactly
   the diversity problem the persona is there to solve.
-- **Question length.** Either a one-sentence question, or a few sentences that
+- Question length: Either a one-sentence question, or a few sentences that
   open with an invented, generic reason for asking (out of interest, for work,
   for a project, because a kid asked) before the question itself. 60/40 short
   to long.
-- **Answer length.** Either one paragraph or two to four, weighted per row by
+- Answer length: Either one paragraph or two to four, weighted per row by
   `question_type`: `uitleg`, `chronologie`, `vergelijking` and `gevolg` draw
   the longer option 70% of the time, `feit` and `definitie` only 15%, so the
   answer's depth tracks what the question actually needs instead of varying
@@ -237,18 +237,18 @@ Relative to `case-studies/wiki-nl-persona-qa/outputs/`:
 
 ## Deliberately not done here
 
-- **No article in the training rows.** The article is grounding for generation,
+- No article in the training rows: The article is grounding for generation,
   not context for the trained model. A retrieval-style variant that keeps it as
   a system message is a different dataset; build it by carrying `text` through
   `build_sft.py`.
-- **No deduplication.** Chunks are sampled without replacement, but a long
+- No deduplication: Chunks are sampled without replacement, but a long
   article split into several chunks can end up contributing more than one of
   them, and two personas can still produce near-identical questions about the
   same popular topic. Near-duplicate filtering on the question column belongs
   before training, not here.
-- **One judge, one pass.** Nothing measures how stable the judge's own 1-5
+- One judge, one pass: Nothing measures how stable the judge's own 1-5
   ratings are, so the thresholds are a quality filter, not a calibrated
   measurement. Judging a sample twice would quantify that, at twice the cost.
-- **No model comparison.** `Qwen3.6-35B-A3B-FP8` is assumed fit for the job. To
+- No model comparison: `Qwen3.6-35B-A3B-FP8` is assumed fit for the job. To
   establish that rather than assume it, run `case-studies/model-comparison/` over a
   few hundred articles first.
