@@ -498,8 +498,8 @@ Cause: `wait_for_servers` polled `/health` on the configured URLs and fewer than
 Fix: on SLURM, read the `vllm-<step>_*.err` logs of the server array; the usual
 reasons are a model that does not fit the GPUs the step asked for, a port that
 stayed taken, and an array element that never left the queue. Raise
-`client.wait_for_servers` (seconds) when the model simply takes longer to load
-than the current value allows.
+`client.wait_for_servers` (seconds) when the model takes longer to load than the
+current value allows.
 
 ### The run stops on failed batches
 
