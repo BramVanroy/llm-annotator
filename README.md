@@ -192,7 +192,7 @@ On a machine with no local progress files (a purged scratch directory, or a run
 that moves to another cluster), restore the progress backup first:
 
 ```sh
-python scripts/restore_progress_from_hub.py --hub-id my-org/imdb-sentiment --output-dir outputs/imdb-sentiment
+llm-annotate-restore --hub-id my-org/imdb-sentiment --output-dir outputs/imdb-sentiment
 ```
 
 `run_annotation` refuses to start when the repository has a progress backup

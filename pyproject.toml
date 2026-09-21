@@ -85,6 +85,7 @@ dev = [
 
 [project.scripts]
 llm-annotate = "llm_annotator.pipeline:main"
+llm-annotate-restore = "llm_annotator.hub:main"
 
 [project.urls]
 Homepage = "https://github.com/BramVanroy/llm-annotator"
