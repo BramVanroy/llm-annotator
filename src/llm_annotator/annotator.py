@@ -600,8 +600,8 @@ class SelectionRecord:
                 " settings that its run was annotated with, so a resume"
                 " cannot tell whether the prompt still matches. Finish the"
                 " run with the release that wrote it, annotate it into a new"
-                " 'output_dir', or overwrite it. See 'Migrating an output"
-                " directory' in docs/growing-a-run.md."
+                " 'output_dir', or overwrite it. See 'A record without"
+                " settings' in docs/migration.md."
             )
         return cls(
             max_num_samples=stored.get("max_num_samples"),

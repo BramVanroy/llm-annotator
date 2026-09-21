@@ -2,7 +2,7 @@
 
 Run a whole annotation pipeline on a SLURM cluster from one config file.
 
-First ensure that all variables relevant to your SLURM custer are set:
+First ensure that all variables relevant to your SLURM cluster are set:
 
 ```sh
 cp slurm/cluster.env.example slurm/cluster.env
@@ -11,13 +11,13 @@ $EDITOR slurm/cluster.env
 ./slurm/submit_pipeline.sh my-pipeline.yaml
 ```
 
-`submit_pipeline.sh` asks the config what each step needs and submits **one job
-chain per step**, so a step only starts once the one before it has succeeded.
+`submit_pipeline.sh` asks the config what each step needs and submits one job
+chain per step, so a step only starts once the one before it has succeeded.
 Nothing about the allocation lives in an `#SBATCH` header you have to edit, and
 nothing about the annotation is repeated on the command line.
 
 Submitting per step is what makes a real pipeline work on a cluster: each step
-gets servers for **its own** model, and GPUs are released as soon as that step is
+gets servers for its own model, and GPUs are released as soon as that step is
 done rather than being held for the whole run. A step that calls a hosted API
 gets no GPU at all.
 
@@ -25,12 +25,12 @@ gets no GPU at all.
 | --- | --- |
 | `cluster.env.example` | Template for the one file you edit: partitions, accounting, cores per GPU, modules. |
 | `submit_pipeline.sh` | Run on a login node. Reads the config and submits the job chain. |
-| `vllm_annotate.sh` | Runs **one step** of the config. Waits for its pool if it has one. |
+| `vllm_annotate.sh` | Runs one step of the config. Waits for its pool if it has one. |
 | `vllm_server.sh` | One array task = one vLLM server. Publishes its base URL once healthy. |
 | `vllm_common.sh` | Sourced by all of the above: cluster file, environment setup, ports, health polling. |
 
-Three layers, kept apart: the **pipeline config** says what is annotated, the
-**cluster file** says what your cluster calls things, and the scripts hold the
+Three layers, kept apart: the pipeline config says what is annotated, the
+cluster file says what your cluster calls things, and the scripts hold the
 job shapes, which are the same everywhere. Nothing is configured twice.
 
 ## Try it before you submit
@@ -75,21 +75,21 @@ the pipeline as a whole rather than one step at a time, which is what
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `SLURM_ACCOUNT` | – | Project to charge. Empty means no `--account`. |
-| `GPU_PARTITION`, `CPU_PARTITION` | – | Partitions for the GPU and CPU-only jobs. Empty means the cluster's default. |
+| `SLURM_ACCOUNT` | none | Project to charge. Empty means no `--account`. |
+| `GPU_PARTITION`, `CPU_PARTITION` | none | Partitions for the GPU and CPU-only jobs. Empty means the cluster's default. |
 | `SERVER_TIME`, `CLIENT_TIME` | `04:00:00`, `05:00:00` | Wall time per job kind. |
 | `CPUS_PER_GPU` | `8` | Cores a GPU job asks for per GPU. |
 | `CLIENT_CPUS` | `8` | Cores a CPU-only annotation job asks for. |
 | `MAX_GPUS_PER_NODE` | `8` | Ceiling a step's `engine.tensor_parallel_size` is checked against before anything is submitted. |
-| `GPU_REQUEST`, `GPU_TYPE` | `gres`, – | How GPUs are requested: `--gres=gpu:N` or `--gpus-per-node=N`, optionally typed (`gpu:a100:N`). |
-| `MAX_CONCURRENT_SERVERS` | – | Most elements of a server array that may run at once (`--array=1-N%M`), for a per-user GPU limit. Empty means no throttle. |
+| `GPU_REQUEST`, `GPU_TYPE` | `gres`, none | How GPUs are requested: `--gres=gpu:N` or `--gpus-per-node=N`, optionally typed (`gpu:a100:N`). |
+| `MAX_CONCURRENT_SERVERS` | none | Most elements of a server array that may run at once (`--array=1-N%M`), for a per-user GPU limit. Empty means no throttle. |
 | `SERVER_HOST_CMD` | `hostname` | Command a server runs to get the address other nodes reach it at. Use `hostname -f`, or a command that prints one interface's address, where the short name does not resolve. |
 | `MODEL_DOWNLOAD` | `0` | `1` fetches every model this submission serves in a CPU job before any GPU is allocated. |
 | `DOWNLOAD_PARTITION`, `DOWNLOAD_TIME` | `$CPU_PARTITION`, `02:00:00` | Partition and wall time of those download jobs. |
 | `SERVER_SBATCH_ARGS`, `CLIENT_SBATCH_ARGS` | `()` | Extra `sbatch` flags per job kind: QoS, memory, constraints, reservations. |
-| `CLUSTER_MODULES` | – | Environment modules to load inside a job. |
+| `CLUSTER_MODULES` | none | Environment modules to load inside a job. |
 | `VENV_PATH`, `UV_SYNC` | `<repo>/.venv`, `0` | Python environment to activate, and whether to `uv sync` first. |
-| `CUDA_MODULE` | – | Toolkit module loaded only when `nvcc` is missing and vLLM has to JIT-compile a kernel. |
+| `CUDA_MODULE` | none | Toolkit module loaded only when `nvcc` is missing and vLLM has to JIT-compile a kernel. |
 | `LOG_DIR` | `<repo>/logs` | Where job logs and pool directories go. |
 
 Every scalar can be overridden for one submission by setting it on the command
@@ -99,8 +99,8 @@ line, which wins over the file and reaches the jobs through `--export=ALL`:
 SERVER_TIME=08:00:00 GPU_PARTITION=gpu_h100 ./slurm/submit_pipeline.sh my-pipeline.yaml
 ```
 
-If modules plus a virtualenv do not describe your cluster — conda, a container,
-a wrapper script of your own — define `cluster_setup_env` in the cluster file
+If modules plus a virtualenv do not describe your cluster (conda, a container,
+a wrapper script of your own), define `cluster_setup_env` in the cluster file
 instead. It replaces the environment handling entirely and only has to leave
 `llm-annotate` and `vllm` on `PATH`:
 
@@ -112,7 +112,7 @@ cluster_setup_env() {
 ```
 
 A container works the same way, because `llm-annotate` and `vllm` may be shell
-functions rather than executables. Define them at the **top level** of the
+functions rather than executables. Define them at the top level of the
 cluster file, not inside `cluster_setup_env`: every script sources the cluster
 file, so a top-level function is visible in both job scripts and on the login
 node, where `submit_pipeline.sh` reads the config. A function defined inside
@@ -166,7 +166,7 @@ before any GPU is allocated.
 | `api` | `openai` / `claude` | CPU-only job |
 
 A `vllm_pool` step must name a `model`. It is optional for `provider:
-vllm_online` in general — a client can ask a running server what it serves —
+vllm_online` in general (a client can ask a running server what it serves),
 but a submitter that has to *start* those servers has nothing to ask, so
 `submit_pipeline.sh` rejects such a step on the login node rather than after the
 GPUs have been allocated.
@@ -244,11 +244,11 @@ serve different models with different serving profiles.
 
 The server array writes into `<LOG_DIR>/pool_<array-job-id>/`, one `<task>.url`
 file per server containing that server's `http://<host>:<port>/v1`. A file
-appears only **after** the server answers `/health`, and is removed when the job
+appears only after the server answers `/health`, and is removed when the job
 ends, so every URL in the directory belongs to a server that is up right now.
 The client polls that directory until `min_servers` of the files are there,
 then passes the directory itself to the CLI as `--url-glob`, which attaches it
-to that step alone — a step on another provider is left untouched. A file of
+to that step alone, so a step on another provider is left untouched. A file of
 URLs would be read once; the glob is re-read while the run continues, so a
 server whose file appears after the run has started still joins the pool.
 
@@ -274,7 +274,7 @@ answers, and the server job retries on the next free port, at most
 
 The client is submitted with one `after:` dependency per element of its server
 array, or-joined (`--dependency=after:1234_1?after:1234_2?...`), which releases
-it as soon as the **first** server has begun. `after:<array-id>` as a whole is
+it as soon as the first server has begun. `after:<array-id>` as a whole is
 satisfied only once *every* element has started, which would leave a ready
 server sitting idle behind pool-mates that are still queued (a per-user GPU
 quota is enough to do this: one server can occupy the whole quota, so the rest
@@ -438,7 +438,7 @@ are submitted with `--export=ALL`.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `ANNOTATE_CONFIG` | *the positional argument* | JSON/YAML pipeline config to run |
-| `EXTRA_DEPENDENCY` | – | Slurm dependency expression (e.g. `afterok:123456`) the chain waits for. Applied to the **first** submitted step only; later steps inherit it through their predecessor, which is what lets several submissions be chained into one workflow. |
+| `EXTRA_DEPENDENCY` | none | Slurm dependency expression (e.g. `afterok:123456`) the chain waits for. Applied to the first submitted step only; later steps inherit it through their predecessor, which is what lets several submissions be chained into one workflow. |
 | `POOL_WAIT` | `1800` | Seconds a client waits for `min_servers` of its servers to register once it is running. Matches `READY_TIMEOUT`, so a client cannot give up on a server before the server gives up on itself. The or-joined dependency means the client only starts once a server of its pool has, so this covers a model load rather than an allocation; raise it when running `vllm_annotate.sh` by hand against a pool that is still queued. |
 | `VLLM_PORT` | `8000` | Base port a server starts probing from. The array task id is added to it, then the first free port is taken. |
 | `READY_TIMEOUT` | `1800` | Seconds a server waits for its own `/health` before giving up |
@@ -446,23 +446,25 @@ are submitted with `--export=ALL`.
 | `CANCEL_SERVERS_ON_EXIT` | `1` | Whether a finished client `scancel`s its step's server array. `0` leaves the GPUs running. |
 | `SBATCH_CMD` | `sbatch` | The command that queues a job, for a site whose `sbatch` is wrapped. A submit this refuses ends the run: the steps after it would otherwise depend on a job id that was never issued. |
 | `OUTPUT_DIR`, `HUB_ID`, `OVERWRITE` | from the config | Override the config's `output_dir` / `hub_id`, or discard existing step output |
-| `ANNOTATE_SET` | – | What `--set` fills: config overrides for this submission, one `KEY=VALUE` per line, passed to `llm-annotate --set` on every step job. Set it directly only when scripting the submitter; `--set` is the way in. |
+| `ANNOTATE_SET` | none | What `--set` fills: config overrides for this submission, one `KEY=VALUE` per line, passed to `llm-annotate --set` on every step job. Set it directly only when scripting the submitter; `--set` is the way in. |
 
 ## Resuming
 
 Two levels, both automatic:
 
-- **Within a step**, every annotated sample is appended to
+- Within a step, every annotated sample is appended to
   `<output_dir>/<NN>-<step>/annotate/<prefix>progress_backup/*.jsonl` and flushed
   immediately; a restart re-reads those files and skips the ids already present.
   A half-written final line from a killed job is detected and re-annotated.
-- **Between steps**, a finished step writes `<output_dir>/<NN>-<step>/output/`,
+- Between steps, a finished step writes `<output_dir>/<NN>-<step>/output/`,
   which a later run loads instead of recomputing.
 
-So after a crash, a timeout or a preemption you run **the same
-`submit_pipeline.sh` command again**. Finished steps are skipped, and the step
-that died continues where it stopped. To resubmit only part of a pipeline, name
-the steps:
+So after a crash, a timeout or a preemption you run the same
+`submit_pipeline.sh` command again. Finished steps are skipped, and the step
+that died continues where it stopped. Resubmitting with a higher
+`dataset.max_num_samples` extends a finished run the same way, which
+`docs/growing-a-run.md` describes in full. To resubmit only part of a pipeline,
+name the steps:
 
 ```sh
 ./slurm/submit_pipeline.sh --steps rate-qa my-pipeline.yaml
@@ -485,7 +487,7 @@ python scripts/restore_progress_from_hub.py --hub-id user/my-dataset --output-di
 
 ## Running a step yourself
 
-The scripts add nothing the CLI cannot do, so any step can be run by hand — from
+The scripts add nothing the CLI cannot do, so any step can be run by hand, from
 a login node, an interactive session, or your laptop:
 
 ```sh

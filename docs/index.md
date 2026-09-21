@@ -1,466 +1,59 @@
 # LLM Annotator
 
-LLM Annotator is a Python library for robust, resumable annotation and
-generation workflows powered by large language models.
+LLM Annotator runs a large language model over a dataset and writes the answers
+back as columns. A run is resumable: every finished sample is appended to a
+JSONL progress file, so a job that crashes, times out or is preempted continues
+where it stopped instead of starting over.
 
-It provides a common interface for multiple providers:
+Four providers share one interface:
 
-- `VLLMOfflineClient` for in-process vLLM inference (`vllm_offline`).
-- `VLLMOnlineClient` for vLLM server endpoints (`vllm_online`).
-- `OpenAIClient` for OpenAI-compatible APIs.
-- `ClaudeClient` for Anthropic APIs.
+- `VLLMOfflineClient` for in-process vLLM (`vllm_offline`).
+- `VLLMOnlineClient` for a vLLM server, one or many (`vllm_online`).
+- `OpenAIClient` for OpenAI-compatible APIs (`openai`).
+- `ClaudeClient` for the Anthropic API (`claude`).
 
-Provider setup details, extras, and auth variables are listed on
-[Provider setup](provider-info.md).
+[Choosing a provider](choosing-a-provider.md) says which one fits the hardware
+you have. [Provider setup](provider-info.md) lists the extras, the
+authentication variables and the vLLM tuning knobs.
 
 ## Install
 
-With uv:
+--8<-- "README.md:install"
 
-```bash
-uv add llm-annotator
-```
-
-With pip:
-
-```bash
-pip install llm-annotator
-```
-
-Install provider extras when needed:
-
-```bash
-uv add "llm-annotator[vllm]"
-uv add "llm-annotator[openai]"
-uv add "llm-annotator[anthropic]"
-```
+The online vLLM client speaks the OpenAI protocol, so it takes the `openai`
+extra rather than the much heavier `vllm` one, which is only needed where the
+model weights are loaded. See [Provider setup](provider-info.md).
 
 ## Quickstart
 
-### No Python at all
-
-Describe the whole run -- prompts, schema, model, dataset, and any number of
-chained annotation steps -- in one JSON or YAML file:
-
-```yaml title="my-pipeline.yaml"
-output_dir: outputs/imdb-sentiment
-
-dataset:
-  name: stanfordnlp/imdb
-  split: test
-  max_num_samples: 100
-
-client:
-  provider: vllm_offline
-  model: meta-llama/Llama-3.2-3B-Instruct
-  engine:
-    max_model_len: 4096
-
-steps:
-  - name: sentiment
-    prompt: "Classify the sentiment: {text}"
-```
-
-```bash
-llm-annotate my-pipeline.yaml
-```
-
-See [Annotating from a config file](pipeline.md) for multi-step pipelines,
-where one model's output becomes the next model's input.
-
-### One-step convenience
-
-Annotate a dataset end-to-end with a single call:
-
-```python
-from llm_annotator import Annotator, VLLMOfflineClient
-
-client = VLLMOfflineClient(
-    model="meta-llama/Llama-3.2-3B-Instruct",
-    max_model_len=4096,
-)
-
-with Annotator(client=client) as anno:
-    ds = anno.annotate_dataset(
-        output_dir="outputs/imdb-sentiment",
-        prompt_template="Classify the sentiment: {text}",
-        dataset_name="stanfordnlp/imdb",
-        dataset_split="test",
-        max_num_samples=100,
-    )
-```
-
-Generate a dataset from scratch:
-
-```python
-from llm_annotator import Annotator, OpenAIClient
-
-client = OpenAIClient(model="gpt-4o-mini")
-
-with Annotator(client=client) as anno:
-    ds = anno.generate_dataset(
-        output_dir="outputs/generated",
-        prompts="Create one short NER training sentence.",
-        max_num_samples=50,
-    )
-```
-
-#### Migration
-
-`annotate_dataset` no longer takes `full_prompt_template`, an alias of
-`prompt_template`. Rename the argument:
-
-```python
-# before
-anno.annotate_dataset(output_dir=out, full_prompt_template="Q: {text}")
-# after
-anno.annotate_dataset(output_dir=out, prompt_template="Q: {text}")
-```
-
-`prompt_field_swapper` is gone from `prepare_data`, `annotate_dataset` and
-`generate_dataset`. It renamed a field inside the template, which is one
-`str.replace` at the call site:
-
-```python
-template = "Summarize this document: {content}"
-
-# before
-anno.prepare_data(
-    output_dir=out,
-    prompt_template=template,
-    prompt_field_swapper={"content": "body"},
-)
-# after
-anno.prepare_data(
-    output_dir=out,
-    prompt_template=template.replace("{content}", "{body}"),
-)
-```
-
-### Two-step staged workflow
-
-For large datasets or SLURM-style pipelines, separate data preparation
-from model inference. `prepare_data` handles template application and
-optional sorting, then uploads the result to Hugging Face Hub. On
-inference failures, `run_annotation` can reload the prepared data from
-Hub without repeating the expensive preparation step.
-
-One `hub_id` drives every Hub destination: the prepared data and the JSONL
-progress backup go to temporary branches of that repo, the final dataset is
-pushed to its `main` branch, and both temporary branches are deleted once
-the run completes.
-
-```python
-from llm_annotator import Annotator, VLLMOfflineClient
-
-client = VLLMOfflineClient(
-    model="meta-llama/Llama-3.2-3B-Instruct",
-    max_model_len=4096,
-)
-
-HUB_ID = "my-org/imdb-sentiment"
-
-with Annotator(client=client, verbose=True) as anno:
-    # Step 1: prepare:  reuses local cache, falls back to Hub, builds
-    # from source if neither exists.
-    prepared_dataset, local_path, hub_id = anno.prepare_data(
-        output_dir="outputs/imdb-sentiment",
-        prompt_template="Classify the sentiment: {text}",
-        dataset_name="stanfordnlp/imdb",
-        dataset_split="test",
-        max_num_samples=100,
-        sort_by_length=True,
-        hub_id=HUB_ID,                  # back up prepared data to Hub
-    )
-
-    # Step 2: run generation against the prepared data.
-    # If this step fails, re-run it with hub_id=HUB_ID and the same
-    # output_dir: the prepared data is restored from Hub automatically and
-    # the samples already in the local progress files are skipped.
-    ds = anno.run_annotation(
-        output_dir="outputs/imdb-sentiment",
-        prompt_template="Classify the sentiment: {text}",
-        prepared_dataset=prepared_dataset,
-        hub_id=HUB_ID,
-        upload_every_n_samples=500,
-    )
-```
-
-On a machine that has no local progress files (a purged scratch directory,
-or a run that moves to another cluster), restore the progress backup from
-the Hub before running step 2:
-
-```sh
-python scripts/restore_progress_from_hub.py --hub-id my-org/imdb-sentiment --output-dir outputs/imdb-sentiment
-```
-
-Step 2 refuses to start when the repository has a progress backup while the
-local progress directory is empty, so a forgotten restore cannot replace the
-backup with a run that starts from zero. Pass `overwrite=True` to delete the
-backup and annotate every row again.
-
-Every `upload_every_n_samples` rows the progress files are pushed to the
-`<task_prefix>progress_backup` branch. That upload runs on a background
-thread, so the next batch is dispatched while it is in flight. A cycle that
-comes due while the previous upload still runs is skipped, since the next one
-carries the same rows and the ones after them. An upload that fails is logged
-at warning level and the run continues, because the progress files on disk are
-the copy that a resume reads. The upload at the end of the run waits for the
-background one and is not skipped: a failure there ends the run, since that is
-the upload a restore on another machine depends on.
-
-To force a fresh preparation even when local or Hub artifacts exist, pass
-`force_data_preparation=True` to `prepare_data` (or to `annotate_dataset`).
-
-`prepare_data` records the settings that decide what the prepared data holds (the prompt template,
-the system message, `sort_by_length`, the source dataset and the rest) next to it. A later call
-with an edited prompt template is refused instead of reused, so one output never holds answers to
-two prompts. See [Growing a run](growing-a-run.md) for what may change, what is rejected, and the
-way out.
-
-### Several tasks in one output directory
-
-`task_prefix` is put in front of every column that the annotator writes and in front of every
-artifact it stores, so two tasks can annotate the same data into one `output_dir` (and one
-`hub_id`) without reading each other's progress files:
-
-```python
-sentiment = anno.annotate_dataset(
-    output_dir="outputs/imdb",
-    prompt_template="Sentiment: {text}",
-    dataset=ds,
-    task_prefix="sentiment_",
-    keep_columns=True,
-    keep_idx_column=True,
-)
-
-topic = anno.annotate_dataset(
-    output_dir="outputs/imdb",
-    prompt_template="Topic: {text}",
-    dataset=sentiment,      # the sentiment columns travel along
-    task_prefix="topic_",
-    keep_columns=True,
-    keep_idx_column=True,
-    reuse_idx_column=True,  # keep the ids that the first call handed out
-)
-```
-
-Each task gets its own `<task_prefix>prepared_dataset/`, `<task_prefix>progress_backup/`,
-`<task_prefix>selection.json` and `metadata/<task_prefix>annotation_metadata.json`, and its own
-pair of Hub branches.
-
-The final dataset is shared: it is written to the root of `output_dir` and pushed to the `main`
-branch of `hub_id`, and the task that finishes last replaces it. That is the point of the example
-above. The second call annotates the result of the first and, with `keep_columns=True`, carries its
-columns along, so the dataset that stays behind holds the columns of both tasks. Two tasks whose
-results must both survive on disk need two `output_dir` values.
-
-`overwrite=True` discards the finished rows of one task: its progress files, its Hub progress
-branch, its metadata file and the shared final dataset in the root, which the run writes again. It
-keeps that task's prepared data (so a crashed run does not prepare it a second time) and everything
-that belongs to another `task_prefix`.
-
-### Errors and retries
-
-A client's `on_error` setting (`"raise"`, `"warn"` or `"ignore"`) decides what
-happens when a request fails. With `"warn"` or `"ignore"` the client returns a
-`Response` with `error` and `error_type` set instead of raising, and the
-annotator records those two fields on the sample and marks it invalid.
-
-An errored row is final once it is written: a run that resumes the same
-`output_dir` does not send it to the model again, so an error that the sample
-itself causes (a prompt longer than the model's context, for instance) is not
-repeated on every resume. Pass `retry_errors=True` to annotate every errored
-row again, or a list of `error_type` values to annotate only those. The
-selected rows are removed from the progress files before the run starts, so
-they are annotated like rows that never ran.
-
-```python
-ds = anno.run_annotation(
-    output_dir="outputs/imdb-sentiment",
-    prompt_template="Classify the sentiment: {text}",
-    prepared_dataset=prepared_dataset,
-    retry_errors=["ConnectError", "APITimeoutError"],
-)
-```
-
-The same option exists for a config-driven pipeline as `--retry-errors`, see
-[Command line](pipeline.md#command-line):
-
-```bash
-llm-annotate my-pipeline.yaml --retry-errors ConnectError APITimeoutError
-```
-
-When every sample of a batch errors, the backend is probably down. The rows
-of such a batch are held back and written once a later batch succeeds. After
-`max_consecutive_failed_batches` (default 10) such batches in a row, the run
-stops with `TooManyConsecutiveFailedBatchesError`. The rows that are held back
-at that point are never written, so the resumed run annotates them again. Set
-it to 0 to disable both the abort and the hold-back.
-
-Every run ends with a log line that says how many samples finished with an
-error (with a count per `error_type`, which are the names that `retry_errors`
-takes) and how many have invalid fields. The same counts are written to
-`<output_dir>/metadata/<task_prefix>annotation_metadata.json`.
-
-A second log line gives the throughput, and the same numbers go to the
-`run_summary` key of that file:
-
-```json
-"run_summary": {
-    "num_rows": 8000,
-    "num_output_tokens": 1536000,
-    "elapsed_seconds": 412.7,
-    "rows_per_second": 19.39,
-    "output_tokens_per_second": 3721.83
-}
-```
-
-Those numbers cover the invocation that wrote them and nothing else: the rows
-that it annotated, the output tokens that they hold, and the seconds from the
-warm-up to its last written row. A run that resumes another one therefore
-reports its own throughput, not the average over every attempt, and a run that
-finds every row already annotated writes `"run_summary": null`. An errored row
-has no token count and adds 0 to `num_output_tokens`.
-
-### Many vLLM servers at once
-
-`VLLMQueueAnnotator` spreads one workload over a pool of vLLM servers -- for
-instance one server per GPU of a multi-node SLURM allocation. It is a drop-in
-`Annotator`: the same four entry points, the same JSONL progress files, the same
-resume behaviour. Batches are dispatched to whichever server is free, with at
-most `queue_size` batches in flight at a time. Set
-`max_concurrent_batches_per_client` to give each server more than one batch
-at a time without raising `batch_size`. The two multiply: with four servers,
-four concurrent batches each and a `batch_size` of 64, a server holds 256
-prompts and the pool 1024. `queue_size` never drops below the number of
-concurrent batches, since a smaller queue would leave servers idle, and
-defaults to four batches per batch slot.
-
-```python
-from llm_annotator import (
-    VLLMOnlineClient,
-    VLLMOnlineRuntimeOptions,
-    VLLMQueueAnnotator,
-)
-
-clients = [
-    VLLMOnlineClient(
-        model="Qwen/Qwen3.5-4B", base_url=f"http://{host}:8000/v1"
-    )
-    for host in ("gcn1", "gcn2", "gcn3", "gcn4")
-]
-
-with VLLMQueueAnnotator(
-    clients=clients,
-    batch_size=64,
-    max_concurrent_batches_per_client=4,
-    verbose=True,
-) as anno:
-    ds = anno.annotate_dataset(
-        output_dir="outputs/imdb-sentiment",
-        prompt_template="Classify the sentiment: {text}",
-        dataset_name="stanfordnlp/imdb",
-        dataset_split="test",
-        options=VLLMOnlineRuntimeOptions(
-            max_completion_tokens=128, temperature=0.0
-        ),
-    )
-```
-
-Because results are written per sample and keyed by `idx`, re-running the exact
-same call after a crash, a timeout or a preemption picks up where the previous
-attempt stopped.
-
-A server that fails a whole batch and then does not answer `/health` is
-removed from the pool, and its batch is sent to another server (no errored
-rows are written for it). The run stops only once no server is left. A
-config-driven run also re-admits a server that recovers, see
-[Many vLLM servers](pipeline.md#many-vllm-servers).
-
-A cluster job submitter needs nothing beyond the [config file](pipeline.md) and
-four CLI flags to drive this: `--describe-steps` to plan the allocation,
-`--serve-args` to start each step's servers with its own model, and
-`--hosts-file` or `--url-glob` to hand them back in. `examples/vllm-server-pool/` has both the
-Python-API and config-driven forms side by side, and [`slurm/`](slurm.md) is a
-ready-made submitter built on those flags:
-
-```bash
-cp slurm/cluster.env.example slurm/cluster.env   # once, per cluster
-./slurm/submit_pipeline.sh examples/vllm-server-pool/pipeline.yaml
-```
-
-## Public API
-
-`llm_annotator` exports what the workflow above uses: `Annotator`,
-`VLLMQueueAnnotator`, the four clients with their runtime options classes,
-`Response`, the exceptions (`LLMClientError`, `ProviderError`,
-`TooManyConsecutiveFailedBatchesError`),
-`run_pipeline`, `load_pipeline_config`, `PipelineConfig`,
-`restore_progress_from_hub`, and `configure_logging`, `set_log_level`,
-`get_logger`.
-
-### Migration
-
-Everything else is importable from the module that defines it rather than
-from the package root:
-
-| Name | Import from |
-| --- | --- |
-| `SelectionRecord` | `llm_annotator.annotator` |
-| `OnError`, `Provider`, `ProviderRuntimeOptions` | `llm_annotator.clients.base` |
-| `VLLMBaseRuntimeOptions` | `llm_annotator.clients.vllm_online_client` |
-| `ClientConfig`, `DatasetConfig`, `StepConfig`, `load_config_file` | `llm_annotator.config` |
-| `build_annotator`, `build_client`, `wait_for_servers` | `llm_annotator.pool` |
-| `extract_prompt_prefix`, `get_hash` | `llm_annotator.utils` |
-
-`ConfigurationError` and `ParsingError` are removed: no code raised them.
-`LLMClientError` is the base class to catch for every error of a client.
-
-```python
-# before
-from llm_annotator import build_client
-# after
-from llm_annotator.pool import build_client
-```
-
-## Why use it
-
-- Run a whole annotation, or a chain of them, from one JSON/YAML config file
-  with the `llm-annotate` CLI.
-- Staged `prepare_data` + `run_annotation` pipeline for SLURM and
-  cluster workflows:  expensive data preparation is done once and stored.
-- Resume interrupted generation runs from JSONL checkpoints, and grow a finished run by raising
-  `dataset.max_num_samples` and re-running; see [Growing a run](growing-a-run.md).
-- Validate and post-process outputs with custom callables.
-- Enforce structured responses through JSON schemas.
-- Keep a thinking model's reasoning trace in its own column, separated from the
-  answer; see [Annotating from a config file](pipeline.md#how-steps-see-each-others-output).
-- Upload incrementally to the Hugging Face Hub.
-
-## Development
-
-```bash
-git clone https://github.com/BramVanroy/llm-annotator.git
-cd llm-annotator
-uv sync --dev
-```
-
-Run checks:
-
-```bash
-make style
-make quality
-make test
-make typecheck
-```
-
-Local docs preview with mike:
-
-```bash
-make serve-docs
-```
-
-The "User API" and "Internals" sections are generated from source code
-docstrings. "User API" covers what the documented workflow uses; "Internals"
-covers the modules that the package builds on.
+Describe the run in one YAML (or JSON) file and start it. No Python needed.
+
+--8<-- "README.md:config-quickstart"
+
+A config can hold several steps that run in order, each annotating what the
+previous one produced. [Annotating from a config file](pipeline.md) is the key
+reference, and `examples/pipeline-qa/` in the repository is a complete two-step
+example.
+
+The same run from Python:
+
+--8<-- "README.md:one-step"
+
+## Where to go next
+
+- [Choosing a provider](choosing-a-provider.md): one GPU, many GPUs or none.
+- [Annotating from a config file](pipeline.md): every config key, multi-step
+  pipelines, the `llm-annotate` command line.
+- [Python API guide](python-api.md): the staged `prepare_data` plus
+  `run_annotation` workflow, several tasks in one output directory, errors and
+  retries, a pool of vLLM servers.
+- [Growing a run](growing-a-run.md): resume a run, raise the sample cap, edit a
+  prompt mid-run.
+- [SLURM](slurm.md): submit a config as one job chain per step.
+- [Troubleshooting](troubleshooting.md): what an error message means and what
+  to do about it.
+- [Migrating from 0.16](migration.md): everything that changed since the last
+  release.
+
+The "User API" section of the navigation is generated from the docstrings of
+what the guides above use; "Internals" covers the modules those build on.

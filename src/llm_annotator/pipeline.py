@@ -234,8 +234,8 @@ def _unrecorded_step_error(step_name: str, step_output: Path) -> ValueError:
         " record of the settings it was annotated with, so this run cannot"
         " tell whether its result still matches the config. Remove"
         f" '{step_output}' to run the step again: the rows in its progress"
-        " files are not sent to the model a second time. See 'Migrating an"
-        " output directory' in docs/growing-a-run.md."
+        " files are not sent to the model a second time. See 'A finished step"
+        " with no record' in docs/migration.md."
     )
 
 

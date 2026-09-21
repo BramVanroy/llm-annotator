@@ -170,71 +170,8 @@ rather than per job, so that all steps of one run agree about how many rows they
 
 ## Migrating an output directory
 
-An `output_dir` from a release whose `selection.json` recorded only the sample selection cannot be
-resumed by this version. Such a record says nothing about the prompt, so a resume could not tell
-whether the finished rows answer the prompt that is asked for now. Reading it raises:
-
-```text
-The record in 'outputs/imdb-sentiment/selection.json' does not describe the settings that its run
-was annotated with, so a resume cannot tell whether the prompt still matches. Finish the run with
-the release that wrote it, annotate it into a new 'output_dir', or overwrite it. See 'Migrating an
-output directory' in docs/growing-a-run.md.
-```
-
-Three ways forward:
-
-- Finish the run with the release that wrote it, and let the next run start under this one.
-- Point `output_dir` at a new directory, which annotates every row again and leaves the old result
-  on disk.
-- Pass `--overwrite` (`overwrite: true`, or `overwrite=True` from Python) to discard the finished
-  rows in place and annotate every row again.
-
-A fourth way keeps the finished rows, at your own risk: delete the `selection.json` files under
-`output_dir` (inside a pipeline, `<NN>-<name>/annotate/<name>_selection.json`). Only the rows that
-never ran are then sent to the model. Nothing is compared, and the settings of that run are
-recorded as the ones the whole directory was annotated with. If the prompt changed since the
-finished rows were written, the output holds answers to both prompts and no later run can tell.
-Use it only when you know the settings did not change.
-
-```bash
-rm outputs/imdb-sentiment/*selection.json
-llm-annotate pilot.yaml
-```
-
-### A finished step with no record
-
-Inside a pipeline the same rule applies per step, and a step that already
-finished needs one extra move. Its `output/` snapshot is what a re-run loads
-instead of running the step, and with no record next to it nothing can say
-whether that snapshot belongs to the config that is being run now, so the run
-stops:
-
-```text
-Step 'sentiment' finished into 'outputs/imdb-sentiment/01-sentiment/output', but there is no record
-of the settings it was annotated with, so this run cannot tell whether its result still matches the
-config. Remove 'outputs/imdb-sentiment/01-sentiment/output' to run the step again: the rows in its
-progress files are not sent to the model a second time. See 'Migrating an output directory' in
-docs/growing-a-run.md.
-```
-
-Removing the `output/` directory is cheap: the step runs again, reads the ids
-it already finished out of its JSONL progress files, annotates only what is
-missing (nothing, for a step that had finished) and writes the snapshot again,
-this time with a record next to it.
-
-```bash
-rm -r outputs/imdb-sentiment/*/output
-llm-annotate pilot.yaml
-```
-
-### The metadata file name
-
-The counts of a run are written to
-`<output_dir>/metadata/<task_prefix>annotation_metadata.json`. An output directory from an earlier
-release holds them under `annotation_metadata.json`, without the prefix. Nothing in the library
-reads that file, so an old one is left where it is: a run without a `task_prefix` writes the same
-name and replaces it, a run with one writes its own file next to it. Delete the old file, or point
-your own scripts at the new name.
+An `output_dir` written by 0.16 cannot be resumed by this release, and neither can a
+finished pipeline step whose record is missing. [Migrating from 0.16](migration.md#output-directories-and-records) says what to do with either.
 
 ## Limits
 

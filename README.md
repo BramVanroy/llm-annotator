@@ -7,57 +7,21 @@
 [![License](https://img.shields.io/github/license/BramVanroy/llm-annotator)](LICENSE)
 
 
-`llm-annotator` is a Python 3.12+ library for robust, resumable
-LLM-driven dataset annotation and generation.
+`llm-annotator` is a Python 3.12+ library that runs an LLM over a dataset and
+writes the answers back as columns. A run is resumable: every finished sample is
+appended to a JSONL progress file, so a crashed, preempted or timed-out job
+continues where it stopped.
 
-It supports multiple providers through pluggable clients:
+Four providers share one interface:
 
-- vLLM offline inference (in-process): `VLLMOfflineClient`
-- vLLM online inference (server API): `VLLMOnlineClient`
-- OpenAI API: `OpenAIClient`
-- Anthropic API: `ClaudeClient`
+- vLLM in-process (`VLLMOfflineClient`, config name `vllm_offline`)
+- vLLM server (`VLLMOnlineClient`, config name `vllm_online`)
+- OpenAI (`OpenAIClient`, config name `openai`)
+- Anthropic (`ClaudeClient`, config name `claude`)
 
-Key capabilities:
+## Install
 
-- **No-code config runs**:  describe prompts, schemas, model, dataset and
-  multiple chained annotation steps in one JSON/YAML file and run it with
-  `llm-annotate my-pipeline.yaml`.
-- **Staged pipeline**:  `prepare_data` + `run_annotation` separates expensive
-  template application and sorting from model inference, enabling SLURM and
-  cluster restart workflows.
-- **Multi-server vLLM**:  `VLLMQueueAnnotator` runs one workload over a pool of
-  vLLM servers (e.g. one per GPU of a multi-node allocation); see
-  `examples/vllm-server-pool/` for a config-driven and a Python-API example.
-- **SLURM out of the box**:  `slurm/submit_pipeline.sh` turns a config into one
-  job chain per step, with everything cluster-specific in a single cluster file;
-  see [slurm/README.md](slurm/README.md).
-- Resumable processing with JSONL checkpoints, including a pipeline that grows: raise
-  `dataset.max_num_samples` and re-run to annotate only the new rows (see
-  [docs/growing-a-run.md](docs/growing-a-run.md)).
-- Annotation of existing datasets and generation from scratch.
-- Structured outputs via JSON schema.
-- Reasoning traces in their own column, for thinking models on either vLLM
-  provider or on Claude.
-- Retry and validation hooks for robust pipelines.
-- Optional Hugging Face Hub upload cadence for both prepared data and outputs.
-- Context-manager cleanup of client resources.
-
-It is not intended for parallel, multi-node, multi-instance generation.
-If that is what you are after, maybe [`datatrove`](https://github.com/huggingface/datatrove/tree/main/examples/inference)
-is something for you.
-
-## Documentation
-
-Read the full documentation at
-[bramvanroy.github.io/llm-annotator](https://bramvanroy.github.io/llm-annotator/).
-
-Provider setup reference:
-[docs/provider-info.md](docs/provider-info.md)
-
-## Installation
-
-Recommended:
-
+<!-- --8<-- [start:install] -->
 ```sh
 uv add llm-annotator
 ```
@@ -68,68 +32,75 @@ or
 pip install llm-annotator
 ```
 
-Install provider extras as needed:
+A provider needs its extra:
 
 ```sh
-uv add "llm-annotator[vllm]"
-uv add "llm-annotator[openai]"
-uv add "llm-annotator[anthropic]"
+uv add "llm-annotator[vllm]"       # vllm_offline
+uv add "llm-annotator[openai]"     # openai and vllm_online
+uv add "llm-annotator[anthropic]"  # claude
 ```
+<!-- --8<-- [end:install] -->
 
-See [docs/provider-info.md](docs/provider-info.md) for auth environment
-variables and provider-specific setup notes.
+The online vLLM client speaks the OpenAI protocol, so it takes the `openai`
+extra rather than the much heavier `vllm` one. Authentication variables and
+per-provider notes are in [docs/provider-info.md](docs/provider-info.md), which
+also has the two FlashInfer wheels to install next to the `vllm` extra wherever
+you serve models, so that vLLM does not JIT-compile its kernels at start-up.
 
-### Prebuilt vLLM kernels
+## Quickstart
 
-In the context of SLURM it may be advisable to have the vLLM kernels
-prebuilt so that time is not wasted for JIT-compilation, no storage
-contention in the case of multiprocessing, etc. Installing the kernels
-up front avoids both, which matters most when you serve models on a cluster.
+Describe the run in one YAML (or JSON) file and start it. No Python needed.
 
-These kernels cannot be shipped as an extra of `llm-annotator`: `flashinfer-jit-cache`
-is not on PyPI at all (it is published per CUDA version on FlashInfer's own
-index) and the `flashinfer-cubin` on PyPI trails the releases vLLM pins
-against. An extra would therefore fail to resolve for anyone installing
-`llm-annotator` from PyPI. Install them next to the `vllm` extra instead,
-matching the `flashinfer-python` version vLLM pulled in and the CUDA version
-your torch wheel was built against:
+<!-- --8<-- [start:config-quickstart] -->
+```yaml title="my-pipeline.yaml"
+output_dir: outputs/imdb-sentiment
+
+dataset:
+  name: stanfordnlp/imdb
+  split: test
+  max_num_samples: 20
+
+client:
+  provider: vllm_offline
+  model: HuggingFaceTB/SmolLM2-135M-Instruct
+
+steps:
+  - name: sentiment
+    prompt: "Classify the sentiment: {text}"
+```
 
 ```sh
-version=$(python -c "import importlib.metadata as m; print(m.version('flashinfer-python'))")
-cuda=cu$(python -c "import torch; print(torch.version.cuda.replace('.', ''))")
-
-uv pip install "flashinfer-cubin==$version" --index-url https://flashinfer.ai/whl/
-uv pip install "flashinfer-jit-cache==$version" --index-url "https://flashinfer.ai/whl/$cuda/"
+llm-annotate my-pipeline.yaml
 ```
 
-Use `pip install` instead of `uv pip install` if you installed with pip. The
-CUDA version comes from `torch.version.cuda`.
+The result is a dataset with a `sentiment_response` column next to the original
+`text`, written to `outputs/imdb-sentiment/final/`.
+<!-- --8<-- [end:config-quickstart] -->
 
-## Usage
+A config can hold several steps that run in order, each annotating what the
+previous one produced, which is what a generate-then-judge workflow needs.
+[examples/pipeline-qa/](examples/pipeline-qa/) is a complete two-step example
+and [docs/pipeline.md](docs/pipeline.md) is the key reference.
 
-### One-step convenience
+The same run from Python:
 
-Annotate an existing dataset:
-
+<!-- --8<-- [start:one-step] -->
 ```python
 from llm_annotator import Annotator, VLLMOfflineClient
 
-client = VLLMOfflineClient(
-    model="meta-llama/Llama-3.2-3B-Instruct",
-    max_model_len=4096,
-)
+client = VLLMOfflineClient(model="HuggingFaceTB/SmolLM2-135M-Instruct")
 
 with Annotator(client=client, verbose=True) as anno:
     ds = anno.annotate_dataset(
-        output_dir="outputs/sentiment",
-        prompt_template="Classify the sentiment of this text: {text}",
+        output_dir="outputs/imdb-sentiment",
+        prompt_template="Classify the sentiment: {text}",
         dataset_name="stanfordnlp/imdb",
         dataset_split="test",
-        max_num_samples=100,
+        max_num_samples=20,
     )
 ```
 
-Generate a dataset from scratch:
+Or build a dataset from scratch instead of annotating one:
 
 ```python
 from llm_annotator import Annotator, OpenAIClient
@@ -143,19 +114,82 @@ with Annotator(client=client) as anno:
         max_num_samples=200,
     )
 ```
+<!-- --8<-- [end:one-step] -->
 
-### Two-step staged workflow
+## What it does
 
-For large datasets or cluster (SLURM) environments, split the pipeline
-explicitly into a preparation step and a generation step. `prepare_data`
-applies prompt templates, optional sorting, and saves the prepared
-artifacts locally and to Hugging Face Hub. `run_annotation` then handles
-only model inference. If generation fails, re-run it with the same
-`output_dir` and `hub_id`: the prepared data is restored from the Hub and
-the samples already recorded in the local progress files are skipped. On a
-machine that has no local progress files (a purged scratch directory, or a
-run that moves to another cluster), restore the progress backup from the
-Hub first:
+- No-code config runs: prompts, schemas, model, dataset and any number of
+  chained annotation steps in one JSON or YAML file, started with
+  `llm-annotate my-pipeline.yaml`.
+- Staged pipeline: `prepare_data` applies the templates and sorts, and
+  `run_annotation` does the inference, so a crashed GPU job restarts without
+  repeating the preparation.
+- Resumable runs: results are streamed to JSONL checkpoints per sample. Raising
+  `dataset.max_num_samples` and re-running annotates only the new rows, see
+  [docs/growing-a-run.md](docs/growing-a-run.md).
+- Multi-server vLLM: `VLLMQueueAnnotator` runs one workload over a pool of vLLM
+  servers, one per GPU of a multi-node allocation. See
+  [examples/vllm-server-pool/](examples/vllm-server-pool/) for the config-driven
+  and the Python form.
+- SLURM out of the box: `slurm/submit_pipeline.sh` turns a config into one job
+  chain per step, with everything cluster-specific in one cluster file. See
+  [slurm/README.md](slurm/README.md).
+- Annotation of an existing dataset and generation from scratch.
+- Structured output through a JSON schema, with the schema's properties as
+  columns.
+- A thinking model's reasoning trace in its own column, on either vLLM provider
+  and on Claude.
+- Retry and validation hooks, and per-sample error columns instead of a dead
+  run.
+- Hugging Face Hub backup of the prepared data and the progress files while the
+  run continues, and of the final dataset when it ends.
+
+## Two-step staged workflow
+
+For a large dataset or a cluster job, split the work: `prepare_data` loads the
+dataset, applies the prompt template, optionally sorts by length and caches the
+result; `run_annotation` only does inference against that prepared data.
+
+<!-- --8<-- [start:two-step] -->
+```python
+from llm_annotator import Annotator, VLLMOfflineClient
+
+client = VLLMOfflineClient(model="Qwen/Qwen3-8B", max_model_len=4096)
+
+HUB_ID = "my-org/imdb-sentiment"  # backups and the final dataset
+PROMPT = "Classify the sentiment: {text}"
+
+with Annotator(client=client, verbose=True) as anno:
+    prepared_dataset, local_path, hub_id = anno.prepare_data(
+        output_dir="outputs/imdb-sentiment",
+        prompt_template=PROMPT,
+        dataset_name="stanfordnlp/imdb",
+        dataset_split="test",
+        max_num_samples=100,
+        sort_by_length=True,
+        hub_id=HUB_ID,
+    )
+
+    ds = anno.run_annotation(
+        output_dir="outputs/imdb-sentiment",
+        prompt_template=PROMPT,
+        prepared_dataset=prepared_dataset,
+        hub_id=HUB_ID,
+        upload_every_n_samples=500,
+    )
+```
+
+If inference fails, run the second call again with the same `output_dir` and
+`hub_id`: the prepared data comes back from the Hub and the samples already in
+the local progress files are skipped.
+
+One `hub_id` drives all three Hub destinations. The prepared data and the JSONL
+progress files go to temporary branches of that repository, the final dataset is
+pushed to its `main` branch, and both temporary branches are deleted once the
+run finishes.
+
+On a machine with no local progress files (a purged scratch directory, or a run
+that moves to another cluster), restore the progress backup first:
 
 ```sh
 python scripts/restore_progress_from_hub.py --hub-id my-org/imdb-sentiment --output-dir outputs/imdb-sentiment
@@ -164,110 +198,14 @@ python scripts/restore_progress_from_hub.py --hub-id my-org/imdb-sentiment --out
 `run_annotation` refuses to start when the repository has a progress backup
 while the local progress directory is empty, so a forgotten restore cannot
 replace the backup with a run that starts from zero.
+<!-- --8<-- [end:two-step] -->
 
-A single `hub_id` drives every Hub destination: the prepared data and the
-JSONL progress backup live on temporary branches of that repo, the final
-dataset is pushed to its `main` branch, and both temporary branches are
-deleted once the run completes.
-
-```python
-from llm_annotator import Annotator, VLLMOfflineClient
-
-client = VLLMOfflineClient(
-    model="meta-llama/Llama-3.2-3B-Instruct",
-    max_model_len=4096,
-)
-
-HUB_ID = "my-org/imdb-sentiment"  # backups *and* the final dataset
-
-with Annotator(client=client, verbose=True) as anno:
-    # Step 1: prepare data (reuses local cache or Hub backup if available)
-    prepared_dataset, local_path, hub_id = anno.prepare_data(
-        output_dir="outputs/imdb-sentiment",
-        prompt_template="Classify the sentiment of this text: {text}",
-        dataset_name="stanfordnlp/imdb",
-        dataset_split="test",
-        max_num_samples=100,
-        sort_by_length=True,
-        hub_id=HUB_ID,
-    )
-
-    # Step 2: run generation against the prepared data
-    ds = anno.run_annotation(
-        output_dir="outputs/imdb-sentiment",
-        prompt_template="Classify the sentiment of this text: {text}",
-        prepared_dataset=prepared_dataset,
-        hub_id=HUB_ID,
-        upload_every_n_samples=500,
-    )
-```
-
-To force a fresh preparation (ignoring any cached or Hub-stored artifacts),
-pass `force_data_preparation=True` to `prepare_data` or to `annotate_dataset`.
-The settings that produced the prepared data are recorded next to it, so a
-later call with an edited prompt template is refused instead of reused. See
+The settings that produced the prepared data are recorded next to it, so a later
+call with an edited prompt template is refused instead of reused. What may
+change between two runs, and what that costs, is in
 [docs/growing-a-run.md](docs/growing-a-run.md).
 
-### Run from a config file
-
-The same work can be described in a single JSON or YAML file and run without
-writing any Python:
-
-```sh
-llm-annotate my-pipeline.yaml
-# or, from a checkout: python scripts/annotate.py my-pipeline.yaml
-```
-
-A config lists one or more **steps** that run in order, each annotating the
-dataset the previous one produced. That is what makes generate-then-judge
-workflows possible: one model writes question-answer pairs, a second rates them.
-
-```yaml
-output_dir: outputs/pipeline-qa
-
-dataset:
-  name: stanfordnlp/imdb
-  split: test
-  max_num_samples: 20
-
-client:
-  provider: vllm_offline
-  model: Qwen/Qwen3-8B
-  options:
-    max_completion_tokens: 512
-
-steps:
-  - name: write-qa
-    prompt_file: prompts/write_qa.md
-    output_schema_file: schemas/qa.json    # produces `question`, `answer`
-    filter_invalid: true
-    rename:
-      question: question_v1
-
-  - name: rate-qa
-    prompt: "Rate this question about the text.\n\n{text}\n\nQ: {question_v1}"
-    output_schema_file: schemas/rating.json
-    client:
-      provider: claude                     # a different judge
-      model: claude-haiku-4-5
-```
-
-Paths inside the config resolve relative to the config file, so a config
-directory is self-contained. Finished steps write a snapshot and are skipped on
-a re-run, so an interrupted pipeline resumes rather than starting over.
-
-Any key can also be set on the command line, so one tracked config serves a
-pilot, the full run and a job script that reads the size from the environment:
-
-```sh
-llm-annotate my-pipeline.yaml --max-num-samples 2000
-llm-annotate my-pipeline.yaml --set steps.0.client.batch_size=8
-```
-
-A complete, runnable example lives in [examples/pipeline-qa/](examples/pipeline-qa/),
-and the full key reference is in [docs/pipeline.md](docs/pipeline.md).
-
-### Run it on SLURM
+## Run it on SLURM
 
 The same config runs on a cluster without a scheduler-specific rewrite. Fill in
 one small cluster file (partitions, accounting, cores per GPU) and submit:
@@ -283,72 +221,39 @@ array plus a client, a step on a hosted API gets a CPU-only job, and GPUs are
 released as soon as the step that needed them is done. Details in
 [slurm/README.md](slurm/README.md).
 
-See the documentation for more examples, including:
-- Structured output with JSON schemas
-- Custom validation and post-processing
-- Generating datasets from scratch
+## Documentation
 
-Or check out the [examples/](examples/) directory for complete working examples.
-Larger, complete research projects built on the library live in
-[case-studies/](case-studies/).
+The full documentation is at
+[bramvanroy.github.io/llm-annotator](https://bramvanroy.github.io/llm-annotator/).
 
+- [Choosing a provider](docs/choosing-a-provider.md): which client fits the
+  hardware you have.
+- [Annotating from a config file](docs/pipeline.md): every config key, the
+  multi-step workflow and the CLI.
+- [Python API guide](docs/python-api.md): the staged workflow, several tasks in
+  one directory, errors and retries, server pools.
+- [Growing a run](docs/growing-a-run.md): resuming, raising the sample cap,
+  editing a prompt mid-run.
+- [Troubleshooting](docs/troubleshooting.md): what an error message means and
+  what to do about it.
+- [Provider setup](docs/provider-info.md): extras, authentication, vLLM tuning.
+- [SLURM](slurm/README.md): the job submitter.
+- [Migrating from 0.16](docs/migration.md): what changed since the last
+  release.
 
-## Testing
+[examples/](examples/) holds runnable examples, and
+[case-studies/](case-studies/) holds two complete research projects built on the
+library.
 
-Install development dependencies first:
+## Contributing
+
+Development setup, the make targets, the test markers and the docs layout are
+in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ```sh
 uv sync --dev
-```
-
-Run the default checks:
-
-```sh
 make style
 make quality
-make test
 make typecheck
+make test
 ```
-
-Pytest marker targets:
-
-```sh
-# Fast tests (same as `make test`)
-make test-fast
-
-# Slow tests only
-make test-slow
-
-# Integration tests only
-make test-integration
-
-# Entire suite (fast + slow)
-make test-all
-```
-
-You can also run markers directly with pytest:
-
-```sh
-uv run pytest -m "not slow"
-uv run pytest -m "slow"
-uv run pytest -m "integration"
-```
-
-Slow and integration tests may load local models, require more runtime, or depend on optional components.
-
-## Building documentation
-
-Local versioned docs preview (uses mike on a temporary local branch):
-
-```sh
-make serve-docs
-```
-
-Override version metadata when needed:
-
-```sh
-make serve-docs DOCS_VERSION=0.4.0 DOCS_ALIAS=latest DOCS_SOURCE_REF=v0.4.0
-```
-
-Docs are published with mike on release tags through
-`.github/workflows/docs.yml`.
