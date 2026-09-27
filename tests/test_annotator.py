@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, cast
 
 import pytest
-from datasets import Dataset, load_dataset
+from datasets import Dataset, Features, Value, load_dataset
 
 from llm_annotator.annotator import (
     PROGRESS_UPLOAD_FILE,
@@ -20,6 +20,7 @@ from llm_annotator.annotator import (
     _callable_component,
     _copy_file_prefix,
     _create_messages,
+    _infer_progress_features,
     _ProgressUploader,
     _resolve_samples_per_output_file,
     destroy_on_error,
@@ -399,6 +400,175 @@ def test_post_annotate_loads_a_schema_column_that_is_null_in_one_file(
 
     assert ds["label"] == [None, "ok"]
     assert Dataset.load_from_disk(tmp_path / "out")["label"] == [None, "ok"]
+
+
+def test_post_annotate_promotes_a_column_null_in_the_first_read_block(
+    tmp_path: Path, dummy_annotator: Annotator
+) -> None:
+    # Reproduces #50: load_dataset's own inference types a column "null"
+    # when every row of the first read block holds no value for it, and
+    # then fails to cast a later block's value into that type. A single
+    # progress file large enough to span more than one read block used to
+    # raise DatasetGenerationError here.
+    progress_dir = tmp_path / "out" / "progress_backup"
+    progress_dir.mkdir(parents=True)
+    num_rows = 3000
+    with (progress_dir / "progress_0.jsonl").open(
+        "w", encoding="utf-8"
+    ) as fhout:
+        for i in range(num_rows):
+            error = (
+                "Response stopped due to max token limit"
+                if i == num_rows - 1
+                else None
+            )
+            fhout.write(
+                json.dumps({"idx": i, "pad": "x" * 5000, "error": error})
+                + "\n"
+            )
+
+    ds = dummy_annotator._post_annotate(
+        process_pdout=progress_dir, idx_column="idx", keep_idx_column=True
+    )
+
+    assert ds[0]["error"] is None
+    assert (
+        ds[num_rows - 1]["error"] == "Response stopped due to max token limit"
+    )
+
+
+def test_post_annotate_promotes_a_schema_property_null_then_int(
+    tmp_path: Path, dummy_annotator: Annotator
+) -> None:
+    # A schema property is null on every invalid row. If the invalid rows
+    # come first and fill the whole first read block, the column used to
+    # be typed "null" and fail on the first valid row's integer.
+    progress_dir = tmp_path / "out" / "progress_backup"
+    progress_dir.mkdir(parents=True)
+    num_rows = 3000
+    with (progress_dir / "progress_0.jsonl").open(
+        "w", encoding="utf-8"
+    ) as fhout:
+        for i in range(num_rows):
+            score = 42 if i == num_rows - 1 else None
+            fhout.write(
+                json.dumps({"idx": i, "pad": "x" * 5000, "score": score})
+                + "\n"
+            )
+
+    ds = dummy_annotator._post_annotate(
+        process_pdout=progress_dir, idx_column="idx", keep_idx_column=True
+    )
+
+    assert ds[0]["score"] is None
+    assert ds[num_rows - 1]["score"] == 42
+
+
+def test_post_annotate_promotes_a_postprocess_column_null_then_object(
+    tmp_path: Path, dummy_annotator: Annotator
+) -> None:
+    # A column that postprocess_fn adds only for some rows has the same
+    # failure mode as a schema property, but with a struct value instead
+    # of a scalar.
+    progress_dir = tmp_path / "out" / "progress_backup"
+    progress_dir.mkdir(parents=True)
+    num_rows = 3000
+    with (progress_dir / "progress_0.jsonl").open(
+        "w", encoding="utf-8"
+    ) as fhout:
+        for i in range(num_rows):
+            extra = {"tag": "final", "count": 1} if i == num_rows - 1 else None
+            fhout.write(
+                json.dumps({"idx": i, "pad": "x" * 5000, "extra": extra})
+                + "\n"
+            )
+
+    ds = dummy_annotator._post_annotate(
+        process_pdout=progress_dir, idx_column="idx", keep_idx_column=True
+    )
+
+    assert ds[0]["extra"] is None
+    assert ds[num_rows - 1]["extra"] == {"tag": "final", "count": 1}
+
+
+def test_post_annotate_unifies_int_and_float_in_one_column(
+    tmp_path: Path, dummy_annotator: Annotator
+) -> None:
+    # A column with an integer value on one row and a float on another is
+    # unified to float64, the same way pyarrow unifies them within a
+    # single read block.
+    progress_dir = tmp_path / "out" / "progress_backup"
+    progress_dir.mkdir(parents=True)
+    (progress_dir / "progress_0.jsonl").write_text(
+        '{"idx": 0, "score": 1}\n{"idx": 1, "score": 2.5}\n',
+        encoding="utf-8",
+    )
+
+    ds = dummy_annotator._post_annotate(
+        process_pdout=progress_dir, idx_column="idx", keep_idx_column=True
+    )
+
+    assert ds["score"] == [1.0, 2.5]
+
+
+def test_load_progress_files_loads_a_column_missing_from_one_file(
+    tmp_path: Path, dummy_annotator: Annotator
+) -> None:
+    # A column that one file does not hold at all (not merely null),
+    # e.g. one written before a later release added it, still has to
+    # load: the single features-driven read path fills it with nulls,
+    # so there is no need for a separate per-file fallback.
+    progress_dir = tmp_path / "progress_backup"
+    progress_dir.mkdir()
+    (progress_dir / "progress_0.jsonl").write_text(
+        '{"idx": 0, "response": "old"}\n', encoding="utf-8"
+    )
+    (progress_dir / "progress_1.jsonl").write_text(
+        '{"idx": 1, "response": "new", "reasoning": "because"}\n',
+        encoding="utf-8",
+    )
+
+    ds = dummy_annotator._load_progress_files(progress_dir).sort("idx")
+
+    assert ds["response"] == ["old", "new"]
+    assert ds["reasoning"] == [None, "because"]
+
+
+def test_infer_progress_features_uses_input_features_for_kept_columns(
+    tmp_path: Path,
+) -> None:
+    # A column that the input dataset carries (idx_column, or one kept
+    # through keep_columns) is typed from that dataset instead of being
+    # inferred from the files.
+    progress_dir = tmp_path / "progress_backup"
+    progress_dir.mkdir()
+    (progress_dir / "progress_0.jsonl").write_text(
+        '{"idx": 0, "text": "a"}\n', encoding="utf-8"
+    )
+
+    input_features = Features({"idx": Value("int32"), "text": Value("string")})
+    features = _infer_progress_features(
+        progress_dir, task_prefix="", input_features=input_features
+    )
+
+    assert features["idx"] == Value("int32")
+
+
+def test_infer_progress_features_keeps_an_all_null_column_as_null(
+    tmp_path: Path,
+) -> None:
+    progress_dir = tmp_path / "progress_backup"
+    progress_dir.mkdir()
+    (progress_dir / "progress_0.jsonl").write_text(
+        '{"idx": 0, "score": null}\n{"idx": 1, "score": null}\n',
+        encoding="utf-8",
+    )
+
+    features = _infer_progress_features(
+        progress_dir, task_prefix="", input_features=None
+    )
+
+    assert features["score"] == Value("null")
 
 
 def test_process_batch_validate_and_postprocess(

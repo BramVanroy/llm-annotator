@@ -441,14 +441,7 @@ def _infer_progress_features(
     for pfin in sorted(process_pdout.glob("*.jsonl")):
         with pfin.open("rb") as fhin:
             for raw_line in fhin:
-                if not raw_line.strip():
-                    continue
-                try:
-                    row = json.loads(raw_line)
-                except (json.JSONDecodeError, UnicodeDecodeError):
-                    continue
-                if not isinstance(row, dict):
-                    continue
+                row = json.loads(raw_line)
                 for column, value in row.items():
                     if column not in seen_columns:
                         seen_columns.add(column)
