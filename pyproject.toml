@@ -59,8 +59,8 @@ spacy = [
 # not published in the wheel metadata, so the index routing below only has to
 # hold for this repo. See the README for the manual install.
 vllm-kernels = [
-    "flashinfer-cubin==0.6.18.post1",
-    "flashinfer-jit-cache==0.6.18.post1",
+    "flashinfer-cubin==0.6.18",
+    "flashinfer-jit-cache==0.6.18",
 ]
 
 docs = [
