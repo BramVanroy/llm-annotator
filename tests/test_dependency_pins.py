@@ -6,8 +6,6 @@ have to move together whenever vLLM (and with it its `flashinfer-python`
 requirement) is bumped.
 """
 
-from __future__ import annotations
-
 import tomllib
 from pathlib import Path
 
@@ -54,7 +52,7 @@ def test_locked_flashinfer_versions_match():
 
 
 def test_vllm_kernels_group_pins_match_locked_flashinfer_python():
-    """The `vllm-kernels` group pins the version vLLM's own lock resolved."""
+    """The `vllm-kernels` group pins the locked `flashinfer-python` version."""
     locked_python_version = _strip_local_label(
         _locked_flashinfer_versions()["flashinfer-python"]
     )
