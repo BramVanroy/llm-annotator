@@ -1249,19 +1249,19 @@ wheels = [
 
 [[package]]
 name = "flashinfer-cubin"
-version = "0.6.18.post1"
+version = "0.6.18"
 source = { registry = "https://flashinfer.ai/whl/" }
 wheels = [
-    { url = "https://github.com/flashinfer-ai/flashinfer/releases/download/v0.6.18.post1/flashinfer_cubin-0.6.18.post1-py3-none-any.whl", hash = "sha256:bbacb5b8bbf429e43bf2740bb45551d981f41d0462842e36ee6fb3e3452763ab" },
+    { url = "https://github.com/flashinfer-ai/flashinfer/releases/download/v0.6.18/flashinfer_cubin-0.6.18-py3-none-any.whl", hash = "sha256:2dd65c0fcfc6bc44c67f148530de5372979c2e3d260e47935730f94156d4d873" },
 ]
 
 [[package]]
 name = "flashinfer-jit-cache"
-version = "0.6.18.post1+cu130"
+version = "0.6.18+cu130"
 source = { registry = "https://flashinfer.ai/whl/cu130/" }
 wheels = [
-    { url = "https://github.com/flashinfer-ai/flashinfer/releases/download/v0.6.18.post1/flashinfer_jit_cache-0.6.18.post1+cu130-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:860ec5ce11a1d686bde04dbef4bedee15c39e3ec5e10adccb186dfee2e4113f2" },
-    { url = "https://github.com/flashinfer-ai/flashinfer/releases/download/v0.6.18.post1/flashinfer_jit_cache-0.6.18.post1+cu130-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:d1729490636a98f22f158518e10c257eec5a188d3dadf30b4c9de298675d8d4b" },
+    { url = "https://github.com/flashinfer-ai/flashinfer/releases/download/v0.6.18/flashinfer_jit_cache-0.6.18+cu130-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:c97664eab2f21a01f6b8d24d10ba33631a1a64b981f788c3f61d81ebbf905970" },
+    { url = "https://github.com/flashinfer-ai/flashinfer/releases/download/v0.6.18/flashinfer_jit_cache-0.6.18+cu130-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:428a47a554ade93c30a818e142b781df58582bf056bab94611fb4c906cc366bf" },
 ]
 
 [[package]]
@@ -2085,8 +2085,8 @@ docs = [
     { name = "mkdocstrings", extras = ["python"], specifier = ">=1.0.4,<2" },
 ]
 vllm-kernels = [
-    { name = "flashinfer-cubin", specifier = "==0.6.18.post1", index = "https://flashinfer.ai/whl/" },
-    { name = "flashinfer-jit-cache", specifier = "==0.6.18.post1", index = "https://flashinfer.ai/whl/cu130/" },
+    { name = "flashinfer-cubin", specifier = "==0.6.18", index = "https://flashinfer.ai/whl/" },
+    { name = "flashinfer-jit-cache", specifier = "==0.6.18", index = "https://flashinfer.ai/whl/cu130/" },
 ]
 
 [[package]]
