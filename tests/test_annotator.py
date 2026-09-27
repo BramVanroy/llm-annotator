@@ -10,9 +10,11 @@ from pathlib import Path
 from typing import Any, Callable, cast
 
 import pytest
-from datasets import Dataset, load_dataset
+from datasets import Dataset, Features, Value, load_dataset
 
 from llm_annotator.annotator import (
+    BOOKKEEPING_FEATURE_TYPES,
+    BOOKKEEPING_SUFFIXES,
     PROGRESS_UPLOAD_FILE,
     Annotator,
     SelectionRecord,
@@ -20,6 +22,7 @@ from llm_annotator.annotator import (
     _callable_component,
     _copy_file_prefix,
     _create_messages,
+    _infer_progress_features,
     _ProgressUploader,
     _resolve_samples_per_output_file,
     destroy_on_error,
@@ -399,6 +402,130 @@ def test_post_annotate_loads_a_schema_column_that_is_null_in_one_file(
 
     assert ds["label"] == [None, "ok"]
     assert Dataset.load_from_disk(tmp_path / "out")["label"] == [None, "ok"]
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("error", "Response stopped due to max token limit"),
+        ("score", 42),
+        ("extra", {"tag": "final", "count": 1}),
+    ],
+    ids=["bookkeeping-string", "schema-property-int", "postprocess-object"],
+)
+def test_post_annotate_promotes_a_column_null_in_the_first_read_block(
+    tmp_path: Path,
+    dummy_annotator: Annotator,
+    column: str,
+    value: Any,
+) -> None:
+    # A column that is null throughout the first read block of a large
+    # progress file, and holds a value only on the last row, loads with
+    # that value intact, whatever its type.
+    progress_dir = tmp_path / "out" / "progress_backup"
+    progress_dir.mkdir(parents=True)
+    num_rows = 3000
+    with (progress_dir / "progress_0.jsonl").open(
+        "w", encoding="utf-8"
+    ) as fhout:
+        for i in range(num_rows):
+            row_value = value if i == num_rows - 1 else None
+            fhout.write(
+                json.dumps({"idx": i, "pad": "x" * 5000, column: row_value})
+                + "\n"
+            )
+
+    ds = dummy_annotator._post_annotate(
+        process_pdout=progress_dir, idx_column="idx", keep_idx_column=True
+    )
+
+    assert ds[0][column] is None
+    assert ds[num_rows - 1][column] == value
+
+
+def test_post_annotate_unifies_int_and_float_in_one_column(
+    tmp_path: Path, dummy_annotator: Annotator
+) -> None:
+    # A column with an integer value on one row and a float on another
+    # loads as float64 throughout.
+    progress_dir = tmp_path / "out" / "progress_backup"
+    progress_dir.mkdir(parents=True)
+    (progress_dir / "progress_0.jsonl").write_text(
+        '{"idx": 0, "score": 1}\n{"idx": 1, "score": 2.5}\n',
+        encoding="utf-8",
+    )
+
+    ds = dummy_annotator._post_annotate(
+        process_pdout=progress_dir, idx_column="idx", keep_idx_column=True
+    )
+
+    assert ds["score"] == [1.0, 2.5]
+
+
+def test_load_progress_files_loads_a_column_missing_from_one_file(
+    tmp_path: Path, dummy_annotator: Annotator
+) -> None:
+    # A column that one file does not hold at all (not merely null) is
+    # filled with null for the rows of that file.
+    progress_dir = tmp_path / "progress_backup"
+    progress_dir.mkdir()
+    (progress_dir / "progress_0.jsonl").write_text(
+        '{"idx": 0, "response": "old"}\n', encoding="utf-8"
+    )
+    (progress_dir / "progress_1.jsonl").write_text(
+        '{"idx": 1, "response": "new", "reasoning": "because"}\n',
+        encoding="utf-8",
+    )
+
+    ds = dummy_annotator._load_progress_files(progress_dir).sort("idx")
+
+    assert ds["response"] == ["old", "new"]
+    assert ds["reasoning"] == [None, "because"]
+
+
+def test_infer_progress_features_uses_input_features_for_kept_columns(
+    tmp_path: Path,
+) -> None:
+    # A column that the input dataset carries (idx_column, or one kept
+    # through keep_columns) is typed from that dataset instead of being
+    # inferred from the files.
+    progress_dir = tmp_path / "progress_backup"
+    progress_dir.mkdir()
+    (progress_dir / "progress_0.jsonl").write_text(
+        '{"idx": 0, "text": "a"}\n', encoding="utf-8"
+    )
+
+    input_features = Features({"idx": Value("int32"), "text": Value("string")})
+    features = _infer_progress_features(
+        progress_dir, task_prefix="", input_features=input_features
+    )
+
+    assert features["idx"] == Value("int32")
+
+
+def test_infer_progress_features_keeps_an_all_null_column_as_null(
+    tmp_path: Path,
+) -> None:
+    progress_dir = tmp_path / "progress_backup"
+    progress_dir.mkdir()
+    (progress_dir / "progress_0.jsonl").write_text(
+        '{"idx": 0, "score": null}\n{"idx": 1, "score": null}\n',
+        encoding="utf-8",
+    )
+
+    features = _infer_progress_features(
+        progress_dir, task_prefix="", input_features=None
+    )
+
+    assert features["score"] == Value("null")
+
+
+def test_bookkeeping_feature_types_covers_every_bookkeeping_column() -> None:
+    # BOOKKEEPING_FEATURE_TYPES and BOOKKEEPING_SUFFIXES name the same
+    # columns, except "messages", which is typed from the input dataset.
+    assert set(BOOKKEEPING_FEATURE_TYPES) == set(BOOKKEEPING_SUFFIXES) - {
+        "messages"
+    }
 
 
 def test_process_batch_validate_and_postprocess(

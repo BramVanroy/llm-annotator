@@ -35,11 +35,10 @@ from typing import Counter as CounterType
 from datasets import (
     Dataset,
     Features,
-    concatenate_datasets,
+    Value,
     get_dataset_split_names,
     load_dataset,
 )
-from datasets.exceptions import DatasetGenerationError
 from huggingface_hub import (
     create_branch,
     create_repo,
@@ -92,6 +91,22 @@ BOOKKEEPING_SUFFIXES = (
     "valid_fields",
 )
 """Column names, after the task prefix, that the annotator writes itself."""
+
+BOOKKEEPING_FEATURE_TYPES: dict[str, str] = {
+    "response": "string",
+    "finish_reason": "string",
+    "num_tokens": "int64",
+    "error": "string",
+    "error_type": "string",
+    "reasoning": "string",
+    "valid_fields": "bool",
+    "valid": "bool",
+}
+"""Arrow type of each bookkeeping column, keyed by its bare (unprefixed) name.
+
+``messages`` is not here: it holds the rendered prompt, of whatever type the
+input dataset gives it, and is typed from that dataset's features instead.
+"""
 
 PREPARED_DS_BRANCH_SUFF = "prepared_dataset"
 PREPARED_DS_LOCAL_SUBDIR = "prepared_dataset"
@@ -367,6 +382,82 @@ def _bookkeeping_columns(
     if idx_column is not None:
         columns.add(idx_column)
     return columns
+
+
+def _infer_progress_features(
+    process_pdout: Path,
+    *,
+    task_prefix: str,
+    input_features: Features | None,
+) -> Features:
+    """Build the complete ``Features`` of a directory of progress files.
+
+    A column is typed from one of three sources, in order: a bookkeeping
+    column (``BOOKKEEPING_FEATURE_TYPES``) keeps its fixed type; a column
+    that ``input_features`` names (the id column, or one kept through
+    ``keep_columns``) keeps that dataset's type; every other column (an
+    output schema property, or one that ``postprocess_fn`` added) is typed
+    from the non-null values collected for it while scanning the files.
+
+    Args:
+        process_pdout: Directory holding the ``*.jsonl`` progress files.
+        task_prefix: The task prefix of the run.
+        input_features: Features of the dataset that was annotated, or
+            ``None`` when they are not known, e.g. a file read outside a run.
+
+    Returns:
+        One ``Features`` covering the union of every file's columns.
+
+    Examples:
+        >>> import tempfile
+        >>> with tempfile.TemporaryDirectory() as tmp:
+        ...     path = Path(tmp) / "progress_0.jsonl"
+        ...     _ = path.write_text(
+        ...         '{"idx": 0, "error": null}\\n'
+        ...         '{"idx": 1, "error": "boom"}\\n'
+        ...     )
+        ...     features = _infer_progress_features(
+        ...         Path(tmp), task_prefix="", input_features=None
+        ...     )
+        >>> features["error"]
+        Value('string')
+    """
+    fixed_types = {
+        f"{task_prefix}{name}": dtype
+        for name, dtype in BOOKKEEPING_FEATURE_TYPES.items()
+    }
+
+    columns: list[str] = []
+    seen_columns: set[str] = set()
+    non_null_values: dict[str, list[Any]] = {}
+
+    for pfin in sorted(process_pdout.glob("*.jsonl")):
+        with pfin.open("rb") as fhin:
+            for raw_line in fhin:
+                row = json.loads(raw_line)
+                for column, value in row.items():
+                    if column not in seen_columns:
+                        seen_columns.add(column)
+                        columns.append(column)
+                    already_typed = column in fixed_types or (
+                        input_features is not None and column in input_features
+                    )
+                    if value is not None and not already_typed:
+                        non_null_values.setdefault(column, []).append(value)
+
+    features = Features()
+    for column in columns:
+        if column in fixed_types:
+            features[column] = Value(fixed_types[column])
+        elif input_features is not None and column in input_features:
+            features[column] = input_features[column]
+        else:
+            values = non_null_values.get(column, [])
+            features[column] = Dataset.from_dict({column: values}).features[
+                column
+            ]
+
+    return features
 
 
 def is_retried_error(
@@ -2427,6 +2518,7 @@ class Annotator:
                 hub_id=hub_id,
                 keep_idx_column=keep_idx_column,
                 task_prefix=task_prefix,
+                input_features=prepared_dataset.features,
             )
 
         if skip_idxs:
@@ -2594,6 +2686,7 @@ class Annotator:
             hub_id=hub_id,
             keep_idx_column=keep_idx_column,
             task_prefix=task_prefix,
+            input_features=prepared_dataset.features,
             num_rows_annotated=annotated_n_rows,
             num_output_tokens=annotated_n_tokens,
             elapsed_seconds=elapsed_seconds,
@@ -2859,55 +2952,40 @@ class Annotator:
             retry_errors=retry_errors,
         )
 
-    def _load_progress_files(self, process_pdout: Path) -> Dataset:
+    def _load_progress_files(
+        self,
+        process_pdout: Path,
+        *,
+        task_prefix: str = "",
+        input_features: Features | None = None,
+    ) -> Dataset:
         """Read every progress file in a directory back into one dataset.
 
-        The fast path hands the whole directory to ``load_dataset``, which
-        needs every file to share one schema. Files written by different
-        library versions do not: a release that adds a bookkeeping column
-        leaves a run that was already in flight with older files that lack it.
-        Rather than making such a run unresumable, fall back to reading each
-        file on its own and padding the missing columns with nulls.
+        Passes a complete ``Features`` (``_infer_progress_features``) to
+        ``load_dataset``, so that loading never infers a column's type from
+        one read block or one file alone.
 
         Args:
             process_pdout: Directory holding the ``*.jsonl`` progress files.
+            task_prefix: The task prefix of the run.
+            input_features: Features of the dataset that was annotated, for
+                the columns that the progress rows carry from it. ``None``
+                when they are not known.
 
         Returns:
             One dataset with the union of every file's columns.
         """
-        try:
-            return load_dataset(
-                "json", data_dir=str(process_pdout), split="train"
-            )
-        except DatasetGenerationError:
-            self._logger.warning(
-                f"The progress files in '{process_pdout}' do not all have the"
-                " same columns, which happens when a run is resumed by a"
-                " different version of this library. Reading them one by one"
-                " and filling the missing columns with nulls."
-            )
-
-        parts = [
-            load_dataset("json", data_files=str(pfin), split="train")
-            for pfin in sorted(process_pdout.glob("*.jsonl"))
-        ]
-        # A column that happens to be null in every row of one file is typed
-        # "null" there, so prefer any file that gives it a concrete type.
-        features = Features()
-        for part in parts:
-            for column, feature in part.features.items():
-                known = features.get(column)
-                if known is None or getattr(known, "dtype", None) == "null":
-                    features[column] = feature
-
-        padded = []
-        for part in parts:
-            missing = [c for c in features if c not in part.column_names]
-            for column in missing:
-                part = part.add_column(column, [None] * part.num_rows)
-            padded.append(part.cast(features) if missing else part)
-
-        return concatenate_datasets(padded)
+        features = _infer_progress_features(
+            process_pdout,
+            task_prefix=task_prefix,
+            input_features=input_features,
+        )
+        return load_dataset(
+            "json",
+            data_dir=str(process_pdout),
+            split="train",
+            features=features,
+        )
 
     def _post_annotate(
         self,
@@ -2917,6 +2995,7 @@ class Annotator:
         hub_id: str | None = None,
         keep_idx_column: bool = False,
         task_prefix: str = "",
+        input_features: Features | None = None,
         num_rows_annotated: int = 0,
         num_output_tokens: int = 0,
         elapsed_seconds: float | None = None,
@@ -2936,6 +3015,10 @@ class Annotator:
             hub_id: Optional Hugging Face dataset ID for uploads and cleanup.
             keep_idx_column: Whether to keep the idx_column in the final dataset before uploading and returning.
             task_prefix: Prefix used for the local cache directory name and the upload branch names.
+            input_features: Features of the dataset that was annotated, for
+                the columns that the progress rows carry from it (the id
+                column, or one kept through ``keep_columns``). ``None`` when
+                they are not known, e.g. a call outside a run.
             num_rows_annotated: How many rows this invocation annotated.
             num_output_tokens: How many output tokens this invocation
                 generated.
@@ -2944,7 +3027,11 @@ class Annotator:
         Returns:
             The concatenated dataset of all annotation results (invalid samples are NOT removed)
         """
-        ds = self._load_progress_files(process_pdout).sort(idx_column)
+        ds = self._load_progress_files(
+            process_pdout,
+            task_prefix=task_prefix,
+            input_features=input_features,
+        ).sort(idx_column)
 
         # A sample can only be written twice if two processes wrote to the same
         # progress directory (e.g. a requeued job whose predecessor was still
