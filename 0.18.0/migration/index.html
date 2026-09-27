@@ -1,0 +1,2468 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A Python library to use LLMs to annotate data.">
+      
+      
+      
+        <link rel="canonical" href="https://BramVanroy.github.io/llm-annotator/latest/migration/">
+      
+      
+        <link rel="prev" href="../provider-info/">
+      
+      
+        <link rel="next" href="../api/annotator/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Migrating from 0.16 - LLM Annotator</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#migrating-from-016" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+          <aside class="md-banner md-banner--warning">
+            <div class="md-banner__inner md-grid md-typeset">
+              
+  <span id="version-warning">
+    You are not viewing the documentation of the latest released version.
+    <a href="../.."><strong>Go to the latest release docs.</strong></a>
+  </span>
+
+            </div>
+            <script>var el=document.querySelector("[data-md-component=outdated]"),base=new URL(".."),outdated=__md_get("__outdated",sessionStorage,base);!0===outdated&&el&&(el.hidden=!1)</script>
+          </aside>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="LLM Annotator" class="md-header__button md-logo" aria-label="LLM Annotator" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            LLM Annotator
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Migrating from 0.16
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/BramVanroy/llm-annotator" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    BramVanroy/llm-annotator
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../choosing-a-provider/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Choosing a provider
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../pipeline/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Config pipeline
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../python-api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Python API guide
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../growing-a-run/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Growing a run
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../troubleshooting/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Troubleshooting
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../slurm/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  SLURM
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../provider-info/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Provider setup
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="./" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Migrating from 0.16
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../api/annotator/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  User API
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../api/clients/base/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Internals
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="LLM Annotator" class="md-nav__button md-logo" aria-label="LLM Annotator" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    LLM Annotator
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/BramVanroy/llm-annotator" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    BramVanroy/llm-annotator
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../choosing-a-provider/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Choosing a provider
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Config pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../python-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../growing-a-run/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Growing a run
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../slurm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SLURM
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../provider-info/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Provider setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migrating from 0.16
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migrating from 0.16
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#output-directories-and-records" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output directories and records
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Output directories and records">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-record-without-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A record without settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-finished-step-with-no-record" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A finished step with no record
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-metadata-file-name" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The metadata file name
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-hub-progress-backup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Hub progress backup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#config-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Config files
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Config files">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#keys-that-no-longer-load" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keys that no longer load
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#init-is-checked-against-the-constructor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        init is checked against the constructor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-step-that-switches-provider-inherits-nothing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A step that switches provider inherits nothing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#schema-properties-may-not-shadow-a-column" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Schema properties may not shadow a column
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prompt-files-are-read-verbatim" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prompt files are read verbatim
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#relative-data-paths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Relative data paths
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#config-errors-on-the-command-line" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Config errors on the command line
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-step-with-a-hub_id-backs-up-its-progress-by-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A step with a hub_id backs up its progress by default
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-schema-is-set-on-the-step-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The schema is set on the step only
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-names" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step names
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#python-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python API
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Python API">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#renamed-and-removed-arguments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Renamed and removed arguments
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#imports" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Imports
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#removed-names" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Removed names
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#moved-directories" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Moved directories
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#clients" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Clients
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Clients">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#errors-from-a-direct-generate-call" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors from a direct generate call
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-claude-client-raises-valueerror-for-a-malformed-message-list" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Claude client raises ValueError for a malformed message list
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batch_generate-takes-three-arguments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        batch_generate takes three arguments
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-vllm-server-batch-is-one-request-per-sample" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A vLLM server batch is one request per sample
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#slurm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SLURM
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User API
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User API
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/annotator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Annotator
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Config
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/hub/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hub restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_10_5" id="__nav_10_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_10_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Clients
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/clients/claude/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Claude
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/clients/openai/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OpenAI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/clients/vllm_online_client/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vLLM (online)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/clients/vllm_offline_client/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vLLM (offline)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/clients/exceptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Exceptions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Internals
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Internals
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/clients/base/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client base
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/pool/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pool
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/utils/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Utils
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/logging_utils/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Logging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#output-directories-and-records" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output directories and records
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Output directories and records">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-record-without-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A record without settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-finished-step-with-no-record" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A finished step with no record
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-metadata-file-name" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The metadata file name
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-hub-progress-backup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Hub progress backup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#config-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Config files
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Config files">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#keys-that-no-longer-load" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keys that no longer load
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#init-is-checked-against-the-constructor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        init is checked against the constructor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-step-that-switches-provider-inherits-nothing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A step that switches provider inherits nothing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#schema-properties-may-not-shadow-a-column" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Schema properties may not shadow a column
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prompt-files-are-read-verbatim" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prompt files are read verbatim
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#relative-data-paths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Relative data paths
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#config-errors-on-the-command-line" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Config errors on the command line
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-step-with-a-hub_id-backs-up-its-progress-by-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A step with a hub_id backs up its progress by default
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-schema-is-set-on-the-step-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The schema is set on the step only
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-names" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step names
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#python-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python API
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Python API">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#renamed-and-removed-arguments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Renamed and removed arguments
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#imports" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Imports
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#removed-names" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Removed names
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#moved-directories" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Moved directories
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#clients" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Clients
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Clients">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#errors-from-a-direct-generate-call" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors from a direct generate call
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-claude-client-raises-valueerror-for-a-malformed-message-list" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Claude client raises ValueError for a malformed message list
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batch_generate-takes-three-arguments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        batch_generate takes three arguments
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-vllm-server-batch-is-one-request-per-sample" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A vLLM server batch is one request per sample
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#slurm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SLURM
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="migrating-from-016">Migrating from 0.16<a class="headerlink" href="#migrating-from-016" title="Permanent link">&para;</a></h1>
+<p>Everything that changed between <code>v0.16.0</code> and this release, grouped by where it
+bites. A section that says nothing about your run needs nothing from you.</p>
+<h2 id="output-directories-and-records">Output directories and records<a class="headerlink" href="#output-directories-and-records" title="Permanent link">&para;</a></h2>
+<h3 id="a-record-without-settings">A record without settings<a class="headerlink" href="#a-record-without-settings" title="Permanent link">&para;</a></h3>
+<p><code>prepare_data</code> writes <code>&lt;output_dir&gt;/&lt;task_prefix&gt;selection.json</code> next to the
+prepared data. The 0.16 record held the sample selection only, so it says
+nothing about the prompt, and a resume could not tell whether the finished rows
+answer the prompt that is asked for now. Reading such a record raises:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>The record in 'outputs/imdb-sentiment/selection.json' does not describe the
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>settings that its run was annotated with, so a resume cannot tell whether the
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>prompt still matches. Finish the run with the release that wrote it, annotate it
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>into a new 'output_dir', or overwrite it. See 'A record without settings' in
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>docs/migration.md.
+</span></code></pre></div>
+<p>Three ways forward:</p>
+<ul>
+<li>Finish the run with the release that wrote it, and let the next run start
+  under this one.</li>
+<li>Point <code>output_dir</code> at a new directory, which annotates every row again and
+  leaves the old result on disk.</li>
+<li>Pass <code>--overwrite</code> (<code>overwrite: true</code>, or <code>overwrite=True</code> from Python) to
+  discard the finished rows in place and annotate every row again.</li>
+</ul>
+<p>A fourth way keeps the finished rows, at your own risk: delete the
+<code>selection.json</code> files under <code>output_dir</code> (inside a pipeline,
+<code>&lt;NN&gt;-&lt;name&gt;/annotate/&lt;name&gt;_selection.json</code>). Only the rows that never ran are
+then sent to the model. Nothing is compared, and the settings of that run are
+recorded as the ones the whole directory was annotated with. If the prompt
+changed since the finished rows were written, the output holds answers to both
+prompts and no later run can tell. Use it only when you know the settings did
+not change.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>rm<span class="w"> </span>outputs/imdb-sentiment/*selection.json
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>llm-annotate<span class="w"> </span>pilot.yaml
+</span></code></pre></div>
+<h3 id="a-finished-step-with-no-record">A finished step with no record<a class="headerlink" href="#a-finished-step-with-no-record" title="Permanent link">&para;</a></h3>
+<p>Inside a pipeline the same rule applies per step, and a step that already
+finished needs one extra move. Its <code>output/</code> snapshot is what a re-run loads
+instead of running the step, and with no record next to it nothing can say
+whether that snapshot belongs to the config that is being run now, so the run
+stops:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>Step 'sentiment' finished into 'outputs/imdb-sentiment/01-sentiment/output', but
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>there is no record of the settings it was annotated with, so this run cannot
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>tell whether its result still matches the config. Remove
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>'outputs/imdb-sentiment/01-sentiment/output' to run the step again: the rows in
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>its progress files are not sent to the model a second time. See 'A finished step
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>with no record' in docs/migration.md.
+</span></code></pre></div>
+<p>Removing the <code>output/</code> directory is cheap: the step runs again, reads the ids it
+already finished out of its JSONL progress files, annotates only what is missing
+(nothing, for a step that had finished) and writes the snapshot again, this time
+with a record next to it.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>rm<span class="w"> </span>-r<span class="w"> </span>outputs/imdb-sentiment/*/output
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>llm-annotate<span class="w"> </span>pilot.yaml
+</span></code></pre></div>
+<h3 id="the-metadata-file-name">The metadata file name<a class="headerlink" href="#the-metadata-file-name" title="Permanent link">&para;</a></h3>
+<p>The counts of a run are written to
+<code>&lt;output_dir&gt;/metadata/&lt;task_prefix&gt;annotation_metadata.json</code>. An output
+directory from 0.16 holds them under <code>annotation_metadata.json</code>, without the
+prefix and without the <code>metadata/</code> directory. Nothing in the library reads that
+file, so an old one is left where it is. Delete it, or point your own scripts at
+the new name.</p>
+<h3 id="the-hub-progress-backup">The Hub progress backup<a class="headerlink" href="#the-hub-progress-backup" title="Permanent link">&para;</a></h3>
+<p>A run that starts with an empty progress directory while its <code>hub_id</code> has a
+<code>&lt;task_prefix&gt;progress_backup</code> branch now raises instead of replacing the backup
+with a run that starts from zero. Restore the backup first:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>python<span class="w"> </span>scripts/restore_progress_from_hub.py<span class="w"> </span>--hub-id<span class="w"> </span>my-org/imdb-sentiment<span class="w"> </span>--output-dir<span class="w"> </span>outputs/imdb-sentiment
+</span></code></pre></div>
+<p>Or pass <code>overwrite=True</code> (<code>--overwrite</code> in a pipeline) to delete the branch and
+redo the run. A backup branch written by 0.16 holds no selection record; the
+restore logs one line about that, and the next <code>prepare_data</code> records its own
+settings.</p>
+<p><code>overwrite=True</code> also deletes that branch, so the rows of a discarded run do not
+mix with the new backup.</p>
+<h2 id="config-files">Config files<a class="headerlink" href="#config-files" title="Permanent link">&para;</a></h2>
+<h3 id="keys-that-no-longer-load">Keys that no longer load<a class="headerlink" href="#keys-that-no-longer-load" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>What to do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>init.batch_size</code> on a <code>vllm_offline</code> step</td>
+<td>remove it and set the client block's own <code>batch_size</code></td>
+</tr>
+<tr>
+<td><code>init.min_batch_size</code> on a <code>vllm_offline</code> step</td>
+<td>remove it</td>
+</tr>
+<tr>
+<td><code>options.n</code> on either vLLM provider</td>
+<td>remove it, or set it to 1</td>
+</tr>
+<tr>
+<td><code>pool.gpus_per_vllm_server</code></td>
+<td>write it as <code>engine.tensor_parallel_size</code></td>
+</tr>
+</tbody>
+</table>
+<p>The first two fail at load time with a message that names them, the third
+with the unknown-option error, and the fourth with the unknown-key error of
+the <code>pool</code> block. <code>engine.tensor_parallel_size</code> is read by both vLLM
+providers, so a step states its GPU count once. One response per sample is read, so <code>n</code> above 1
+was only ever paid for and dropped.</p>
+<h3 id="init-is-checked-against-the-constructor"><code>init</code> is checked against the constructor<a class="headerlink" href="#init-is-checked-against-the-constructor" title="Permanent link">&para;</a></h3>
+<p>Every <code>init</code> key is validated against the client constructor's signature, and
+every <code>options</code> key against the runtime-options dataclass, when the config
+loads. A typo that 0.16 accepted and ignored is now an error before the first
+request, with the accepted names listed. An engine setting written under <code>init</code>
+is rejected the same way, with the move spelled out.</p>
+<h3 id="a-step-that-switches-provider-inherits-nothing">A step that switches provider inherits nothing<a class="headerlink" href="#a-step-that-switches-provider-inherits-nothing" title="Permanent link">&para;</a></h3>
+<p>A step whose <code>client</code> block names a different <code>provider</code> than the top-level
+block no longer inherits that block's <code>init</code>, <code>options</code>, <code>engine</code> or pool keys.
+Those name fields of the other provider's constructor and dataclass, so an
+inherited <code>api_key</code> would send one provider's key to another. Write out what
+such a step needs.</p>
+<h3 id="schema-properties-may-not-shadow-a-column">Schema properties may not shadow a column<a class="headerlink" href="#schema-properties-may-not-shadow-a-column" title="Permanent link">&para;</a></h3>
+<p>An <code>output_schema</code> whose top-level properties include the <code>idx_column</code> or a
+bookkeeping column name (<code>response</code>, <code>finish_reason</code>, <code>num_tokens</code>, <code>error</code>,
+<code>error_type</code>, <code>reasoning</code>, <code>valid_fields</code>, <code>valid</code>, <code>messages</code>, each behind the
+task prefix) is rejected before the step's first request. Rename the property,
+or use another <code>task_prefix</code> or <code>idx_column</code>.</p>
+<p>Keys that a model returns outside the schema are no longer written as columns.
+That can only happen on the vLLM providers, which pass a schema on without
+<code>additionalProperties: false</code>. Add such a key to the schema's <code>properties</code> if
+you need it.</p>
+<h3 id="prompt-files-are-read-verbatim">Prompt files are read verbatim<a class="headerlink" href="#prompt-files-are-read-verbatim" title="Permanent link">&para;</a></h3>
+<p>A <code>prompt_file</code> or <code>system_prompt_file</code> reaches the model as the bytes it holds,
+whatever its suffix. A <code>.json</code> system prompt is sent as the JSON text it holds,
+where 0.16 rewrote some files as Markdown bullets.</p>
+<h3 id="relative-data-paths">Relative data paths<a class="headerlink" href="#relative-data-paths" title="Permanent link">&para;</a></h3>
+<p><code>dataset.data_dir</code> and <code>dataset.data_files</code> resolve against the config file's
+directory when <code>dataset.name</code> is a local builder or a directory, like every
+other path in a config. A config that relied on them resolving against the
+current working directory needs the paths rewritten, or an absolute path.</p>
+<h3 id="config-errors-on-the-command-line">Config errors on the command line<a class="headerlink" href="#config-errors-on-the-command-line" title="Permanent link">&para;</a></h3>
+<p><code>llm-annotate</code> reports a config that does not load as one
+<code>error: &lt;location&gt;: &lt;message&gt;</code> line per problem on stderr and exits with status
+2, instead of printing a traceback. <code>--debug</code> keeps the traceback. Only config
+loading is reported this way.</p>
+<h3 id="a-step-with-a-hub_id-backs-up-its-progress-by-default">A step with a <code>hub_id</code> backs up its progress by default<a class="headerlink" href="#a-step-with-a-hub_id-backs-up-its-progress-by-default" title="Permanent link">&para;</a></h3>
+<p><code>upload_every_n_samples</code> on a step defaults to <code>10000</code>, the same as in the
+Python API. A step that named a <code>hub_id</code> and no cadence uploaded nothing in
+0.16. Set <code>upload_every_n_samples: 0</code> to switch the backup off. Without a
+<code>hub_id</code> nothing is uploaded either way.</p>
+<h3 id="the-schema-is-set-on-the-step-only">The schema is set on the step only<a class="headerlink" href="#the-schema-is-set-on-the-step-only" title="Permanent link">&para;</a></h3>
+<p>A client block with <code>json_schema</code> (or <code>output_schema</code>) under <code>options</code> is
+refused when the config loads. Move the schema to the step:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># before</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nt">client</span><span class="p">:</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">options</span><span class="p">:</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="nt">json_schema</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="nv">object</span><span class="p p-Indicator">,</span><span class="nt"> properties</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">label</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="nv">string</span><span class="p p-Indicator">}}}</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1"># after</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="nt">output_schema</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="nv">object</span><span class="p p-Indicator">,</span><span class="nt"> properties</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">label</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="nv">string</span><span class="p p-Indicator">}}}</span>
+</span></code></pre></div>
+<p>In 0.16 a schema under <code>options</code> was sent to the model but left out of the
+step's selection record, so an edited schema was not noticed on a re-run.</p>
+<h3 id="step-names">Step names<a class="headerlink" href="#step-names" title="Permanent link">&para;</a></h3>
+<p>A step name may only hold letters, digits, <code>_</code>, <code>-</code> and <code>.</code>, and starts with a
+letter or a digit. A name such as <code>rate qa</code> or <code>rate,qa</code> is refused when the
+config loads; <code>sbatch --export</code> splits on the comma. Rename the step, and
+rename its directory <code>&lt;NN&gt;-&lt;name&gt;/</code> with it to keep its finished rows.</p>
+<h2 id="python-api">Python API<a class="headerlink" href="#python-api" title="Permanent link">&para;</a></h2>
+<h3 id="renamed-and-removed-arguments">Renamed and removed arguments<a class="headerlink" href="#renamed-and-removed-arguments" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Was</th>
+<th>Now</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>full_prompt_template=</code></td>
+<td><code>prompt_template=</code>, which is required</td>
+</tr>
+<tr>
+<td><code>prompt_field_swapper={"content": "body"}</code></td>
+<td>apply the rename yourself: <code>template.replace("{content}", "{body}")</code></td>
+</tr>
+<tr>
+<td><code>VLLMOfflineClient(batch_size=..., min_batch_size=...)</code></td>
+<td>the annotator's own <code>batch_size</code>, at or above <code>max_num_seqs</code></td>
+</tr>
+<tr>
+<td><code>client.batch_generate(..., use_batch_api=True, poll_interval=30)</code></td>
+<td><code>OpenAIClient(..., use_batch_api=True, batch_poll_interval=30)</code></td>
+</tr>
+<tr>
+<td><code>run_annotation(..., dataset_split=..., dataset_config=...)</code></td>
+<td>drop both; they are arguments of <code>prepare_data</code> and <code>annotate_dataset</code>, where they select what is loaded</td>
+</tr>
+<tr>
+<td><code>ProviderRuntimeOptions(json_schema=schema)</code> (and the same field on every runtime-options class)</td>
+<td><code>output_schema=schema</code>; an <code>Annotator</code> refuses options that hold a schema, so pass it as <code>run_annotation(..., output_schema=schema)</code> (or to <code>annotate_dataset</code>, <code>generate_dataset</code>)</td>
+</tr>
+<tr>
+<td><code>anno.push_progress_to_hub(progress_dir)</code></td>
+<td><code>hub_id</code> is a required keyword: <code>anno.push_progress_to_hub(progress_dir, hub_id="me/my-dataset")</code></td>
+</tr>
+</tbody>
+</table>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">template</span> <span class="o">=</span> <span class="s2">"Summarize this document: </span><span class="si">{content}</span><span class="s2">"</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="c1"># before</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="n">anno</span><span class="o">.</span><span class="n">prepare_data</span><span class="p">(</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    <span class="n">output_dir</span><span class="o">=</span><span class="n">out</span><span class="p">,</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="n">full_prompt_template</span><span class="o">=</span><span class="n">template</span><span class="p">,</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>    <span class="n">prompt_field_swapper</span><span class="o">=</span><span class="p">{</span><span class="s2">"content"</span><span class="p">:</span> <span class="s2">"body"</span><span class="p">},</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="p">)</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="c1"># after</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="n">anno</span><span class="o">.</span><span class="n">prepare_data</span><span class="p">(</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>    <span class="n">output_dir</span><span class="o">=</span><span class="n">out</span><span class="p">,</span>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>    <span class="n">prompt_template</span><span class="o">=</span><span class="n">template</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s2">"</span><span class="si">{content}</span><span class="s2">"</span><span class="p">,</span> <span class="s2">"</span><span class="si">{body}</span><span class="s2">"</span><span class="p">),</span>
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="imports">Imports<a class="headerlink" href="#imports" title="Permanent link">&para;</a></h3>
+<p>The package root exports 21 names instead of 36. Everything else is importable
+from the module that defines it:</p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Import from</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SelectionRecord</code></td>
+<td><code>llm_annotator.annotator</code></td>
+</tr>
+<tr>
+<td><code>OnError</code>, <code>Provider</code>, <code>ProviderRuntimeOptions</code></td>
+<td><code>llm_annotator.clients.base</code></td>
+</tr>
+<tr>
+<td><code>VLLMBaseRuntimeOptions</code></td>
+<td><code>llm_annotator.clients.vllm_online_client</code></td>
+</tr>
+<tr>
+<td><code>ClientConfig</code>, <code>DatasetConfig</code>, <code>StepConfig</code>, <code>load_config_file</code></td>
+<td><code>llm_annotator.config</code></td>
+</tr>
+<tr>
+<td><code>build_annotator</code>, <code>build_client</code>, <code>wait_for_servers</code></td>
+<td><code>llm_annotator.pool</code></td>
+</tr>
+<tr>
+<td><code>extract_prompt_prefix</code>, <code>get_hash</code></td>
+<td><code>llm_annotator.utils</code></td>
+</tr>
+</tbody>
+</table>
+<!-- docs-test: fragment -->
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># before</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">llm_annotator</span><span class="w"> </span><span class="kn">import</span> <span class="n">ClientConfig</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="c1"># after</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">llm_annotator.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">ClientConfig</span>
+</span></code></pre></div>
+<p><code>build_client</code> and <code>build_annotator</code> were methods of <code>ClientConfig</code> and are now
+functions that take the config as their first argument, in the new
+<code>llm_annotator.pool</code> module:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">llm_annotator.pool</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_annotator</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="c1"># before: annotator = client_config.build_annotator(root, verbose=True)</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="n">annotator</span> <span class="o">=</span> <span class="n">build_annotator</span><span class="p">(</span><span class="n">client_config</span><span class="p">,</span> <span class="n">root</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="removed-names">Removed names<a class="headerlink" href="#removed-names" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>auto_reduce_batch_size</code>, the decorator that halved a chunk on a CUDA
+  out-of-memory error. vLLM sizes its own KV cache, so there is nothing to
+  halve.</li>
+<li><code>ConfigurationError</code> and <code>ParsingError</code>, which nothing raised.
+  <code>LLMClientError</code> is the base class to catch for every error of a client.</li>
+<li><code>SelectionRecord.is_stale()</code> and the attributes <code>shuffle_seed</code>,
+  <code>source_signature</code> and <code>reuse_idx_column</code>. Those values are entries of
+  <code>SelectionRecord.components</code>, and
+  <a class="autorefs autorefs-internal" title="            changed_components" href="../api/annotator/#llm_annotator.annotator.SelectionRecord.changed_components"><code>changed_components</code></a>
+  is what compares a request against a record.</li>
+<li><code>convert_int_to_annotated_str</code>, <code>yield_jsonl_robust</code>, <code>count_lines</code>,
+  <code>is_in_range</code> and <code>is_length</code> of <code>llm_annotator.utils</code>, which nothing in the
+  package used. In a <code>validate_fn</code>, write the comparison inline. To read
+  progress files back, use <code>datasets.load_dataset("json", data_dir=...)</code>.</li>
+<li><code>Annotator.get_pfout_name</code>, which is the private <code>_get_pfout_name</code>. The
+  names of the progress files are unchanged.</li>
+<li><code>llm_annotator.external.propella</code>, which left the installed package. Copy
+  <code>examples/propella/propella_schema.py</code> out of the repository if you used it.</li>
+</ul>
+<h3 id="moved-directories">Moved directories<a class="headerlink" href="#moved-directories" title="Permanent link">&para;</a></h3>
+<p><code>examples/wiki-nl-persona-qa/</code> and <code>examples/model-comparison/</code> are now
+<code>case-studies/wiki-nl-persona-qa/</code> and <code>case-studies/model-comparison/</code>.</p>
+<h2 id="clients">Clients<a class="headerlink" href="#clients" title="Permanent link">&para;</a></h2>
+<h3 id="errors-from-a-direct-generate-call">Errors from a direct <code>generate</code> call<a class="headerlink" href="#errors-from-a-direct-generate-call" title="Permanent link">&para;</a></h3>
+<p><code>client.generate(...)</code> follows <code>on_error</code> the way <code>batch_generate</code> always did.
+With <code>"warn"</code> or <code>"ignore"</code> it returns a <code>Response</code> that carries <code>error</code> and
+<code>error_type</code>; with <code>"raise"</code> it raises <code>ProviderError</code> rather than the SDK's own
+exception. A malformed message, or <code>n</code> above 1, is still a <code>ValueError</code> for the
+caller whatever <code>on_error</code> says, because the request payload is built outside
+that path.</p>
+<h3 id="the-claude-client-raises-valueerror-for-a-malformed-message-list">The Claude client raises <code>ValueError</code> for a malformed message list<a class="headerlink" href="#the-claude-client-raises-valueerror-for-a-malformed-message-list" title="Permanent link">&para;</a></h3>
+<p>A second system message raised <code>ProviderError</code> in 0.16, while a system message
+that is not first and an unknown role raised <code>ValueError</code>. All three raise
+<code>ValueError</code>, like every other mistake in a request payload. <code>ProviderError</code>
+covers a failed request.</p>
+<h3 id="batch_generate-takes-three-arguments"><code>batch_generate</code> takes three arguments<a class="headerlink" href="#batch_generate-takes-three-arguments" title="Permanent link">&para;</a></h3>
+<p>Every client's <code>batch_generate</code> takes <code>messages</code>, <code>options</code> and <code>gen_kwargs</code>.
+The OpenAI Batch API is a constructor setting now:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nt">client</span><span class="p">:</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">provider</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openai</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span><span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">gpt-4o-mini</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span><span class="nt">init</span><span class="p">:</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">    </span><span class="nt">use_batch_api</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">    </span><span class="nt">batch_poll_interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30</span>
+</span></code></pre></div>
+<p><code>VLLMOnlineClient</code> does not accept <code>use_batch_api</code>; as an <code>init</code> key of a
+<code>vllm_online</code> step it fails when the config loads, as an unknown key.</p>
+<h3 id="a-vllm-server-batch-is-one-request-per-sample">A vLLM server batch is one request per sample<a class="headerlink" href="#a-vllm-server-batch-is-one-request-per-sample" title="Permanent link">&para;</a></h3>
+<p><code>VLLMOnlineClient</code> no longer posts to vLLM's <code>/v1/chat/completions/batch</code> route.
+No config key or Python argument changes, but two behaviours do:</p>
+<ul>
+<li><code>{prefix}num_tokens</code> is filled on a <code>vllm_online</code> step. It used to be <code>None</code>,
+  because the batch route reported one <code>usage</code> block for the whole batch. Code
+  that treated the column as always empty on this provider (a filter, a
+  throughput report) now gets real numbers.</li>
+<li>A failing sample no longer takes its batch down with it. A batch in which one
+  prompt is too long used to write errors for every row of that batch.</li>
+</ul>
+<p><code>timeout</code> (3600 seconds), <code>max_retries</code> (2) and <code>max_workers</code> (<code>None</code>, which
+sends every request of a batch at once) are constructor settings of that client,
+reachable from a config under <code>init</code>. See
+<a href="../provider-info/#vllm-online-server">Provider setup</a>.</p>
+<h2 id="slurm">SLURM<a class="headerlink" href="#slurm" title="Permanent link">&para;</a></h2>
+<p>Nothing in <code>slurm/cluster.env</code> has to change: no variable was removed or
+renamed. Six optional ones were added, and <code>cluster.env.example</code> documents each
+of them:</p>
+<ul>
+<li><code>MAX_CONCURRENT_SERVERS</code> throttles a server array at a site with a per-user
+  GPU limit.</li>
+<li><code>SERVER_HOST_CMD</code> picks the command a server uses to publish its address.</li>
+<li><code>MODEL_DOWNLOAD</code>, <code>DOWNLOAD_PARTITION</code> and <code>DOWNLOAD_TIME</code> fetch the weights
+  in one CPU job per model before any GPU is allocated.</li>
+<li><code>CANCEL_SERVERS_ON_EXIT=0</code> keeps a step's servers alive after its client ends.</li>
+</ul>
+<p><code>submit_pipeline.sh</code> also takes <code>--max-resubmits N</code>, which queues follow-up
+attempts per step in advance. <a href="../slurm/">The SLURM guide</a> has all of them.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["content.code.copy", "content.code.annotate", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.indexes", "navigation.top", "search.highlight", "search.suggest", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,2309 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A Python library to use LLMs to annotate data.">
+      
+      
+      
+        <link rel="canonical" href="https://BramVanroy.github.io/llm-annotator/latest/slurm/">
+      
+      
+        <link rel="prev" href="../troubleshooting/">
+      
+      
+        <link rel="next" href="../provider-info/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>SLURM - LLM Annotator</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#slurm-job-scripts" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+          <aside class="md-banner md-banner--warning">
+            <div class="md-banner__inner md-grid md-typeset">
+              
+  <span id="version-warning">
+    You are not viewing the documentation of the latest released version.
+    <a href="../.."><strong>Go to the latest release docs.</strong></a>
+  </span>
+
+            </div>
+            <script>var el=document.querySelector("[data-md-component=outdated]"),base=new URL(".."),outdated=__md_get("__outdated",sessionStorage,base);!0===outdated&&el&&(el.hidden=!1)</script>
+          </aside>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="LLM Annotator" class="md-header__button md-logo" aria-label="LLM Annotator" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            LLM Annotator
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              SLURM
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/BramVanroy/llm-annotator" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    BramVanroy/llm-annotator
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../choosing-a-provider/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Choosing a provider
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../pipeline/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Config pipeline
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../python-api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Python API guide
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../growing-a-run/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Growing a run
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../troubleshooting/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Troubleshooting
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="./" class="md-tabs__link">
+        
+  
+  
+    
+  
+  SLURM
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../provider-info/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Provider setup
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../migration/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Migrating from 0.16
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../api/annotator/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  User API
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../api/clients/base/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Internals
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="LLM Annotator" class="md-nav__button md-logo" aria-label="LLM Annotator" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    LLM Annotator
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/BramVanroy/llm-annotator" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    BramVanroy/llm-annotator
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../choosing-a-provider/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Choosing a provider
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Config pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../python-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../growing-a-run/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Growing a run
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SLURM
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SLURM
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#try-it-before-you-submit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Try it before you submit
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-cluster-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The cluster file
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#overriding-the-config-for-one-submission" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overriding the config for one submission
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-each-step-becomes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What each step becomes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#serving-profiles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Serving profiles
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-the-two-jobs-of-a-step-find-each-other" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How the two jobs of a step find each other
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resubmitting-automatically" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resubmitting automatically
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#model-downloads" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model downloads
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#threads-of-a-pool-client" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Threads of a pool client
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#run-level-environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run-level environment variables
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resuming" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resuming
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-a-step-yourself" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running a step yourself
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../provider-info/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Provider setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../migration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migrating from 0.16
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User API
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User API
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/annotator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Annotator
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Config
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/hub/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hub restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_10_5" id="__nav_10_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_10_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Clients
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/clients/claude/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Claude
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/clients/openai/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OpenAI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/clients/vllm_online_client/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vLLM (online)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/clients/vllm_offline_client/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vLLM (offline)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/clients/exceptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Exceptions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Internals
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Internals
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/clients/base/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client base
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/pool/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pool
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/utils/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Utils
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/logging_utils/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Logging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#try-it-before-you-submit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Try it before you submit
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-cluster-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The cluster file
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#overriding-the-config-for-one-submission" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overriding the config for one submission
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-each-step-becomes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What each step becomes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#serving-profiles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Serving profiles
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-the-two-jobs-of-a-step-find-each-other" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How the two jobs of a step find each other
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resubmitting-automatically" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resubmitting automatically
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#model-downloads" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model downloads
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#threads-of-a-pool-client" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Threads of a pool client
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#run-level-environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run-level environment variables
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resuming" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resuming
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-a-step-yourself" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running a step yourself
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="slurm-job-scripts">SLURM job scripts<a class="headerlink" href="#slurm-job-scripts" title="Permanent link">&para;</a></h1>
+<p>Run a whole annotation pipeline on a SLURM cluster from one config file.</p>
+<p>First ensure that all variables relevant to your SLURM cluster are set:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>cp<span class="w"> </span>slurm/cluster.env.example<span class="w"> </span>slurm/cluster.env
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nv">$EDITOR</span><span class="w"> </span>slurm/cluster.env
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="c1"># then simply submit</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>./slurm/submit_pipeline.sh<span class="w"> </span>my-pipeline.yaml
+</span></code></pre></div>
+<p><code>submit_pipeline.sh</code> asks the config what each step needs and submits one job
+chain per step, so a step only starts once the one before it has succeeded.
+Nothing about the allocation lives in an <code>#SBATCH</code> header you have to edit, and
+nothing about the annotation is repeated on the command line.</p>
+<p>Submitting per step is what makes a real pipeline work on a cluster: each step
+gets servers for its own model, and GPUs are released as soon as that step is
+done rather than being held for the whole run. A step that calls a hosted API
+gets no GPU at all.</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cluster.env.example</code></td>
+<td>Template for the one file you edit: partitions, accounting, cores per GPU, modules.</td>
+</tr>
+<tr>
+<td><code>submit_pipeline.sh</code></td>
+<td>Run on a login node. Reads the config and submits the job chain.</td>
+</tr>
+<tr>
+<td><code>vllm_annotate.sh</code></td>
+<td>Runs one step of the config. Waits for its pool if it has one.</td>
+</tr>
+<tr>
+<td><code>vllm_server.sh</code></td>
+<td>One array task = one vLLM server. Publishes its base URL once healthy.</td>
+</tr>
+<tr>
+<td><code>vllm_common.sh</code></td>
+<td>Sourced by all of the above: cluster file, environment setup, ports, health polling.</td>
+</tr>
+</tbody>
+</table>
+<p>Three layers, kept apart: the pipeline config says what is annotated, the
+cluster file says what your cluster calls things, and the scripts hold the
+job shapes, which are the same everywhere. Nothing is configured twice.</p>
+<h2 id="try-it-before-you-submit">Try it before you submit<a class="headerlink" href="#try-it-before-you-submit" title="Permanent link">&para;</a></h2>
+<p><code>--dry-run</code> prints the <code>sbatch</code> command lines it would run and submits nothing.
+It is the fastest way to check a new cluster file:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>./slurm/submit_pipeline.sh<span class="w"> </span>--dry-run<span class="w"> </span>my-pipeline.yaml
+</span></code></pre></div>
+<div class="language-console highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="go">Step 1 'write-qa' (vllm_pool)</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="go">sbatch --account=my_project --time=04:00:00 --job-name=vllm-write-qa --array=1-4 \</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="go">  --gres=gpu:2 --cpus-per-task=36 --partition=gpu_a100 ... slurm/vllm_server.sh</span>
+</span></code></pre></div>
+<h2 id="the-cluster-file">The cluster file<a class="headerlink" href="#the-cluster-file" title="Permanent link">&para;</a></h2>
+<p>Copy <code>cluster.env.example</code> to <code>cluster.env</code> and fill it in; it is read
+automatically. To keep several clusters side by side, write one file each and
+pick one per run:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>./slurm/submit_pipeline.sh<span class="w"> </span>--cluster-env<span class="w"> </span>slurm/clusters/leonardo.env<span class="w"> </span>my-pipeline.yaml
+</span></code></pre></div>
+<h2 id="overriding-the-config-for-one-submission">Overriding the config for one submission<a class="headerlink" href="#overriding-the-config-for-one-submission" title="Permanent link">&para;</a></h2>
+<p><code>--set KEY=VALUE</code> is the same flag <code>llm-annotate</code> takes, forwarded to every step
+job of the submission. A dotted key reaches a nested value, and repeating the
+flag sets more than one:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>./slurm/submit_pipeline.sh<span class="w"> </span>--set<span class="w"> </span>dataset.max_num_samples<span class="o">=</span><span class="m">50000</span><span class="w"> </span>my-pipeline.yaml
+</span></code></pre></div>
+<p>Every step of one submission therefore sees the same overrides, which is what a
+growing run needs: resubmitting with a higher <code>dataset.max_num_samples</code> extends
+the pipeline as a whole rather than one step at a time, which is what
+<code>docs/growing-a-run.md</code> describes.</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SLURM_ACCOUNT</code></td>
+<td>none</td>
+<td>Project to charge. Empty means no <code>--account</code>.</td>
+</tr>
+<tr>
+<td><code>GPU_PARTITION</code>, <code>CPU_PARTITION</code></td>
+<td>none</td>
+<td>Partitions for the GPU and CPU-only jobs. Empty means the cluster's default.</td>
+</tr>
+<tr>
+<td><code>SERVER_TIME</code>, <code>CLIENT_TIME</code></td>
+<td><code>04:00:00</code>, <code>05:00:00</code></td>
+<td>Wall time per job kind.</td>
+</tr>
+<tr>
+<td><code>CPUS_PER_GPU</code></td>
+<td><code>8</code></td>
+<td>Cores a GPU job asks for per GPU.</td>
+</tr>
+<tr>
+<td><code>CLIENT_CPUS</code></td>
+<td><code>8</code></td>
+<td>Cores a CPU-only annotation job asks for.</td>
+</tr>
+<tr>
+<td><code>MAX_GPUS_PER_NODE</code></td>
+<td><code>8</code></td>
+<td>Ceiling a step's <code>engine.tensor_parallel_size</code> is checked against before anything is submitted.</td>
+</tr>
+<tr>
+<td><code>GPU_REQUEST</code>, <code>GPU_TYPE</code></td>
+<td><code>gres</code>, none</td>
+<td>How GPUs are requested: <code>--gres=gpu:N</code> or <code>--gpus-per-node=N</code>, optionally typed (<code>gpu:a100:N</code>).</td>
+</tr>
+<tr>
+<td><code>MAX_CONCURRENT_SERVERS</code></td>
+<td>none</td>
+<td>Most elements of a server array that may run at once (<code>--array=1-N%M</code>), for a per-user GPU limit. Empty means no throttle.</td>
+</tr>
+<tr>
+<td><code>SERVER_HOST_CMD</code></td>
+<td><code>hostname</code></td>
+<td>Command a server runs to get the address other nodes reach it at. Use <code>hostname -f</code>, or a command that prints one interface's address, where the short name does not resolve.</td>
+</tr>
+<tr>
+<td><code>MODEL_DOWNLOAD</code></td>
+<td><code>0</code></td>
+<td><code>1</code> fetches every model this submission serves in a CPU job before any GPU is allocated.</td>
+</tr>
+<tr>
+<td><code>DOWNLOAD_PARTITION</code>, <code>DOWNLOAD_TIME</code></td>
+<td><code>$CPU_PARTITION</code>, <code>02:00:00</code></td>
+<td>Partition and wall time of those download jobs.</td>
+</tr>
+<tr>
+<td><code>SERVER_SBATCH_ARGS</code>, <code>CLIENT_SBATCH_ARGS</code></td>
+<td><code>()</code></td>
+<td>Extra <code>sbatch</code> flags per job kind: QoS, memory, constraints, reservations.</td>
+</tr>
+<tr>
+<td><code>CLUSTER_MODULES</code></td>
+<td>none</td>
+<td>Environment modules to load inside a job.</td>
+</tr>
+<tr>
+<td><code>VENV_PATH</code>, <code>UV_SYNC</code></td>
+<td><code>&lt;repo&gt;/.venv</code>, <code>0</code></td>
+<td>Python environment to activate, and whether to <code>uv sync</code> first.</td>
+</tr>
+<tr>
+<td><code>CUDA_MODULE</code></td>
+<td>none</td>
+<td>Toolkit module loaded only when <code>nvcc</code> is missing and vLLM has to JIT-compile a kernel.</td>
+</tr>
+<tr>
+<td><code>LOG_DIR</code></td>
+<td><code>&lt;repo&gt;/logs</code></td>
+<td>Where job logs and pool directories go.</td>
+</tr>
+</tbody>
+</table>
+<p>Every scalar can be overridden for one submission by setting it on the command
+line, which wins over the file and reaches the jobs through <code>--export=ALL</code>:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nv">SERVER_TIME</span><span class="o">=</span><span class="m">08</span>:00:00<span class="w"> </span><span class="nv">GPU_PARTITION</span><span class="o">=</span>gpu_h100<span class="w"> </span>./slurm/submit_pipeline.sh<span class="w"> </span>my-pipeline.yaml
+</span></code></pre></div>
+<p>If modules plus a virtualenv do not describe your cluster (conda, a container,
+a wrapper script of your own), define <code>cluster_setup_env</code> in the cluster file
+instead. It replaces the environment handling entirely and only has to leave
+<code>llm-annotate</code> and <code>vllm</code> on <code>PATH</code>:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>cluster_setup_env<span class="o">()</span><span class="w"> </span><span class="o">{</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>module<span class="w"> </span>load<span class="w"> </span>Python/3.12<span class="w"> </span>CUDA/12.8.0
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nb">source</span><span class="w"> </span>/projects/shared/llm-annotator/.venv/bin/activate
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="o">}</span>
+</span></code></pre></div>
+<p>A container works the same way, because <code>llm-annotate</code> and <code>vllm</code> may be shell
+functions rather than executables. Define them at the top level of the
+cluster file, not inside <code>cluster_setup_env</code>: every script sources the cluster
+file, so a top-level function is visible in both job scripts and on the login
+node, where <code>submit_pipeline.sh</code> reads the config. A function defined inside
+<code>cluster_setup_env</code> reaches the job scripts only, because the login node never
+calls it.</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nv">SIF</span><span class="o">=</span>/projects/shared/images/vllm-0.29.0.sif
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nv">BINDS</span><span class="o">=</span><span class="s2">"/projects,/scratch-local"</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>llm-annotate<span class="o">()</span><span class="w"> </span><span class="o">{</span><span class="w"> </span>apptainer<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>--nv<span class="w"> </span>-B<span class="w"> </span><span class="s2">"</span><span class="nv">$BINDS</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$SIF</span><span class="s2">"</span><span class="w"> </span>llm-annotate<span class="w"> </span><span class="s2">"</span><span class="nv">$@</span><span class="s2">"</span><span class="p">;</span><span class="w"> </span><span class="o">}</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>vllm<span class="o">()</span><span class="w">         </span><span class="o">{</span><span class="w"> </span>apptainer<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>--nv<span class="w"> </span>-B<span class="w"> </span><span class="s2">"</span><span class="nv">$BINDS</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$SIF</span><span class="s2">"</span><span class="w"> </span>vllm<span class="w"> </span><span class="s2">"</span><span class="nv">$@</span><span class="s2">"</span><span class="p">;</span><span class="w"> </span><span class="o">}</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>cluster_setup_env<span class="o">()</span><span class="w"> </span><span class="o">{</span><span class="w"> </span>:<span class="p">;</span><span class="w"> </span><span class="o">}</span>
+</span></code></pre></div>
+<p>The empty <code>cluster_setup_env</code> keeps the module-and-venv handling out of the way.
+Two limits: the login node has to be able to run the container runtime, and the
+bind mounts have to cover the repo, the config, the output directory and the
+Hugging Face cache.</p>
+<h2 id="what-each-step-becomes">What each step becomes<a class="headerlink" href="#what-each-step-becomes" title="Permanent link">&para;</a></h2>
+<p>The shape of a job is derived from the step's client, never configured twice.
+Check it before submitting anything:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>llm-annotate<span class="w"> </span>my-pipeline.yaml<span class="w"> </span>--describe-steps
+</span></code></pre></div>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span><span class="nt">"index"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"write-qa"</span><span class="p">,</span><span class="w"> </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"vllm_pool"</span><span class="p">,</span><span class="w"> </span><span class="nt">"provider"</span><span class="p">:</span><span class="w"> </span><span class="s2">"vllm_online"</span><span class="p">,</span><span class="w"> </span><span class="nt">"model"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Qwen/Qwen3-8B"</span><span class="p">,</span><span class="w"> </span><span class="nt">"servers"</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="nt">"min_servers"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="nt">"gpus_per_vllm_server"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="nt">"step_dir"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span><span class="w"> </span><span class="nt">"batch_size"</span><span class="p">:</span><span class="w"> </span><span class="mi">64</span><span class="p">,</span><span class="w"> </span><span class="nt">"max_concurrent_batches_per_client"</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="nt">"queue_size"</span><span class="p">:</span><span class="w"> </span><span class="mi">32</span><span class="p">,</span><span class="w"> </span><span class="nt">"max_requests_per_server"</span><span class="p">:</span><span class="w"> </span><span class="mi">256</span><span class="p">,</span><span class="w"> </span><span class="nt">"max_requests_in_flight"</span><span class="p">:</span><span class="w"> </span><span class="mi">1024</span><span class="p">}</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="p">{</span><span class="nt">"index"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"rate-qa"</span><span class="p">,</span><span class="w"> </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"api"</span><span class="p">,</span><span class="w"> </span><span class="nt">"provider"</span><span class="p">:</span><span class="w"> </span><span class="s2">"claude"</span><span class="p">,</span><span class="w"> </span><span class="nt">"model"</span><span class="p">:</span><span class="w"> </span><span class="s2">"claude-haiku-4-5"</span><span class="p">,</span><span class="w"> </span><span class="nt">"servers"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nt">"min_servers"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nt">"gpus_per_vllm_server"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nt">"step_dir"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span><span class="w"> </span><span class="nt">"batch_size"</span><span class="p">:</span><span class="w"> </span><span class="mi">256</span><span class="p">,</span><span class="w"> </span><span class="nt">"max_concurrent_batches_per_client"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span><span class="w"> </span><span class="nt">"queue_size"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span><span class="w"> </span><span class="nt">"max_requests_per_server"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span><span class="w"> </span><span class="nt">"max_requests_in_flight"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">}</span>
+</span></code></pre></div>
+<p><code>submit_pipeline.sh</code> reads the same fields as shell assignments
+(<code>--describe-steps --format env</code>, one <code>STEP_KEY=VALUE</code> line per step, every
+value shell-quoted) and evaluates a line per step, so a step name or a model
+containing a space or a quote reaches <code>sbatch</code> intact. Both formats are
+documented under "Running one step at a time" in <code>docs/pipeline.md</code>.</p>
+<p><code>max_requests_per_server</code> is <code>max_concurrent_batches_per_client</code> times
+<code>batch_size</code>: the number of prompts one server is asked to hold at once, and so
+the number its <code>engine.max_num_seqs</code> has to cover before requests start queueing
+inside vLLM. <code>submit_pipeline.sh</code> prints it per step, so a pool can be sized
+before any GPU is allocated.</p>
+<table>
+<thead>
+<tr>
+<th><code>kind</code></th>
+<th>When</th>
+<th>Jobs submitted</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>vllm_pool</code></td>
+<td><code>provider: vllm_online</code>, servers not given</td>
+<td>GPU server array + CPU client</td>
+</tr>
+<tr>
+<td><code>vllm_online</code></td>
+<td><code>provider: vllm_online</code> with <code>base_urls</code>/<code>hosts_file</code>/<code>url_glob</code></td>
+<td>CPU client only</td>
+</tr>
+<tr>
+<td><code>vllm_offline</code></td>
+<td><code>provider: vllm_offline</code></td>
+<td>one GPU job, model loaded in-process</td>
+</tr>
+<tr>
+<td><code>api</code></td>
+<td><code>openai</code> / <code>claude</code></td>
+<td>CPU-only job</td>
+</tr>
+</tbody>
+</table>
+<p>A <code>vllm_pool</code> step must name a <code>model</code>. It is optional for <code>provider:
+vllm_online</code> in general (a client can ask a running server what it serves),
+but a submitter that has to <em>start</em> those servers has nothing to ask, so
+<code>submit_pipeline.sh</code> rejects such a step on the login node rather than after the
+GPUs have been allocated.</p>
+<p>A step sizes its own pool in the config, next to the model it belongs to:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nt">client</span><span class="p">:</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">provider</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">vllm_online</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span><span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Qwen/Qwen3-8B</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span><span class="nt">engine</span><span class="p">:</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">    </span><span class="nt">tensor_parallel_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span><span class="w">   </span><span class="c1"># GPUs per server, at most MAX_GPUS_PER_NODE</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">  </span><span class="nt">pool</span><span class="p">:</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">    </span><span class="nt">servers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span><span class="w">                </span><span class="c1"># four such servers for this step</span>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">    </span><span class="nt">min_servers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span><span class="w">            </span><span class="c1"># start annotating once two are ready</span>
+</span></code></pre></div>
+<p>Several small server jobs schedule far sooner than one large allocation, because
+each one fits on a partially used node. They also start at different times,
+which is fine: the client starts once <code>pool.min_servers</code> are ready, and the
+remaining servers join the run as they leave the queue.</p>
+<p><code>pool.min_servers</code> is a target with a fallback. The client
+waits for that many <code>.url</code> files and gives up waiting when <code>squeue</code> reports that
+the server array has no element left in the queue, or when <code>POOL_WAIT</code> is up. It
+then annotates on the servers it does have, and says how many in its log
+(<code>Annotating over 2 of 4 server(s)</code>). A pool that half fills therefore still
+produces data, at half the throughput. With no server at all the step still
+runs: a step that already finished loads its result and ends with status 0, and
+any other step fails with <code>url_glob ... matched no files</code>, in which case the
+<code>vllm-&lt;step&gt;_*.err</code> logs say why no server came up.</p>
+<p>At a site with a per-user GPU limit, set <code>MAX_CONCURRENT_SERVERS</code> in the cluster
+file. The array is then submitted as <code>--array=1-4%2</code>, so two servers run while
+the other two wait. It has to be at least the largest <code>pool.min_servers</code> in the
+config, otherwise the client's threshold can never be reached; the submitter
+rejects that combination on the login node.</p>
+<h2 id="serving-profiles">Serving profiles<a class="headerlink" href="#serving-profiles" title="Permanent link">&para;</a></h2>
+<p><code>engine:</code> is the whole <code>vllm serve</code> command line, per step. The server job runs</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>llm-annotate<span class="w"> </span>&lt;config&gt;<span class="w"> </span>--serve-args<span class="w"> </span>&lt;step&gt;
+</span></code></pre></div>
+<p>and passes the result straight to <code>vllm serve</code>, so a value may contain spaces
+and a pipeline whose steps use different models needs one submission, not one
+per model:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="w">  </span><span class="nt">engine</span><span class="p">:</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">    </span><span class="nt">tensor_parallel_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">    </span><span class="nt">max_model_len</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8192</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">    </span><span class="nt">gpu_memory_utilization</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.90</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">    </span><span class="nt">max_num_seqs</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256</span>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="w">    </span><span class="nt">speculative_config</span><span class="p">:</span><span class="w">            </span><span class="c1"># nested YAML, sent as JSON</span>
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="w">      </span><span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my-org/my-draft-model</span>
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="w">      </span><span class="nt">num_speculative_tokens</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="w">    </span><span class="nt">extra</span><span class="p">:</span><span class="w">                         </span><span class="c1"># anything not named above</span>
+</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="w">      </span><span class="nt">reasoning_parser</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">qwen3</span>
+</span></code></pre></div>
+<p>Check what a step will serve before allocating any GPU:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>llm-annotate<span class="w"> </span>my-pipeline.yaml<span class="w"> </span>--serve-args<span class="w"> </span>write-qa
+</span></code></pre></div>
+<p>There is deliberately no cluster variable for anything <code>vllm serve</code> takes: a
+server asks the config for its own flags, so two steps of one submission can
+serve different models with different serving profiles.</p>
+<h2 id="how-the-two-jobs-of-a-step-find-each-other">How the two jobs of a step find each other<a class="headerlink" href="#how-the-two-jobs-of-a-step-find-each-other" title="Permanent link">&para;</a></h2>
+<p>The server array writes into <code>&lt;LOG_DIR&gt;/pool_&lt;array-job-id&gt;/</code>, one <code>&lt;task&gt;.url</code>
+file per server containing that server's <code>http://&lt;host&gt;:&lt;port&gt;/v1</code>. A file
+appears only after the server answers <code>/health</code>, and is removed when the job
+ends, so every URL in the directory belongs to a server that is up right now.
+The client polls that directory until <code>min_servers</code> of the files are there,
+then passes the directory itself to the CLI as <code>--url-glob</code>, which attaches it
+to that step alone, so a step on another provider is left untouched. A file of
+URLs would be read once; the glob is re-read while the run continues, so a
+server whose file appears after the run has started still joins the pool.</p>
+<p>A server that ends before the run does (hits <code>SERVER_TIME</code>, is preempted, or
+otherwise stops answering <code>/health</code>) is dropped from the pool once a batch
+fails on it, and the run continues on the servers that are left. A requeued
+server job that publishes its <code>.url</code> file again is picked up the same way a
+late starter is, so servers of one array reaching <code>SERVER_TIME</code> at different
+moments do not end the client.</p>
+<p>The host in that URL comes from <code>SERVER_HOST_CMD</code>, which is <code>hostname</code> unless
+the cluster file says otherwise. Set it to <code>hostname -f</code> where compute nodes
+only resolve fully qualified names, or to a command that prints the address of
+the fabric the client should use.</p>
+<p>Ports are <code>VLLM_PORT + array task id</code>, then probed upward for the first free one.
+Two array tasks can land on the same node (a 4-GPU node fits two
+<code>tensor_parallel_size: 2</code> servers), so a fixed port would collide. The probe and
+the bind are two separate moments, so another process can take the port in
+between; vLLM then dies with <code>Address already in use</code> before <code>/health</code> ever
+answers, and the server job retries on the next free port, at most
+<code>PORT_RETRIES</code> times (5 by default). Any other early exit fails the task.</p>
+<p>The client is submitted with one <code>after:</code> dependency per element of its server
+array, or-joined (<code>--dependency=after:1234_1?after:1234_2?...</code>), which releases
+it as soon as the first server has begun. <code>after:&lt;array-id&gt;</code> as a whole is
+satisfied only once <em>every</em> element has started, which would leave a ready
+server sitting idle behind pool-mates that are still queued (a per-user GPU
+quota is enough to do this: one server can occupy the whole quota, so the rest
+of the pool queues behind it), burning that server's own <code>SERVER_TIME</code> before
+the client ever gets to use it. Waiting in the queue rather than on a compute
+node also means <code>CLIENT_TIME</code> starts counting when there is something to
+annotate against: a CPU partition schedules in minutes and a GPU partition can
+take days, and a client that starts first spends that gap idle and then dies on
+its wall clock.</p>
+<p>That dependency replaces the step's own <code>afterok:&lt;previous client&gt;</code> rather than
+adding to it, since Slurm reads one separator per expression (<code>,</code> for and, <code>?</code>
+for or) and the two cannot be mixed. Nothing is lost: a server cannot start
+before the previous step has succeeded, so the client inherits that through the
+array it waits on. A cancelled job also satisfies <code>after:</code>, so an array that
+Slurm kills off releases the client instead of stranding it, and
+<code>--kill-on-invalid-dep=yes</code> covers what Slurm flags as unsatisfiable outright.
+The client recognises that case rather than sitting out its <code>POOL_WAIT</code>: while
+it waits for URLs it asks <code>squeue</code> whether its server array still has an
+element in the queue, and stops waiting when it has none left.</p>
+<p>When a step finishes, its client <code>scancel</code>s that step's server array instead of
+leaving GPU jobs idling until their time limit. That happens in an <code>EXIT</code> trap,
+which a cgroup OOM kill, a <code>scancel -s KILL</code> or a dead node skips, so the
+submitter also queues a small clean-up job per pool step:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>sbatch --time=00:05:00 --job-name=cancel-write-qa --cpus-per-task=1 \
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>  --dependency=afterany:&lt;client&gt; --kill-on-invalid-dep=yes --wrap="scancel &lt;array&gt;"
+</span></code></pre></div>
+<p><code>afterany</code> means it runs however the client ended, and it cancels that one
+array, so the servers of a later attempt are untouched. It uses the CPU
+partition and the client's <code>sbatch</code> flags, and it is not part of the chain
+between steps: the next step waits for the client, never for the clean-up. Set
+<code>CANCEL_SERVERS_ON_EXIT=0</code> to keep servers alive after their step ends; the
+clean-up job is then not submitted either.</p>
+<h2 id="resubmitting-automatically">Resubmitting automatically<a class="headerlink" href="#resubmitting-automatically" title="Permanent link">&para;</a></h2>
+<p>A step that runs out of <code>CLIENT_TIME</code> leaves a resumable run behind, but
+somebody has to notice and submit it again. <code>--max-resubmits N</code> queues that
+follow-up in advance:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>./slurm/submit_pipeline.sh<span class="w"> </span>--max-resubmits<span class="w"> </span><span class="m">2</span><span class="w"> </span>my-pipeline.yaml
+</span></code></pre></div>
+<p>Every step then gets up to <code>N + 1</code> attempts. Attempt <em>k</em> runs the same command
+as attempt <em>k-1</em> and carries <code>--dependency=afternotok:&lt;attempt k-1&gt;</code>, so it
+starts only when the attempt before it failed, timed out or was cancelled. Being
+the same command is what makes it a resume: the step's progress files are read
+and only the rows that are missing are sent to the model. A pool step gets a
+fresh server array and a fresh clean-up job per attempt, and that attempt's
+clean-up only cancels that attempt's array.</p>
+<p>What happens to the attempts that turn out not to be needed:</p>
+<ul>
+<li>The attempt before it succeeded. <code>afternotok</code> can then never be satisfied, so
+  <code>--kill-on-invalid-dep=yes</code> has Slurm remove the attempt rather than leave it
+  queued. For a pool step the removed job is the server array, and Slurm counts
+  a cancelled job as a satisfied <code>after:</code> dependency, so that attempt's client
+  does start. It finds no server, runs the step anyway, and the library loads
+  the finished step's <code>output/</code> snapshot and exits with status 0 within
+  seconds. No GPU is allocated, and every later attempt ends the same way.</li>
+<li>The attempt before it failed, but the step had already finished in an earlier
+  submission. The attempt runs, the library loads the step's <code>output/</code> snapshot
+  and the job ends in seconds.</li>
+</ul>
+<p>The next step waits for "any attempt of the previous step succeeded", which
+Slurm writes as an or-joined dependency list:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>--dependency=afterok:&lt;attempt 1&gt;?afterok:&lt;attempt 2&gt;
+</span></code></pre></div>
+<p>A <code>,</code> between dependencies means all of them must be satisfied, a <code>?</code> means any
+one of them is enough, and the two cannot be mixed in one expression. So the
+next step starts as soon as any attempt of its predecessor succeeds, and the
+attempts that were removed do not hold it back. If every attempt fails, the list
+can never be satisfied and the next step stays in the queue with
+<code>DependencyNeverSatisfied</code> until you cancel it (or, at a site that configures
+<code>kill_invalid_depend</code>, Slurm removes it), which is the right outcome: nothing
+runs on a half-finished input.</p>
+<p><code>--dry-run</code> prints the whole chain, attempts included, which is the way to check
+it before you use it:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>./slurm/submit_pipeline.sh<span class="w"> </span>--dry-run<span class="w"> </span>--max-resubmits<span class="w"> </span><span class="m">1</span><span class="w"> </span>my-pipeline.yaml
+</span></code></pre></div>
+<h2 id="model-downloads">Model downloads<a class="headerlink" href="#model-downloads" title="Permanent link">&para;</a></h2>
+<p>The servers of a pool all start at once, and on a cold cache they all download
+the same weights. <code>MODEL_DOWNLOAD=1</code> in the cluster file turns that into one
+small CPU job per distinct model, submitted before anything else, which the
+first step then waits for with <code>afterok</code>. Every later step inherits that wait
+through the chain, so a pipeline whose steps use different models downloads all
+of them up front:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>sbatch --time=02:00:00 --job-name=download-Qwen3-8B --cpus-per-task=2 \
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>  --wrap="... &amp;&amp; vllm_download_model Qwen/Qwen3-8B"
+</span></code></pre></div>
+<p>The job runs <code>hf download &lt;model&gt;</code>, the CLI that comes with <code>huggingface_hub</code>.
+Only the models this submission has to serve itself are fetched (the
+<code>vllm_pool</code> and <code>vllm_offline</code> steps); a hosted provider has nothing to
+download, and a <code>model</code> that is an existing directory is a local checkout and is
+left alone. <code>DOWNLOAD_PARTITION</code> and <code>DOWNLOAD_TIME</code> size the job.</p>
+<p>It is off by default. The job needs a route to huggingface.co from whichever
+node runs it, which not every site has, and against a warm cache it costs a
+queue wait for nothing. A gated model needs a token, which the job reads the
+same way any other <code>hf</code> command does: <code>hf auth login</code> once, or <code>HF_TOKEN</code> in the
+environment, which <code>--export=ALL</code> carries.</p>
+<p>Wherever you run it, <code>HF_HOME</code> decides where the weights land; it defaults to
+<code>.cache/huggingface</code> in your home directory. On a cluster, point it at a project
+or scratch filesystem that every compute node can read, from your shell profile
+or from the cluster file. A home directory is usually too small for a few 8B
+checkpoints, and a node-local path is downloaded again by every server.</p>
+<h2 id="threads-of-a-pool-client">Threads of a pool client<a class="headerlink" href="#threads-of-a-pool-client" title="Permanent link">&para;</a></h2>
+<p>A pool client holds one thread per request in flight, and such a thread only
+waits for the network. The count is <code>servers</code> x
+<code>max_concurrent_batches_per_client</code> x <code>batch_size</code>: four servers with the
+defaults (four batches of 256 each) is 4096 threads. A site with a low
+<code>ulimit -u</code>, or with a cgroup <code>pids.max</code> on its CPU jobs, fails the run with
+<code>RuntimeError: can't start new thread</code>, so the client logs the limit it found
+at the top of its log:</p>
+<div class="language-console highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="go">Thread limit (ulimit -u): 4096</span>
+</span></code></pre></div>
+<p>Two settings on the step's <code>client</code> block lower the count: <code>batch_size</code> (fewer
+requests per batch) and <code>init.max_workers</code> (how many requests of one batch go
+out at once, <code>None</code> by default, which sends all of them).</p>
+<p><code>init.timeout</code> belongs next to <code>SERVER_TIME</code>. It is 3600 seconds per request and
+covers the wait in the server's queue as well as the generation itself. A
+request that outlives its server, because the server hit <code>SERVER_TIME</code> or was
+preempted, becomes an error row with an <code>error</code> and an <code>error_type</code> rather than
+a failed run. A resubmission keeps those rows as they are; <code>llm-annotate</code>'s own
+<code>--retry-errors</code> is what annotates them again, and the end-of-run summary lists
+the error types to name:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>llm-annotate<span class="w"> </span>my-pipeline.yaml<span class="w"> </span>--steps<span class="w"> </span>write-qa<span class="w"> </span>--retry-errors<span class="w"> </span>APITimeoutError
+</span></code></pre></div>
+<h2 id="run-level-environment-variables">Run-level environment variables<a class="headerlink" href="#run-level-environment-variables" title="Permanent link">&para;</a></h2>
+<p>These are about a single run rather than the cluster, so they stay out of the
+cluster file and are set on the <code>submit_pipeline.sh</code> command line; both job types
+are submitted with <code>--export=ALL</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ANNOTATE_CONFIG</code></td>
+<td><em>the positional argument</em></td>
+<td>JSON/YAML pipeline config to run</td>
+</tr>
+<tr>
+<td><code>EXTRA_DEPENDENCY</code></td>
+<td>none</td>
+<td>Slurm dependency expression (e.g. <code>afterok:123456</code>) the chain waits for. Applied to the first submitted step only; later steps inherit it through their predecessor, which is what lets several submissions be chained into one workflow.</td>
+</tr>
+<tr>
+<td><code>POOL_WAIT</code></td>
+<td><code>1800</code></td>
+<td>Seconds a client waits for <code>min_servers</code> of its servers to register once it is running. Matches <code>READY_TIMEOUT</code>, so a client cannot give up on a server before the server gives up on itself. The or-joined dependency means the client only starts once a server of its pool has, so this covers a model load rather than an allocation; raise it when running <code>vllm_annotate.sh</code> by hand against a pool that is still queued.</td>
+</tr>
+<tr>
+<td><code>VLLM_PORT</code></td>
+<td><code>8000</code></td>
+<td>Base port a server starts probing from. The array task id is added to it, then the first free port is taken.</td>
+</tr>
+<tr>
+<td><code>READY_TIMEOUT</code></td>
+<td><code>1800</code></td>
+<td>Seconds a server waits for its own <code>/health</code> before giving up</td>
+</tr>
+<tr>
+<td><code>PORT_RETRIES</code></td>
+<td><code>5</code></td>
+<td>How often a server job retries on the next port after <code>vllm serve</code> failed to bind the one it probed.</td>
+</tr>
+<tr>
+<td><code>CANCEL_SERVERS_ON_EXIT</code></td>
+<td><code>1</code></td>
+<td>Whether a finished client <code>scancel</code>s its step's server array. <code>0</code> leaves the GPUs running.</td>
+</tr>
+<tr>
+<td><code>SBATCH_CMD</code></td>
+<td><code>sbatch</code></td>
+<td>The command that queues a job, for a site whose <code>sbatch</code> is wrapped. A submit this refuses ends the run: the steps after it would otherwise depend on a job id that was never issued.</td>
+</tr>
+<tr>
+<td><code>OUTPUT_DIR</code>, <code>HUB_ID</code>, <code>OVERWRITE</code></td>
+<td>from the config</td>
+<td>Override the config's <code>output_dir</code> / <code>hub_id</code>, or discard existing step output</td>
+</tr>
+<tr>
+<td><code>ANNOTATE_SET</code></td>
+<td>none</td>
+<td>What <code>--set</code> fills: config overrides for this submission, one <code>KEY=VALUE</code> per line, passed to <code>llm-annotate --set</code> on every step job. Set it directly only when scripting the submitter; <code>--set</code> is the way in.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="resuming">Resuming<a class="headerlink" href="#resuming" title="Permanent link">&para;</a></h2>
+<p>Two levels, both automatic:</p>
+<ul>
+<li>Within a step, every annotated sample is appended to
+  <code>&lt;output_dir&gt;/&lt;NN&gt;-&lt;step&gt;/annotate/&lt;prefix&gt;progress_backup/*.jsonl</code> and flushed
+  immediately; a restart re-reads those files and skips the ids already present.
+  A half-written final line from a killed job is detected and re-annotated.</li>
+<li>Between steps, a finished step writes <code>&lt;output_dir&gt;/&lt;NN&gt;-&lt;step&gt;/output/</code>,
+  which a later run loads instead of recomputing.</li>
+</ul>
+<p>So after a crash, a timeout or a preemption you run the same
+<code>submit_pipeline.sh</code> command again. Finished steps are skipped, and the step
+that died continues where it stopped. Resubmitting with a higher
+<code>dataset.max_num_samples</code> extends a finished run the same way, which
+<code>docs/growing-a-run.md</code> describes in full. To resubmit only part of a pipeline,
+name the steps:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>./slurm/submit_pipeline.sh<span class="w"> </span>--steps<span class="w"> </span>rate-qa<span class="w"> </span>my-pipeline.yaml
+</span></code></pre></div>
+<p><a href="#resubmitting-automatically"><code>--max-resubmits</code></a> queues those follow-up
+submissions up front, which is the same resume without waiting for you to
+notice. It needs nothing else: the attempt runs on the same cluster, against the
+same <code>output_dir</code>, so the progress files it reads are already there.</p>
+<p>A purged scratch directory is a different case, and so is a move to another
+cluster. The prepared data comes back from its Hub branch on its own; the JSONL
+progress files do not. Restore a step's progress backup before you resubmit,
+with that step's own directory (<code>&lt;output_dir&gt;/&lt;NN&gt;-&lt;step&gt;/annotate/</code>) and prefix
+(<code>&lt;step&gt;_</code>):</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>llm-annotate-restore<span class="w"> </span>--hub-id<span class="w"> </span>user/my-dataset<span class="w"> </span>--output-dir<span class="w"> </span>outputs/qa/02-rate-qa/annotate<span class="w"> </span>--task-prefix<span class="w"> </span>rate-qa_
+</span></code></pre></div>
+<h2 id="running-a-step-yourself">Running a step yourself<a class="headerlink" href="#running-a-step-yourself" title="Permanent link">&para;</a></h2>
+<p>The scripts add nothing the CLI cannot do, so any step can be run by hand, from
+a login node, an interactive session, or your laptop:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="c1"># one step, against servers that already exist</span>
+</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>llm-annotate<span class="w"> </span>my-pipeline.yaml<span class="w"> </span>--steps<span class="w"> </span>write-qa<span class="w"> </span>--hosts-file<span class="w"> </span>logs/pool_&lt;id&gt;/hosts.txt
+</span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>
+</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a><span class="c1"># the next step, wherever you like</span>
+</span><span id="__span-23-5"><a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a>llm-annotate<span class="w"> </span>my-pipeline.yaml<span class="w"> </span>--steps<span class="w"> </span>rate-qa
+</span></code></pre></div>
+<p>Running steps one at a time produces exactly the dataset a single
+<code>llm-annotate my-pipeline.yaml</code> would, so you can start locally and finish on the
+cluster, or vice versa. Only the run that includes the last step writes
+<code>&lt;output_dir&gt;/final/</code> and pushes to the Hub.</p>
+<p>To start servers without a client:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>logs
+</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>sbatch<span class="w"> </span>--array<span class="o">=</span><span class="m">1</span>-4<span class="w"> </span>--gres<span class="o">=</span>gpu:2<span class="w"> </span>--cpus-per-task<span class="o">=</span><span class="m">36</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a><span class="w">  </span>--export<span class="o">=</span>ALL,ANNOTATE_CONFIG<span class="o">=</span>my-pipeline.yaml,STEP_NAME<span class="o">=</span>write-qa<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-24-4"><a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a><span class="w">  </span>slurm/vllm_server.sh<span class="w">   </span><span class="c1"># note the id</span>
+</span><span id="__span-24-5"><a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a>
+</span><span id="__span-24-6"><a id="__codelineno-24-6" name="__codelineno-24-6" href="#__codelineno-24-6"></a>cat<span class="w"> </span>logs/pool_&lt;id&gt;/*.url<span class="w"> </span>&gt;<span class="w"> </span>logs/pool_&lt;id&gt;/hosts.txt
+</span></code></pre></div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["content.code.copy", "content.code.annotate", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.indexes", "navigation.top", "search.highlight", "search.suggest", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

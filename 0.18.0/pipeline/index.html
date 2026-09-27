@@ -1,0 +1,2757 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A Python library to use LLMs to annotate data.">
+      
+      
+      
+        <link rel="canonical" href="https://BramVanroy.github.io/llm-annotator/latest/pipeline/">
+      
+      
+        <link rel="prev" href="../choosing-a-provider/">
+      
+      
+        <link rel="next" href="../python-api/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Config pipeline - LLM Annotator</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#annotating-from-a-config-file" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+          <aside class="md-banner md-banner--warning">
+            <div class="md-banner__inner md-grid md-typeset">
+              
+  <span id="version-warning">
+    You are not viewing the documentation of the latest released version.
+    <a href="../.."><strong>Go to the latest release docs.</strong></a>
+  </span>
+
+            </div>
+            <script>var el=document.querySelector("[data-md-component=outdated]"),base=new URL(".."),outdated=__md_get("__outdated",sessionStorage,base);!0===outdated&&el&&(el.hidden=!1)</script>
+          </aside>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="LLM Annotator" class="md-header__button md-logo" aria-label="LLM Annotator" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            LLM Annotator
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Config pipeline
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/BramVanroy/llm-annotator" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    BramVanroy/llm-annotator
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../choosing-a-provider/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Choosing a provider
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="./" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Config pipeline
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../python-api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Python API guide
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../growing-a-run/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Growing a run
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../troubleshooting/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Troubleshooting
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../slurm/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  SLURM
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../provider-info/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Provider setup
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../migration/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Migrating from 0.16
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../api/annotator/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  User API
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../api/clients/base/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Internals
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="LLM Annotator" class="md-nav__button md-logo" aria-label="LLM Annotator" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    LLM Annotator
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/BramVanroy/llm-annotator" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    BramVanroy/llm-annotator
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../choosing-a-provider/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Choosing a provider
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Config pipeline
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Config pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-smallest-config-that-runs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The smallest config that runs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-complete-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A complete example
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#paths-are-relative-to-the-config" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Paths are relative to the config
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prompts-and-schemas-inline-or-in-a-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prompts and schemas: inline or in a file
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-steps-see-each-others-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How steps see each other's output
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#providers-and-models" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Providers and models
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Providers and models">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#where-a-setting-goes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where a setting goes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#many-vllm-servers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Many vLLM servers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-one-step-at-a-time" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running one step at a time
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resuming" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resuming
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Resuming">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#resuming-on-another-machine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resuming on another machine
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#editing-a-step" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Editing a step
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-large-a-progress-file-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How large a progress file is
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pushing-to-the-hub" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pushing to the Hub
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#generating-data-from-scratch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Generating data from scratch
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#command-line" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Command line
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Command line">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#overriding-config-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overriding config keys
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#full-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Full reference
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../python-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../growing-a-run/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Growing a run
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../slurm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SLURM
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../provider-info/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Provider setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../migration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migrating from 0.16
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User API
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User API
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/annotator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Annotator
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Config
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/hub/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hub restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_10_5" id="__nav_10_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_10_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Clients
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/clients/claude/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Claude
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/clients/openai/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OpenAI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/clients/vllm_online_client/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vLLM (online)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/clients/vllm_offline_client/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vLLM (offline)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/clients/exceptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Exceptions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Internals
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Internals
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/clients/base/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client base
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/pool/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pool
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/utils/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Utils
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/logging_utils/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Logging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-smallest-config-that-runs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The smallest config that runs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-complete-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A complete example
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#paths-are-relative-to-the-config" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Paths are relative to the config
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prompts-and-schemas-inline-or-in-a-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prompts and schemas: inline or in a file
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-steps-see-each-others-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How steps see each other's output
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#providers-and-models" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Providers and models
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Providers and models">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#where-a-setting-goes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where a setting goes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#many-vllm-servers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Many vLLM servers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-one-step-at-a-time" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running one step at a time
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resuming" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resuming
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Resuming">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#resuming-on-another-machine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resuming on another machine
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#editing-a-step" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Editing a step
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-large-a-progress-file-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How large a progress file is
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pushing-to-the-hub" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pushing to the Hub
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#generating-data-from-scratch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Generating data from scratch
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#command-line" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Command line
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Command line">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#overriding-config-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overriding config keys
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#full-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Full reference
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="annotating-from-a-config-file">Annotating from a config file<a class="headerlink" href="#annotating-from-a-config-file" title="Permanent link">&para;</a></h1>
+<p>Everything the library can do to a dataset can also be described in a single
+JSON or YAML file and run without writing any Python:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>llm-annotate<span class="w"> </span>my-pipeline.yaml
+</span></code></pre></div>
+<p>or, from a checkout that is not installed:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>python<span class="w"> </span>scripts/annotate.py<span class="w"> </span>my-pipeline.yaml
+</span></code></pre></div>
+<p>A config describes one or more steps. Steps run in order, and each one annotates
+the dataset the previous step produced, so a later prompt can read columns that
+an earlier model wrote. That is what makes generate-then-judge workflows
+possible: one model writes question-answer pairs, another rates them.</p>
+<h2 id="the-smallest-config-that-runs">The smallest config that runs<a class="headerlink" href="#the-smallest-config-that-runs" title="Permanent link">&para;</a></h2>
+<p>A first run needs four things: where the output goes, which dataset to read,
+which model to ask, and what to ask it. Inside the <code>client</code> block, <code>provider</code>
+plus <code>model</code> is enough; every other key there has a default.</p>
+<div class="language-yaml highlight"><span class="filename">my-pipeline.yaml</span><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">output_dir</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">outputs/imdb-sentiment</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nt">dataset</span><span class="p">:</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">stanfordnlp/imdb</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">split</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">test</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="nt">max_num_samples</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">20</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="nt">client</span><span class="p">:</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">  </span><span class="nt">provider</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">vllm_offline</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">  </span><span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">HuggingFaceTB/SmolLM2-135M-Instruct</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="nt">steps</span><span class="p">:</span>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sentiment</span>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="w">    </span><span class="nt">prompt</span><span class="p">:</span><span class="w"> </span><span class="s">"Classify</span><span class="nv"> </span><span class="s">the</span><span class="nv"> </span><span class="s">sentiment:</span><span class="nv"> </span><span class="s">{text}"</span>
+</span></code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>llm-annotate<span class="w"> </span>my-pipeline.yaml
+</span></code></pre></div>
+<p>That writes a <code>sentiment_response</code> column next to the original <code>text</code> and saves
+the dataset to <code>outputs/imdb-sentiment/final/</code>. <code>{text}</code> is filled in from the
+column of that name, so a prompt can name any column of the dataset. The rest of
+this page is what to add to that config, and
+<a href="../choosing-a-provider/">Choosing a provider</a> covers the <code>client</code> block for
+hardware other than one local GPU.</p>
+<div class="admonition note">
+<p class="admonition-title">What a config cannot express</p>
+<p><code>preprocess_fn</code>, <code>postprocess_fn</code> and <code>validate_fn</code> take Python callables
+and are deliberately unavailable here. If you need them, use
+<a class="autorefs autorefs-internal" title="            Annotator
+
+
+  
+      dataclass
+  " href="../api/annotator/#llm_annotator.annotator.Annotator"><code>Annotator</code></a> directly. Validity in a
+config-driven run means "the model returned JSON containing every
+<code>required</code> property of the step's schema".</p>
+</div>
+<h2 id="a-complete-example">A complete example<a class="headerlink" href="#a-complete-example" title="Permanent link">&para;</a></h2>
+<p>The pipeline below is shipped as <code>examples/pipeline-qa/</code>. Step 1 writes a
+question-answer pair about each text; step 2 has a different model rate the pair
+that step 1 produced.</p>
+<div class="language-yaml highlight"><span class="filename">examples/pipeline-qa/config.yaml</span><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># A two-step pipeline: one model writes a question-answer pair about a text,</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="c1"># a second model rates the pair it produced.</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="c1">#</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># Run it with either of:</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="c1">#   uv run llm-annotate examples/pipeline-qa/config.yaml</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="c1">#   uv run python scripts/annotate.py examples/pipeline-qa/config.yaml</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="c1">#</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="c1"># Every path below is relative to this file, so the directory can be copied</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="c1"># elsewhere and still work.</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="nt">output_dir</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">outputs/pipeline-qa</span>
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="c1"># Uncomment to push the final dataset (and only the final dataset) to the Hub.</span>
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="c1"># hub_id: your-username/wiki-qa-rated</span>
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a>
+</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="nt">verbose</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="nt">log_level</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">INFO</span>
+</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a>
+</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a><span class="c1"># Input for the first step. Swap `name`/`split` for your own dataset, or use</span>
+</span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a><span class="c1"># `path:` to read one written with `save_to_disk`.</span>
+</span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a><span class="nt">dataset</span><span class="p">:</span>
+</span><span id="__span-4-22"><a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">stanfordnlp/imdb</span>
+</span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a><span class="w">  </span><span class="nt">split</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">test</span>
+</span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24" href="#__codelineno-4-24"></a><span class="w">  </span><span class="nt">max_num_samples</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">20</span>
+</span><span id="__span-4-25"><a id="__codelineno-4-25" name="__codelineno-4-25" href="#__codelineno-4-25"></a>
+</span><span id="__span-4-26"><a id="__codelineno-4-26" name="__codelineno-4-26" href="#__codelineno-4-26"></a><span class="c1"># Defaults for every step. A step's own `client` block is merged over this, so</span>
+</span><span id="__span-4-27"><a id="__codelineno-4-27" name="__codelineno-4-27" href="#__codelineno-4-27"></a><span class="c1"># a step that only changes the model does not have to repeat the rest.</span>
+</span><span id="__span-4-28"><a id="__codelineno-4-28" name="__codelineno-4-28" href="#__codelineno-4-28"></a><span class="nt">client</span><span class="p">:</span>
+</span><span id="__span-4-29"><a id="__codelineno-4-29" name="__codelineno-4-29" href="#__codelineno-4-29"></a><span class="w">  </span><span class="nt">provider</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">vllm_offline</span>
+</span><span id="__span-4-30"><a id="__codelineno-4-30" name="__codelineno-4-30" href="#__codelineno-4-30"></a><span class="w">  </span><span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">HuggingFaceTB/SmolLM2-135M-Instruct</span>
+</span><span id="__span-4-31"><a id="__codelineno-4-31" name="__codelineno-4-31" href="#__codelineno-4-31"></a><span class="w">  </span><span class="nt">batch_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">16</span>
+</span><span id="__span-4-32"><a id="__codelineno-4-32" name="__codelineno-4-32" href="#__codelineno-4-32"></a><span class="w">  </span><span class="nt">engine</span><span class="p">:</span><span class="w">              </span><span class="c1"># how the vLLM engine itself is built</span>
+</span><span id="__span-4-33"><a id="__codelineno-4-33" name="__codelineno-4-33" href="#__codelineno-4-33"></a><span class="w">    </span><span class="nt">max_model_len</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4096</span>
+</span><span id="__span-4-34"><a id="__codelineno-4-34" name="__codelineno-4-34" href="#__codelineno-4-34"></a><span class="w">  </span><span class="nt">options</span><span class="p">:</span><span class="w">             </span><span class="c1"># what goes into every request</span>
+</span><span id="__span-4-35"><a id="__codelineno-4-35" name="__codelineno-4-35" href="#__codelineno-4-35"></a><span class="w">    </span><span class="nt">temperature</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.7</span>
+</span><span id="__span-4-36"><a id="__codelineno-4-36" name="__codelineno-4-36" href="#__codelineno-4-36"></a><span class="w">    </span><span class="nt">max_completion_tokens</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512</span>
+</span><span id="__span-4-37"><a id="__codelineno-4-37" name="__codelineno-4-37" href="#__codelineno-4-37"></a>
+</span><span id="__span-4-38"><a id="__codelineno-4-38" name="__codelineno-4-38" href="#__codelineno-4-38"></a><span class="nt">steps</span><span class="p">:</span>
+</span><span id="__span-4-39"><a id="__codelineno-4-39" name="__codelineno-4-39" href="#__codelineno-4-39"></a><span class="w">  </span><span class="c1"># Step 1 turns each review into a question-answer pair. The schema's</span>
+</span><span id="__span-4-40"><a id="__codelineno-4-40" name="__codelineno-4-40" href="#__codelineno-4-40"></a><span class="w">  </span><span class="c1"># properties (`question`, `answer`) become dataset columns, and `rename`</span>
+</span><span id="__span-4-41"><a id="__codelineno-4-41" name="__codelineno-4-41" href="#__codelineno-4-41"></a><span class="w">  </span><span class="c1"># tags them as this step's version so a later step could add its own.</span>
+</span><span id="__span-4-42"><a id="__codelineno-4-42" name="__codelineno-4-42" href="#__codelineno-4-42"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">write-qa</span>
+</span><span id="__span-4-43"><a id="__codelineno-4-43" name="__codelineno-4-43" href="#__codelineno-4-43"></a><span class="w">    </span><span class="nt">prompt_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prompts/write_qa.md</span>
+</span><span id="__span-4-44"><a id="__codelineno-4-44" name="__codelineno-4-44" href="#__codelineno-4-44"></a><span class="w">    </span><span class="nt">system_prompt_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prompts/system.md</span>
+</span><span id="__span-4-45"><a id="__codelineno-4-45" name="__codelineno-4-45" href="#__codelineno-4-45"></a><span class="w">    </span><span class="nt">output_schema_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">schemas/qa.json</span>
+</span><span id="__span-4-46"><a id="__codelineno-4-46" name="__codelineno-4-46" href="#__codelineno-4-46"></a><span class="w">    </span><span class="nt">sort_by_length</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</span><span id="__span-4-47"><a id="__codelineno-4-47" name="__codelineno-4-47" href="#__codelineno-4-47"></a><span class="w">    </span><span class="nt">num_retries_invalid</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span>
+</span><span id="__span-4-48"><a id="__codelineno-4-48" name="__codelineno-4-48" href="#__codelineno-4-48"></a><span class="w">    </span><span class="nt">filter_invalid</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</span><span id="__span-4-49"><a id="__codelineno-4-49" name="__codelineno-4-49" href="#__codelineno-4-49"></a><span class="w">    </span><span class="nt">rename</span><span class="p">:</span>
+</span><span id="__span-4-50"><a id="__codelineno-4-50" name="__codelineno-4-50" href="#__codelineno-4-50"></a><span class="w">      </span><span class="nt">question</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">question_v1</span>
+</span><span id="__span-4-51"><a id="__codelineno-4-51" name="__codelineno-4-51" href="#__codelineno-4-51"></a><span class="w">      </span><span class="nt">answer</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">answer_v1</span>
+</span><span id="__span-4-52"><a id="__codelineno-4-52" name="__codelineno-4-52" href="#__codelineno-4-52"></a>
+</span><span id="__span-4-53"><a id="__codelineno-4-53" name="__codelineno-4-53" href="#__codelineno-4-53"></a><span class="w">  </span><span class="c1"># Step 2 rates the pair from step 1. Its prompt reads the renamed columns,</span>
+</span><span id="__span-4-54"><a id="__codelineno-4-54" name="__codelineno-4-54" href="#__codelineno-4-54"></a><span class="w">  </span><span class="c1"># which is the whole point of running the steps in sequence.</span>
+</span><span id="__span-4-55"><a id="__codelineno-4-55" name="__codelineno-4-55" href="#__codelineno-4-55"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">rate-qa</span>
+</span><span id="__span-4-56"><a id="__codelineno-4-56" name="__codelineno-4-56" href="#__codelineno-4-56"></a><span class="w">    </span><span class="nt">prompt_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prompts/rate_qa.md</span>
+</span><span id="__span-4-57"><a id="__codelineno-4-57" name="__codelineno-4-57" href="#__codelineno-4-57"></a><span class="w">    </span><span class="nt">output_schema_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">schemas/rating.json</span>
+</span><span id="__span-4-58"><a id="__codelineno-4-58" name="__codelineno-4-58" href="#__codelineno-4-58"></a><span class="w">    </span><span class="nt">num_retries_invalid</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span>
+</span><span id="__span-4-59"><a id="__codelineno-4-59" name="__codelineno-4-59" href="#__codelineno-4-59"></a><span class="w">    </span><span class="c1"># A different provider for the judge, so the rater is not the writer.</span>
+</span><span id="__span-4-60"><a id="__codelineno-4-60" name="__codelineno-4-60" href="#__codelineno-4-60"></a><span class="w">    </span><span class="c1"># Remove this block to reuse the model above (which is also faster,</span>
+</span><span id="__span-4-61"><a id="__codelineno-4-61" name="__codelineno-4-61" href="#__codelineno-4-61"></a><span class="w">    </span><span class="c1"># because the model is then loaded only once for the whole pipeline).</span>
+</span><span id="__span-4-62"><a id="__codelineno-4-62" name="__codelineno-4-62" href="#__codelineno-4-62"></a><span class="w">    </span><span class="nt">client</span><span class="p">:</span>
+</span><span id="__span-4-63"><a id="__codelineno-4-63" name="__codelineno-4-63" href="#__codelineno-4-63"></a><span class="w">      </span><span class="nt">provider</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">vllm_offline</span>
+</span><span id="__span-4-64"><a id="__codelineno-4-64" name="__codelineno-4-64" href="#__codelineno-4-64"></a><span class="w">      </span><span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">HuggingFaceTB/SmolLM2-360M-Instruct</span>
+</span><span id="__span-4-65"><a id="__codelineno-4-65" name="__codelineno-4-65" href="#__codelineno-4-65"></a><span class="w">      </span><span class="nt">options</span><span class="p">:</span>
+</span><span id="__span-4-66"><a id="__codelineno-4-66" name="__codelineno-4-66" href="#__codelineno-4-66"></a><span class="w">        </span><span class="nt">temperature</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.0</span>
+</span><span id="__span-4-67"><a id="__codelineno-4-67" name="__codelineno-4-67" href="#__codelineno-4-67"></a><span class="w">        </span><span class="nt">max_completion_tokens</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256</span>
+</span></code></pre></div>
+<p>Run it with:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>llm-annotate<span class="w"> </span>examples/pipeline-qa/config.yaml
+</span></code></pre></div>
+<p>The same pipeline is also provided as <code>config.json</code>; the two formats are
+interchangeable and the file suffix decides how it is parsed.</p>
+<h2 id="paths-are-relative-to-the-config">Paths are relative to the config<a class="headerlink" href="#paths-are-relative-to-the-config" title="Permanent link">&para;</a></h2>
+<p>Every path inside a config file (<code>output_dir</code>, <code>prompt_file</code>,
+<code>system_prompt_file</code>, <code>output_schema_file</code>, <code>hosts_file</code>, <code>dataset.path</code>)
+resolves against the directory holding the config file, never against your
+current working directory. A config directory is therefore self-contained and
+can be copied to a cluster or shared with a colleague as a unit.</p>
+<p><code>dataset.data_dir</code> and <code>dataset.data_files</code> follow the same rule when
+<code>dataset.name</code> names a local source: one of the packaged builders (<code>json</code>,
+<code>csv</code>, <code>parquet</code>, <code>text</code>, <code>arrow</code>, ...) or a directory on disk. Glob patterns
+are prefixed rather than expanded, so <code>data_files: data/*.jsonl</code> keeps working
+from any directory:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nt">dataset</span><span class="p">:</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">json</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">split</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">train</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">data_files</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">data/*.jsonl</span><span class="w">    </span><span class="c1"># &lt;config dir&gt;/data/*.jsonl</span>
+</span></code></pre></div>
+<p>A URL (<code>https://</code>, <code>hf://</code>, ...) and an absolute path are left alone. So are
+the <code>data_files</code> of a Hub dataset id, which are patterns inside that
+repository rather than paths on this machine.</p>
+<p>The <code>--output-dir</code> CLI flag is the one exception: since it is typed at the
+shell rather than written into the config, it resolves against your current
+working directory instead, the same as the <code>config</code> argument itself.</p>
+<h2 id="prompts-and-schemas-inline-or-in-a-file">Prompts and schemas: inline or in a file<a class="headerlink" href="#prompts-and-schemas-inline-or-in-a-file" title="Permanent link">&para;</a></h2>
+<p>Each of the three text inputs has an inline form and a file form. Giving both is
+an error, so there is never any doubt about which one won:</p>
+<table>
+<thead>
+<tr>
+<th>Inline</th>
+<th>From a file</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>prompt</code></td>
+<td><code>prompt_file</code></td>
+<td>Prompt template, with <code>{column}</code> placeholders</td>
+</tr>
+<tr>
+<td><code>system_prompt</code></td>
+<td><code>system_prompt_file</code></td>
+<td>System message for the chat turn</td>
+</tr>
+<tr>
+<td><code>output_schema</code></td>
+<td><code>output_schema_file</code></td>
+<td>JSON schema for structured output</td>
+</tr>
+</tbody>
+</table>
+<p>Short prompts read well inline; anything longer belongs in a <code>.md</code> file next to
+the config, which also keeps the prompt reviewable in a diff.</p>
+<p><code>prompt_file</code> and <code>system_prompt_file</code> are read verbatim, whatever the suffix:
+the file's bytes are the prompt, including its trailing newline. Nothing is
+stripped, rendered or reformatted, so a <code>.json</code> file used as a prompt reaches
+the model as the JSON text it holds. <code>output_schema_file</code> is the one file that
+is parsed, and it has to hold a JSON object.</p>
+<p>The schema belongs to the step and nowhere else: a client block that sets
+<code>output_schema</code> under <code>options</code> is refused when the config loads. The step's
+schema is part of its <a href="#editing-a-step">selection record</a>, so an edited schema
+is noticed on the next run.</p>
+<h2 id="how-steps-see-each-others-output">How steps see each other's output<a class="headerlink" href="#how-steps-see-each-others-output" title="Permanent link">&para;</a></h2>
+<p>A step's <code>name</code> names its directory (<code>&lt;NN&gt;-&lt;name&gt;/</code>), its default
+<code>task_prefix</code> (<code>&lt;name&gt;_</code>) and its SLURM jobs. It may only hold letters,
+digits, <code>_</code>, <code>-</code> and <code>.</code>, and it starts with a letter or a digit, so
+<code>rate-qa</code> is accepted and <code>rate qa</code> or <code>rate,qa</code> are refused.</p>
+<p>Each step writes several kinds of column:</p>
+<ul>
+<li>Schema properties: every top-level property of <code>output_schema</code> becomes a
+  column under its own name. A schema with <code>question</code> and <code>answer</code> produces
+  exactly those two columns, which is what the next step's prompt refers to.
+  A property that a response leaves out is <code>None</code> on that row, and a key that
+  the model returns without the schema declaring it is dropped (reported once
+  per run), so every row of a step has the same columns. A property may not be
+  called <code>idx</code> or carry the name of a bookkeeping column of the same step; such
+  a schema is refused before the step's first request.</li>
+<li>Bookkeeping columns, namespaced by the step's <code>task_prefix</code> (which
+  defaults to <code>&lt;name&gt;_</code>): <code>{prefix}response</code>, <code>{prefix}finish_reason</code>,
+  <code>{prefix}num_tokens</code>, <code>{prefix}error</code>, <code>{prefix}error_type</code>,
+  <code>{prefix}reasoning</code> and, when a schema is set, <code>{prefix}valid_fields</code>.</li>
+<li>The <code>idx_column</code> (<code>idx</code> by default). It identifies a row from the first
+  step onward, so every step's <code>output/</code> keeps it. It is removed from
+  <code>final/</code> and from the dataset pushed to the Hub. See
+  <a href="../growing-a-run/">Growing a run</a> for what this makes possible.</li>
+</ul>
+<p><code>{prefix}reasoning</code> holds a reasoning model's trace, separated from the answer
+in <code>{prefix}response</code>. For either vLLM provider it is filled when the step names
+a parser:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nt">client</span><span class="p">:</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">engine</span><span class="p">:</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">    </span><span class="nt">reasoning_parser</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">qwen3</span><span class="w">   </span><span class="c1"># or deepseek_r1, granite, gemma4, glm45, ...</span>
+</span></code></pre></div>
+<p>A served step passes that to <code>vllm serve</code> as <code>--reasoning-parser</code>, which splits
+the trace off before it reaches the client. An offline step splits it with the
+same vLLM parser inside the client, since <code>vllm.LLM</code> returns the trace inline.
+A <code>claude</code> step needs no parser: it fills the column from the thinking blocks
+whenever the request carries a thinking budget. Without a parser a reasoning
+model returns its trace inside <code>{prefix}response</code>, tags and all, and this column
+stays <code>None</code>.</p>
+<p>Because schema properties are not prefixed, two steps that use the same
+property name would collide. Use <code>rename</code> to give a step's output its final
+name:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nt">steps</span><span class="p">:</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">write-qa</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">    </span><span class="nt">output_schema_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">schemas/qa.json</span><span class="w">   </span><span class="c1"># produces `question`, `answer`</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">    </span><span class="nt">rename</span><span class="p">:</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">      </span><span class="nt">question</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">question_v1</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">      </span><span class="nt">answer</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">answer_v1</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">rate-qa</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">    </span><span class="nt">prompt</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="w">      </span><span class="no">Rate this pair.</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="w">      </span><span class="no">Q: {question_v1}</span>
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="w">      </span><span class="no">A: {answer_v1}</span>
+</span></code></pre></div>
+<p>Renaming onto a column that already exists is refused rather than silently
+overwriting it.</p>
+<p>Two further knobs tidy up between steps:</p>
+<ul>
+<li><code>drop_columns</code> removes columns you no longer need.</li>
+<li><code>filter_invalid: true</code> drops rows whose <code>{prefix}valid_fields</code> is still
+  <code>false</code> after all retries, so a broken generation is not carried into the next
+  step. It requires a schema, and it fails loudly when every row was invalid,
+  which is usually a sign that <code>max_completion_tokens</code> is too small for the
+  schema.</li>
+</ul>
+<p>The rendered <code>{prefix}messages</code> column is dropped once a step finishes, so an
+N-step pipeline does not accumulate N copies of every prompt. Set
+<code>keep_messages: true</code> on a step to keep it for debugging.</p>
+<h2 id="providers-and-models">Providers and models<a class="headerlink" href="#providers-and-models" title="Permanent link">&para;</a></h2>
+<p>A client can be described at the top level, per step, or both:</p>
+<ul>
+<li>Top level only: every step runs on it. Best when one model does all the
+  work.</li>
+<li>Top level plus a step block: the step's keys are merged over the
+  defaults. Merging is one level deep: <code>init</code> and <code>options</code> are merged
+  key-by-key, so a step that only changes <code>max_completion_tokens</code> need not
+  repeat the rest. A step that switches <code>provider</code> is the exception, described
+  below.</li>
+<li>Per step only: omit the top-level block entirely. Best when every step
+  uses a different model and there is no sensible shared default; each step's
+  block then has to name its own <code>provider</code> and <code>model</code>.</li>
+</ul>
+<p>Every step must end up with a client one way or the other, and a step that has
+neither is reported by name when the config loads.</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nt">client</span><span class="p">:</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">provider</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">vllm_offline</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span><span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Qwen/Qwen3-8B</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span><span class="nt">batch_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">  </span><span class="nt">num_proc</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">  </span><span class="nt">engine</span><span class="p">:</span><span class="w">            </span><span class="c1"># how the vLLM engine itself is built</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">    </span><span class="nt">max_model_len</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8192</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">  </span><span class="nt">options</span><span class="p">:</span><span class="w">           </span><span class="c1"># fields of the provider's runtime-options dataclass</span>
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="w">    </span><span class="nt">temperature</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.7</span>
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="w">    </span><span class="nt">max_completion_tokens</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1024</span>
+</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a>
+</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="nt">steps</span><span class="p">:</span>
+</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">judge</span>
+</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a><span class="w">    </span><span class="nt">prompt_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prompts/judge.md</span>
+</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a><span class="w">    </span><span class="nt">client</span><span class="p">:</span>
+</span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a><span class="w">      </span><span class="nt">options</span><span class="p">:</span>
+</span><span id="__span-9-17"><a id="__codelineno-9-17" name="__codelineno-9-17" href="#__codelineno-9-17"></a><span class="w">        </span><span class="nt">max_completion_tokens</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256</span><span class="w">   </span><span class="c1"># temperature is inherited</span>
+</span></code></pre></div>
+<p>With no top-level block, each step carries its own complete client:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nt">steps</span><span class="p">:</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">write</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">    </span><span class="nt">prompt_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prompts/write.md</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">    </span><span class="nt">client</span><span class="p">:</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">      </span><span class="nt">provider</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">vllm_offline</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">      </span><span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Qwen/Qwen3-8B</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">judge</span>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">    </span><span class="nt">prompt_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prompts/judge.md</span>
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="w">    </span><span class="nt">client</span><span class="p">:</span>
+</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="w">      </span><span class="nt">provider</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">claude</span>
+</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="w">      </span><span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">claude-haiku-4-5</span>
+</span></code></pre></div>
+<p><code>provider</code> accepts exactly <code>openai</code>, <code>claude</code>, <code>vllm_online</code> (a running vLLM
+server) or <code>vllm_offline</code> (in-process vLLM). No other spelling is
+recognized. See <a href="../provider-info/">Provider setup</a> for authentication.</p>
+<h3 id="where-a-setting-goes">Where a setting goes<a class="headerlink" href="#where-a-setting-goes" title="Permanent link">&para;</a></h3>
+<p>A <code>client</code> block has five groups, split by <em>when</em> a setting is used rather than
+by what it configures. That is the rule to remember: a setting belongs to
+whichever moment it takes effect.</p>
+<table>
+<thead>
+<tr>
+<th>Group</th>
+<th>Key</th>
+<th>Used when</th>
+<th>Providers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Execution</td>
+<td><code>batch_size</code>, <code>num_proc</code></td>
+<td>the annotator drives the run</td>
+<td>all</td>
+</tr>
+<tr>
+<td>Execution (pool)</td>
+<td><code>queue_size</code>, <code>max_concurrent_batches_per_client</code>, <code>wait_for_servers</code></td>
+<td>the annotator drives a pool of servers</td>
+<td><code>vllm_online</code></td>
+</tr>
+<tr>
+<td>Connection</td>
+<td><code>init</code></td>
+<td>the client object is constructed</td>
+<td>all</td>
+</tr>
+<tr>
+<td>Engine</td>
+<td><code>engine</code></td>
+<td>the vLLM engine is built</td>
+<td><code>vllm_offline</code>, <code>vllm_online</code></td>
+</tr>
+<tr>
+<td>Pool</td>
+<td><code>pool</code></td>
+<td>a job submitter starts servers</td>
+<td><code>vllm_online</code></td>
+</tr>
+<tr>
+<td>Request</td>
+<td><code>options</code>, <code>gen_kwargs</code></td>
+<td>every generation call</td>
+<td>all</td>
+</tr>
+</tbody>
+</table>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nt">client</span><span class="p">:</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="nt">provider</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">vllm_offline</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span><span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Qwen/Qwen3-8B</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span><span class="nt">batch_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256</span><span class="w">          </span><span class="c1"># execution</span>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">  </span><span class="nt">num_proc</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">  </span><span class="nt">init</span><span class="p">:</span><span class="w">                    </span><span class="c1"># connection: the client constructor</span>
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">    </span><span class="nt">on_error</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">warn</span>
+</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="w">  </span><span class="nt">engine</span><span class="p">:</span><span class="w">                  </span><span class="c1"># engine: how vLLM itself is built</span>
+</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="w">    </span><span class="nt">tensor_parallel_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="w">    </span><span class="nt">max_model_len</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8192</span>
+</span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a><span class="w">  </span><span class="nt">options</span><span class="p">:</span><span class="w">                 </span><span class="c1"># request: sent with every prompt</span>
+</span><span id="__span-11-12"><a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a><span class="w">    </span><span class="nt">temperature</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.7</span>
+</span><span id="__span-11-13"><a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a><span class="w">    </span><span class="nt">max_completion_tokens</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1024</span>
+</span></code></pre></div>
+<p><code>init</code> and <code>options</code> are passed straight through to the matching client
+constructor and <code>*RuntimeOptions</code> dataclass, so every provider-specific setting
+is reachable. Both are checked when the config loads: <code>init</code> against the
+constructor's signature and <code>options</code> against the dataclass's fields. An unknown
+name is reported with the accepted ones listed, so <code>init: {on_eror: warn}</code> fails
+at load time, before any step has run. <code>model</code> is not an
+<code>init</code> key: it has its own key next to <code>provider</code>. When a dataclass does not
+name what you need, <code>options.extra_body</code> (vLLM) and <code>gen_kwargs</code> (any provider)
+are merged into the request as written.</p>
+<p>The groups do not overlap, and the config says so rather than letting a value
+sit in two places: an engine setting written under <code>init</code> is rejected at load
+time, and <code>engine</code> on a hosted provider is too.</p>
+<p><code>engine</code> is the same block for both vLLM providers, with the same field names and the same
+meaning. A <code>vllm_offline</code> step turns it into <code>vllm.LLM(...)</code> keyword arguments;
+a <code>vllm_online</code> step whose servers still have to be started turns it into
+<code>vllm serve</code> flags, which <code>llm-annotate &lt;config&gt; --serve-args &lt;step&gt;</code> prints for
+a job submitter. So moving a step between the two changes only <code>provider</code>, and a
+step states its GPU count once, in <code>engine.tensor_parallel_size</code>. <code>batch_size</code> does
+not size the GPU work for <code>vllm_offline</code>: vLLM schedules that itself from
+<code>engine.max_num_seqs</code> and <code>engine.max_num_batched_tokens</code>.</p>
+<p>Steps whose <code>provider</code>, <code>model</code>, <code>init</code>, <code>engine</code> and server source
+(<code>base_urls</code>, <code>hosts_file</code>, <code>url_glob</code>) all match share one live client, so a
+pipeline that uses the same local model twice loads it only once. Changing only
+<code>options</code> or <code>gen_kwargs</code> never triggers a reload, because those are per
+request.</p>
+<p>One exception to the merging above: a step that names a <em>different</em> <code>provider</code>
+than the top-level block inherits nothing that was written for the old one.
+<code>options</code> name fields of the previous provider's runtime-options dataclass
+(<code>top_k</code> means nothing to Claude) and <code>init</code> names arguments of its
+constructor, so an inherited <code>api_key</code> would send one provider's key to
+another. Both are dropped, and so is every block that belongs to a provider the
+step no longer uses:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Dropped when the step switches to</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>init</code>, <code>options</code></td>
+<td>any other provider</td>
+</tr>
+<tr>
+<td><code>engine</code></td>
+<td><code>openai</code>, <code>claude</code></td>
+</tr>
+<tr>
+<td><code>base_urls</code>, <code>hosts_file</code>, <code>url_glob</code>, <code>pool</code>, <code>queue_size</code>, <code>max_concurrent_batches_per_client</code>, <code>wait_for_servers</code></td>
+<td>anything but <code>vllm_online</code></td>
+</tr>
+</tbody>
+</table>
+<p>What the step writes itself is always kept, exactly as written:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nt">client</span><span class="p">:</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">  </span><span class="nt">provider</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">vllm_offline</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span><span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Qwen/Qwen3-8B</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">  </span><span class="nt">options</span><span class="p">:</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">    </span><span class="nt">temperature</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.7</span>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="w">    </span><span class="nt">top_k</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">20</span>
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="nt">steps</span><span class="p">:</span>
+</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">judge</span>
+</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="w">    </span><span class="nt">prompt_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prompts/judge.md</span>
+</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a><span class="w">    </span><span class="nt">client</span><span class="p">:</span>
+</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a><span class="w">      </span><span class="nt">provider</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">claude</span>
+</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a><span class="w">      </span><span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">claude-haiku-4-5</span>
+</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a><span class="w">      </span><span class="nt">options</span><span class="p">:</span>
+</span><span id="__span-12-15"><a id="__codelineno-12-15" name="__codelineno-12-15" href="#__codelineno-12-15"></a><span class="w">        </span><span class="nt">max_completion_tokens</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256</span><span class="w">   </span><span class="c1"># and *only* that; nothing is inherited</span>
+</span></code></pre></div>
+<h2 id="many-vllm-servers">Many vLLM servers<a class="headerlink" href="#many-vllm-servers" title="Permanent link">&para;</a></h2>
+<p>Point the <code>vllm_online</code> provider at several servers and the pipeline uses a
+<a class="autorefs autorefs-internal" title="            VLLMQueueAnnotator
+
+
+  
+      dataclass
+  " href="../api/annotator/#llm_annotator.annotator.VLLMQueueAnnotator"><code>VLLMQueueAnnotator</code></a> instead of a
+single client. Three ways to say where the servers are, matching how a job
+submitter publishes them:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nt">client</span><span class="p">:</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span><span class="nt">provider</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">vllm_online</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">  </span><span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Qwen/Qwen3-8B</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">  </span><span class="nt">base_urls</span><span class="p">:</span><span class="w">                       </span><span class="c1"># explicit</span>
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">http://node01:8000/v1</span>
+</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">http://node02:8000/v1</span>
+</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="w">  </span><span class="c1"># hosts_file: logs/pool_123/hosts.txt   # one URL per line, read once</span>
+</span><span id="__span-13-8"><a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="w">  </span><span class="c1"># url_glob: logs/pool_*/*.url           # one URL per file, re-read during the run</span>
+</span><span id="__span-13-9"><a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a><span class="w">  </span><span class="nt">queue_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span><span class="w">                    </span><span class="c1"># batches kept in flight over the pool</span>
+</span><span id="__span-13-10"><a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a><span class="w">  </span><span class="nt">max_concurrent_batches_per_client</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span><span class="w">  </span><span class="c1"># batches per server, independent of batch_size</span>
+</span><span id="__span-13-11"><a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a><span class="w">  </span><span class="nt">wait_for_servers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">300</span><span class="w">            </span><span class="c1"># poll /health first; 0 disables</span>
+</span></code></pre></div>
+<p><code>max_concurrent_batches_per_client</code> is how many batches each server is asked to
+handle at once, and every batch is <code>batch_size</code> samples, so one server holds up
+to <code>max_concurrent_batches_per_client * batch_size</code> prompts. A <code>vllm_online</code>
+step sends every sample of a batch as its own <code>/v1/chat/completions</code> request,
+all at the same time, so that same number is the count of requests the server
+holds, and what its <code>engine.max_num_seqs</code> has to cover. The whole pool runs
+<code>servers * max_concurrent_batches_per_client</code> batches at once, which is the
+floor for <code>queue_size</code>: a smaller queue cannot fill every server, so the config
+is rejected with the minimum spelled out. Leave <code>queue_size</code> out to keep four
+batches queued per slot. Both keys size a pool, so both are <code>vllm_online</code>-only;
+on the other providers one batch is in flight at a time and <code>batch_size</code> is the
+only knob.</p>
+<p>The block above works out to 2 servers * 4 batches = 8 batches in flight, so
+its <code>queue_size</code> of 8 is exactly the minimum. With the default <code>batch_size</code> of
+256, each of those servers holds 1024 prompts, which is what its
+<code>engine.max_num_seqs</code> has to cover. <code>--describe-steps</code> prints all of these
+numbers, so a pool can be sized before a single GPU is allocated.</p>
+<p><code>base_urls</code> and <code>hosts_file</code> are read once, at the start of the run.
+<code>url_glob</code> is re-read while the run continues, so a server whose file
+appears later is admitted into the pool and takes over part of the work.</p>
+<p>When a batch fails entirely on one server, that server's <code>/health</code> endpoint
+is probed. A server that does not answer is removed from the pool, and its
+batch is sent to another server (no errored rows are written for it). A batch
+that fails entirely on a healthy server is recorded as errors. Every
+configured URL that is not in the pool is probed once a second, so a server
+that recovers, or a requeued SLURM server job that publishes its <code>.url</code> file
+again, joins the run the same way a late starter does. The run stops with
+<code>TooManyConsecutiveFailedBatchesError</code> once no server is left.</p>
+<p>When the servers do not exist yet and something has to start them, say how many
+you want in <code>pool</code> and what each one is in <code>engine</code>. Both blocks are reported
+to a job submitter rather than acted on by the library, apart from
+<code>pool.min_servers</code>, which is also how many servers a pooled run waits for
+before it starts:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="nt">client</span><span class="p">:</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span><span class="nt">provider</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">vllm_online</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span><span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Qwen/Qwen3-8B</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">  </span><span class="nt">engine</span><span class="p">:</span>
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="w">    </span><span class="nt">tensor_parallel_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span><span class="w">   </span><span class="c1"># GPUs per server</span>
+</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="w">    </span><span class="nt">max_model_len</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8192</span>
+</span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="w">    </span><span class="nt">gpu_memory_utilization</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.90</span>
+</span><span id="__span-14-8"><a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="w">  </span><span class="nt">pool</span><span class="p">:</span>
+</span><span id="__span-14-9"><a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="w">    </span><span class="nt">servers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span><span class="w">                </span><span class="c1"># four such servers</span>
+</span><span id="__span-14-10"><a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a><span class="w">    </span><span class="nt">min_servers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span><span class="w">            </span><span class="c1"># start once two are ready</span>
+</span></code></pre></div>
+<p><code>min_servers</code> is how many servers have to answer before annotation starts. It
+defaults to one, so a step begins on the first server that is ready and the
+rest join the run as they come up. A submitter reads it from
+<code>--describe-steps</code> and releases its own wait loop at the same threshold.</p>
+<p>Because the profile is per step, one pipeline can serve a different model with
+different serving flags at each step.</p>
+<h2 id="running-one-step-at-a-time">Running one step at a time<a class="headerlink" href="#running-one-step-at-a-time" title="Permanent link">&para;</a></h2>
+<p><code>--steps</code> runs part of a pipeline. Earlier steps must already have finished:
+their saved <code>output/</code> snapshot is loaded as the input, which is exactly the
+resume path, so running</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>llm-annotate<span class="w"> </span>cfg.yaml<span class="w"> </span>--steps<span class="w"> </span>write-qa
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>llm-annotate<span class="w"> </span>cfg.yaml<span class="w"> </span>--steps<span class="w"> </span>rate-qa
+</span></code></pre></div>
+<p>produces the same dataset as one <code>llm-annotate cfg.yaml</code>. The selection has to be
+contiguous, since skipping a step in the middle would drop the columns the next
+prompt reads. Only the run that includes the last step writes
+<code>&lt;output_dir&gt;/final/</code> and pushes to the Hub, because a partial run has a partial
+dataset and must not publish it as finished.</p>
+<p>This is what lets a scheduler give each step its own resources while one config
+file stays the source of truth. <code>--describe-steps</code> is the machine-readable half:
+it prints one JSON object per step and annotates nothing.</p>
+<div class="language-console highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="gp">$ </span>llm-annotate<span class="w"> </span>examples/vllm-server-pool/pipeline.yaml<span class="w"> </span>--describe-steps
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="go">{"index": 1, "name": "write-qa", "kind": "vllm_pool", "provider": "vllm_online", "model": "Qwen/Qwen3-8B", "servers": 4, "min_servers": 2, "gpus_per_vllm_server": 2, "step_dir": "outputs/vllm-server-pool/01-write-qa", "batch_size": 64, "max_concurrent_batches_per_client": 4, "queue_size": 32, "max_requests_per_server": 256, "max_requests_in_flight": 1024}</span>
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="go">{"index": 2, "name": "rate-qa", "kind": "api", "provider": "claude", "model": "claude-haiku-4-5", "servers": 1, "min_servers": 1, "gpus_per_vllm_server": 1, "step_dir": "outputs/vllm-server-pool/02-rate-qa", "batch_size": 256, "max_concurrent_batches_per_client": null, "queue_size": null, "max_requests_per_server": null, "max_requests_in_flight": null}</span>
+</span></code></pre></div>
+<p><code>step_dir</code> is printed absolute; it is shortened here to keep the line readable.</p>
+<p><code>kind</code> says what the step needs to run: <code>vllm_pool</code> (servers must be started for
+it), <code>vllm_online</code> (they already exist), <code>vllm_offline</code> (loads the model
+in-process) or <code>api</code> (a hosted provider, no accelerator at all).</p>
+<p><code>--format env</code> prints the same fields as one line of shell assignments per step
+instead, so a submitter written in shell can <code>eval</code> a line rather than parse
+JSON. Every key is the JSON name in upper case behind a <code>STEP_</code> prefix (a name
+that already starts with <code>step_</code> does not get it twice, so <code>step_dir</code> is
+<code>STEP_DIR</code>), and every value is quoted with <code>shlex.quote</code>, so a model or a path
+containing a space, a comma or a quote survives. A <code>null</code> becomes the
+empty string.</p>
+<div class="language-console highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="gp">$ </span>llm-annotate<span class="w"> </span>examples/vllm-server-pool/pipeline.yaml<span class="w"> </span>--describe-steps<span class="w"> </span>--format<span class="w"> </span>env
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="go">STEP_INDEX=1 STEP_NAME=write-qa STEP_KIND=vllm_pool STEP_PROVIDER=vllm_online STEP_MODEL=Qwen/Qwen3-8B STEP_SERVERS=4 STEP_MIN_SERVERS=2 STEP_GPUS_PER_VLLM_SERVER=2 STEP_DIR=outputs/vllm-server-pool/01-write-qa STEP_BATCH_SIZE=64 STEP_MAX_CONCURRENT_BATCHES_PER_CLIENT=4 STEP_QUEUE_SIZE=32 STEP_MAX_REQUESTS_PER_SERVER=256 STEP_MAX_REQUESTS_IN_FLIGHT=1024</span>
+</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="go">STEP_INDEX=2 STEP_NAME=rate-qa STEP_KIND=api STEP_PROVIDER=claude STEP_MODEL=claude-haiku-4-5 STEP_SERVERS=1 STEP_MIN_SERVERS=1 STEP_GPUS_PER_VLLM_SERVER=1 STEP_DIR=outputs/vllm-server-pool/02-rate-qa STEP_BATCH_SIZE=256 STEP_MAX_CONCURRENT_BATCHES_PER_CLIENT='' STEP_QUEUE_SIZE='' STEP_MAX_REQUESTS_PER_SERVER='' STEP_MAX_REQUESTS_IN_FLIGHT=''</span>
+</span></code></pre></div>
+<p>The prefix is what makes <code>eval</code> safe to use on a line: no key can collide with a
+variable of the calling script or of a cluster file. <code>slurm/submit_pipeline.sh</code>
+reads its steps this way.</p>
+<p>The last five keys are the step's concurrency, and they are what a pool is sized
+against:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>batch_size</code></td>
+<td>samples in one batch</td>
+</tr>
+<tr>
+<td><code>max_concurrent_batches_per_client</code></td>
+<td>batches each server handles at once</td>
+</tr>
+<tr>
+<td><code>queue_size</code></td>
+<td>batches in flight over the pool, after the default and the minimum have been applied</td>
+</tr>
+<tr>
+<td><code>max_requests_per_server</code></td>
+<td><code>max_concurrent_batches_per_client * batch_size</code>, the prompts one server holds, so what its <code>max_num_seqs</code> has to cover</td>
+</tr>
+<tr>
+<td><code>max_requests_in_flight</code></td>
+<td>that number times the server count</td>
+</tr>
+</tbody>
+</table>
+<p>The four pool keys are <code>null</code> for a provider that has no pool, which sends one
+batch at a time.</p>
+<p><code>--serve-args</code> is the other half: it prints the <code>vllm serve</code> argument list for
+one step, one argument per line, so a server job reads its own serving profile
+out of the config instead of being handed one through the environment.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>llm-annotate<span class="w"> </span>cfg.yaml<span class="w"> </span>--serve-args<span class="w"> </span>write-qa
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>Qwen/Qwen3-8B
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>--served-model-name
+</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>Qwen/Qwen3-8B
+</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a>--tensor-parallel-size
+</span><span id="__span-19-5"><a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>2
+</span><span id="__span-19-6"><a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a>--max-model-len
+</span><span id="__span-19-7"><a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a>8192
+</span></code></pre></div>
+<p>One argument per line is what keeps a value containing spaces intact, and
+<code>--speculative-config</code> takes a JSON object. <code>--host</code> and <code>--port</code> are absent by
+design: the port has to be probed on the node, because two servers of one pool
+can land on the same machine.</p>
+<p><code>--hosts-file</code> completes the picture for a scheduler: it attaches a file of
+server URLs to the selected step that runs on vLLM, and to that step only, so a
+hosted step in the same pipeline is unaffected. <code>--url-glob</code> is its sibling for
+a pool that is still filling up: it attaches a glob of one-URL-per-file server
+addresses instead, and re-reads it while the run continues, so servers that
+become ready later are admitted into the pool. Giving both flags is an error.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>llm-annotate<span class="w"> </span>cfg.yaml<span class="w"> </span>--steps<span class="w"> </span>write-qa<span class="w"> </span>--hosts-file<span class="w"> </span>logs/pool_123/hosts.txt
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>llm-annotate<span class="w"> </span>cfg.yaml<span class="w"> </span>--steps<span class="w"> </span>write-qa<span class="w"> </span>--url-glob<span class="w"> </span><span class="s1">'logs/pool_123/*.url'</span>
+</span></code></pre></div>
+<p>A cluster job submitter is built entirely out of these flags: it reads
+<code>--describe-steps</code> to plan the allocation, <code>--serve-args</code> to start each step's
+servers, and attaches <code>--hosts-file</code> once they are up. <code>slurm/</code> ships such a
+submitter for SLURM, with everything cluster-specific in one small
+<a href="../slurm/">cluster file</a>; it submits one job chain per step of a config.</p>
+<h2 id="resuming">Resuming<a class="headerlink" href="#resuming" title="Permanent link">&para;</a></h2>
+<p>Long pipelines are restartable at two levels:</p>
+<ul>
+<li>Within a step, the usual JSONL progress files under the step's
+  <code>annotate/</code> directory mean an interrupted step continues where it stopped.</li>
+<li>Between steps, a finished step writes its result to
+  <code>&lt;output_dir&gt;/&lt;NN&gt;-&lt;name&gt;/output/</code>. Re-running the same config loads that
+  snapshot and skips the step, so a pipeline that dies in step three does not
+  repeat steps one and two.</li>
+</ul>
+<p>Re-run the identical command to resume. Pass <code>--overwrite</code> (or set
+<code>overwrite: true</code>) to delete the existing step directories, including every
+finished generation in them, and run those steps from scratch.</p>
+<p>Raising <code>dataset.max_num_samples</code> and re-running the identical command also
+resumes every step, without <code>--overwrite</code>: only the new rows are sent to the
+model, in every step. See <a href="../growing-a-run/">Growing a run</a> for the full
+workflow, what is allowed to change, and what is rejected.</p>
+<h3 id="resuming-on-another-machine">Resuming on another machine<a class="headerlink" href="#resuming-on-another-machine" title="Permanent link">&para;</a></h3>
+<p>A step with its own <code>hub_id</code> backs its data up to two branches of that
+repository: <code>&lt;task_prefix&gt;prepared_dataset</code> and <code>&lt;task_prefix&gt;progress_backup</code>.
+A re-run of the identical command restores the prepared data from the first
+branch on its own. The JSONL progress files on the second branch are restored
+by a separate command, which a machine without local progress files (a purged
+scratch directory, or a run that moves to another cluster) runs before the
+re-run.</p>
+<p>A step's directory is <code>&lt;output_dir&gt;/&lt;NN&gt;-&lt;name&gt;/annotate/</code> and its prefix is
+<code>&lt;name&gt;_</code>, so the step <code>judge</code>, the second one of a pipeline whose <code>output_dir</code>
+is <code>outputs/qa</code>, restores with:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>llm-annotate-restore<span class="w"> </span>--hub-id<span class="w"> </span>user/my-dataset<span class="w"> </span>--output-dir<span class="w"> </span>outputs/qa/02-judge/annotate<span class="w"> </span>--task-prefix<span class="w"> </span>judge_
+</span></code></pre></div>
+<p>Or call the function it wraps from Python:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">llm_annotator</span><span class="w"> </span><span class="kn">import</span> <span class="n">restore_progress_from_hub</span>
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>
+</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a><span class="n">restore_progress_from_hub</span><span class="p">(</span>
+</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a>    <span class="n">hub_id</span><span class="o">=</span><span class="s2">"user/my-dataset"</span><span class="p">,</span>
+</span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a>    <span class="n">output_dir</span><span class="o">=</span><span class="s2">"outputs/qa/02-judge/annotate"</span><span class="p">,</span>
+</span><span id="__span-22-6"><a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a>    <span class="n">task_prefix</span><span class="o">=</span><span class="s2">"judge_"</span><span class="p">,</span>
+</span><span id="__span-22-7"><a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a><span class="p">)</span>
+</span></code></pre></div>
+<p>The selection record (<code>&lt;task_prefix&gt;selection.json</code>) travels with the progress
+files and is restored next to them, so the restored run still refuses an edited
+prompt or output schema. Add <code>--force</code> to merge the backup into a progress
+directory that already holds files: rows are merged per sample id and a local
+row wins.</p>
+<p>A step whose repository has a progress backup while its local progress
+directory is empty does not start at all, and the error names the restore
+command above. Use <code>--overwrite</code> for that step to delete the backup branch and
+annotate every row again.</p>
+<h3 id="editing-a-step">Editing a step<a class="headerlink" href="#editing-a-step" title="Permanent link">&para;</a></h3>
+<p>Editing a step's <code>prompt</code>, <code>system_prompt</code>, <code>sort_by_length</code> or output schema and re-running the
+same config does not mix old and new answers. The step whose setting changed is not loaded from its
+snapshot:</p>
+<ul>
+<li>With no progress files for that step yet, it is rebuilt with the new setting.</li>
+<li>With finished rows already on disk, the run stops with a <code>ValueError</code> that names what changed and
+  the command that resolves it, before anything is deleted:</li>
+</ul>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>The finished rows in 'outputs/qa/02-judge/annotate/judge_progress_backup' cannot be reused: the
+</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>prompt template changed. Restore the old value(s), use a new 'output_dir', or re-run with
+</span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>'--steps judge summarise --overwrite' to annotate that step and the ones that read it again from
+</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a>scratch. A run can only grow through a higher 'max_num_samples' with the same settings, or
+</span><span id="__span-23-5"><a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a>through rows appended to a source that is not shuffled.
+</span></code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>llm-annotate<span class="w"> </span>cfg.yaml<span class="w"> </span>--steps<span class="w"> </span>judge<span class="w"> </span>summarise<span class="w"> </span>--overwrite
+</span></code></pre></div>
+<p>The command names the edited step and every step after it. A step that is annotated again from
+  scratch produces a new answer for every row, and the steps that read it hold judgements of the
+  old ones. Steps before it keep their finished results and are not sent to the model again.</p>
+<p>The pipeline enforces that. Each run of a step gets a token, which the steps after it record as the
+version of the input they read. A step that starts with an empty progress directory (after
+<code>--overwrite</code>, or after its prepared data was rebuilt) gets a new token, so the step that reads it
+stops with:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>... cannot be reused: step 'judge' was annotated again from scratch. ...
+</span></code></pre></div>
+<p>A step keeps its token while it resumes, so a higher <code>dataset.max_num_samples</code>, appended rows and
+<code>--retry-errors</code> leave the steps after it on the rows they already annotated, exactly as before.</p>
+<p>A step outside the selection that no longer matches its own record raises a different error: <code>Step
+'x' has finished with other settings than the ones that are requested now, so there is no input for
+'y'. Run it first, or select it too.</code> That step has to be selected (or reverted to its old
+settings) before <code>y</code> can run.</p>
+<p>The layout under <code>output_dir</code> is:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>outputs/pipeline-qa/
+</span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>├── pipeline.json          # the fully resolved config that produced this run
+</span><span id="__span-26-3"><a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a>├── 01-write-qa/
+</span><span id="__span-26-4"><a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a>│   ├── annotate/          # prepared data + JSONL progress for this step
+</span><span id="__span-26-5"><a id="__codelineno-26-5" name="__codelineno-26-5" href="#__codelineno-26-5"></a>│   └── output/            # the step's finished dataset (its "done" marker)
+</span><span id="__span-26-6"><a id="__codelineno-26-6" name="__codelineno-26-6" href="#__codelineno-26-6"></a>├── 02-rate-qa/
+</span><span id="__span-26-7"><a id="__codelineno-26-7" name="__codelineno-26-7" href="#__codelineno-26-7"></a>│   ├── annotate/
+</span><span id="__span-26-8"><a id="__codelineno-26-8" name="__codelineno-26-8" href="#__codelineno-26-8"></a>│   └── output/
+</span><span id="__span-26-9"><a id="__codelineno-26-9" name="__codelineno-26-9" href="#__codelineno-26-9"></a>└── final/                 # the last step's dataset
+</span></code></pre></div>
+<h3 id="how-large-a-progress-file-is">How large a progress file is<a class="headerlink" href="#how-large-a-progress-file-is" title="Permanent link">&para;</a></h3>
+<p>A step appends every finished sample to a JSONL file under
+<code>&lt;NN&gt;-&lt;name&gt;/annotate/&lt;task_prefix&gt;progress_backup/</code>, and opens a new file
+every <code>max_samples_per_output_file</code> samples. A resume reads all of those files
+back to learn which ids are already done, so the value sets two costs against
+each other:</p>
+<ul>
+<li>Many small files: every resume opens and parses each one, which is slow on a
+  shared network filesystem, and some filesystems limit how many files a
+  directory may hold.</li>
+<li>Few large files: the file that is currently open is re-uploaded in full on
+  every Hub progress push, and one corrupt file costs more rows. (No finished
+  sample is lost at a crash either way, because every line is flushed as it is
+  written. A half-written last line is detected and dropped on the next run.)</li>
+</ul>
+<p>The default, <code>auto</code>, is one percent of the rows of the step's prepared
+dataset, with a floor of 1000 samples, so a step writes at most 100 progress
+files: 12 files of 1000 samples for 12,000 rows, 100 files of 5000 samples for
+500,000 rows. Set a number to fix the size instead, or <code>0</code> to write a single
+file of unlimited size:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="nt">steps</span><span class="p">:</span>
+</span><span id="__span-27-2"><a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">write-qa</span>
+</span><span id="__span-27-3"><a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a><span class="w">    </span><span class="nt">max_samples_per_output_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">20000</span><span class="w">   </span><span class="c1"># "auto" (the default), or 0 for one file</span>
+</span></code></pre></div>
+<p>The same key is a keyword argument of <code>annotate_dataset</code>, <code>run_annotation</code> and
+<code>generate_dataset</code> in the Python API, with the same default.</p>
+<h2 id="pushing-to-the-hub">Pushing to the Hub<a class="headerlink" href="#pushing-to-the-hub" title="Permanent link">&para;</a></h2>
+<p>The top-level <code>hub_id</code> is the final dataset only; it is pushed once, after
+the last step:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="nt">hub_id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">your-username/wiki-qa-rated</span>
+</span></code></pre></div>
+<p>Per-step Hub backup of prepared data and progress is separate, because it exists
+for crash recovery rather than publication. Set it on the step that needs it:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="nt">steps</span><span class="p">:</span>
+</span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">write-qa</span>
+</span><span id="__span-29-3"><a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a><span class="w">    </span><span class="nt">hub_id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">your-username/wiki-qa-scratch</span>
+</span><span id="__span-29-4"><a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a><span class="w">    </span><span class="nt">upload_every_n_samples</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10000</span>
+</span></code></pre></div>
+<h2 id="generating-data-from-scratch">Generating data from scratch<a class="headerlink" href="#generating-data-from-scratch" title="Permanent link">&para;</a></h2>
+<p>A step with <code>type: generate</code> builds its own dataset from a list of prompts
+instead of annotating an existing one, so the pipeline needs no <code>dataset</code> block.
+It must be the first step, since it replaces the data rather than adding to it.</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="nt">output_dir</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">outputs/synthetic</span>
+</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a><span class="nt">client</span><span class="p">:</span>
+</span><span id="__span-30-3"><a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a><span class="w">  </span><span class="nt">provider</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openai</span>
+</span><span id="__span-30-4"><a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a><span class="w">  </span><span class="nt">model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">gpt-4o-mini</span>
+</span><span id="__span-30-5"><a id="__codelineno-30-5" name="__codelineno-30-5" href="#__codelineno-30-5"></a>
+</span><span id="__span-30-6"><a id="__codelineno-30-6" name="__codelineno-30-6" href="#__codelineno-30-6"></a><span class="nt">steps</span><span class="p">:</span>
+</span><span id="__span-30-7"><a id="__codelineno-30-7" name="__codelineno-30-7" href="#__codelineno-30-7"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">make-questions</span>
+</span><span id="__span-30-8"><a id="__codelineno-30-8" name="__codelineno-30-8" href="#__codelineno-30-8"></a><span class="w">    </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">generate</span>
+</span><span id="__span-30-9"><a id="__codelineno-30-9" name="__codelineno-30-9" href="#__codelineno-30-9"></a><span class="w">    </span><span class="nt">prompts</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"Write</span><span class="nv"> </span><span class="s">a</span><span class="nv"> </span><span class="s">short</span><span class="nv"> </span><span class="s">geography</span><span class="nv"> </span><span class="s">quiz</span><span class="nv"> </span><span class="s">question</span><span class="nv"> </span><span class="s">with</span><span class="nv"> </span><span class="s">its</span><span class="nv"> </span><span class="s">answer."</span><span class="p p-Indicator">]</span>
+</span><span id="__span-30-10"><a id="__codelineno-30-10" name="__codelineno-30-10" href="#__codelineno-30-10"></a><span class="w">    </span><span class="nt">num_samples</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">200</span>
+</span><span id="__span-30-11"><a id="__codelineno-30-11" name="__codelineno-30-11" href="#__codelineno-30-11"></a><span class="w">    </span><span class="nt">output_schema_file</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">schemas/qa.json</span>
+</span></code></pre></div>
+<p><code>prompts</code> is a list, or a path to a file. Two file formats are accepted, chosen
+by the suffix:</p>
+<ul>
+<li><code>.json</code>: a JSON list of strings. An object, a list with a non-string entry or
+  an empty list is rejected when the step starts, before anything is sent to
+  the model, with the file named.</li>
+</ul>
+<div class="language-json highlight"><span class="filename">prompts/questions.json</span><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a><span class="p">[</span><span class="s2">"Write a short geography quiz question."</span><span class="p">,</span><span class="w"> </span><span class="s2">"Write a short history question."</span><span class="p">]</span>
+</span></code></pre></div>
+<ul>
+<li>Anything else: one prompt per line, blank lines skipped. A prompt that spans
+  several lines needs the <code>.json</code> form.</li>
+</ul>
+<div class="language-text highlight"><span class="filename">prompts/questions.txt</span><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>Write a short geography quiz question.
+</span><span id="__span-32-2"><a id="__codelineno-32-2" name="__codelineno-32-2" href="#__codelineno-32-2"></a>Write a short history question.
+</span></code></pre></div>
+<p>A single prompt with <code>num_samples</code> is repeated that many times; a list is
+truncated to <code>num_samples</code> when both are given. To wrap every prompt in a shared
+prefix, add a template containing the <code>{prompt}</code> placeholder:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a><span class="w">    </span><span class="nt">prompt</span><span class="p">:</span><span class="w"> </span><span class="s">"Answer</span><span class="nv"> </span><span class="s">in</span><span class="nv"> </span><span class="s">Dutch.\n\n{prompt}"</span>
+</span></code></pre></div>
+<h2 id="command-line">Command line<a class="headerlink" href="#command-line" title="Permanent link">&para;</a></h2>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a>llm-annotate [-h] [--output-dir OUTPUT_DIR] [--hub-id HUB_ID]
+</span><span id="__span-34-2"><a id="__codelineno-34-2" name="__codelineno-34-2" href="#__codelineno-34-2"></a>             [--log-level LOG_LEVEL] [--overwrite]
+</span><span id="__span-34-3"><a id="__codelineno-34-3" name="__codelineno-34-3" href="#__codelineno-34-3"></a>             [--max-num-samples MAX_NUM_SAMPLES] [--shuffle-seed SHUFFLE_SEED]
+</span><span id="__span-34-4"><a id="__codelineno-34-4" name="__codelineno-34-4" href="#__codelineno-34-4"></a>             [--set KEY=VALUE] [--steps STEPS]
+</span><span id="__span-34-5"><a id="__codelineno-34-5" name="__codelineno-34-5" href="#__codelineno-34-5"></a>             [--retry-errors [ERROR_TYPE ...]] [--hosts-file HOSTS_FILE]
+</span><span id="__span-34-6"><a id="__codelineno-34-6" name="__codelineno-34-6" href="#__codelineno-34-6"></a>             [--url-glob URL_GLOB] [--serve-args STEP] [--debug]
+</span><span id="__span-34-7"><a id="__codelineno-34-7" name="__codelineno-34-7" href="#__codelineno-34-7"></a>             [--describe-steps] [--format {json,env}]
+</span><span id="__span-34-8"><a id="__codelineno-34-8" name="__codelineno-34-8" href="#__codelineno-34-8"></a>             config
+</span></code></pre></div>
+<p><code>--output-dir</code>, <code>--hub-id</code>, <code>--log-level</code> and <code>--overwrite</code> override the matching
+config keys, which is handy for pointing one config at a scratch directory or
+resuming with a different log level without editing the file. <code>--steps</code>,
+<code>--hosts-file</code>, <code>--url-glob</code>, <code>--serve-args</code> and <code>--describe-steps</code> are
+described under <a href="#running-one-step-at-a-time">Running one step at a time</a>.</p>
+<p>A config that does not load is reported as one line per problem, on stderr,
+and the command exits with status 2:</p>
+<div class="language-console highlight"><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a><span class="gp">$ </span>llm-annotate<span class="w"> </span>cfg.yaml
+</span><span id="__span-35-2"><a id="__codelineno-35-2" name="__codelineno-35-2" href="#__codelineno-35-2"></a><span class="go">error: client: Unknown 'init' keys for provider 'openai': ['on_eror']. OpenAIClient takes ['api_key', 'base_url', 'batch_poll_interval', 'max_retries', 'max_workers', 'on_error', 'timeout', 'use_batch_api'].</span>
+</span></code></pre></div>
+<p>The location before the message is the key that the problem belongs to, or the
+config file itself when the problem names no key. <code>--debug</code> prints the full
+traceback instead, which is what a bug report needs. Only config loading is
+reported this way: an error raised while the pipeline runs keeps its traceback.</p>
+<p><code>--retry-errors</code> without a value annotates every errored row of the selected
+steps again. With one or more <code>ERROR_TYPE</code> values only the rows with that
+<code>error_type</code> are redone, as in
+<code>llm-annotate cfg.yaml --retry-errors ConnectError APITimeoutError</code>. A row that
+is redone in one step is also redone in every selected step after it, because
+those steps read what it produces. Finished steps that are affected are
+resumed: every other row keeps its result. See
+<a href="../python-api/#errors-and-retries">Errors and retries</a> for when a row counts as
+errored.</p>
+<h3 id="overriding-config-keys">Overriding config keys<a class="headerlink" href="#overriding-config-keys" title="Permanent link">&para;</a></h3>
+<p><code>--max-num-samples</code> and <code>--shuffle-seed</code> override <code>dataset.max_num_samples</code> and
+<code>dataset.shuffle_seed</code>, so a pilot, the full run and a later extension share one
+config file and differ only in the command that starts them:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a>llm-annotate<span class="w"> </span>cfg.yaml<span class="w"> </span>--max-num-samples<span class="w"> </span><span class="m">2000</span><span class="w">     </span><span class="c1"># pilot</span>
+</span><span id="__span-36-2"><a id="__codelineno-36-2" name="__codelineno-36-2" href="#__codelineno-36-2"></a>llm-annotate<span class="w"> </span>cfg.yaml<span class="w"> </span>--max-num-samples<span class="w"> </span><span class="m">50000</span><span class="w">    </span><span class="c1"># same output_dir, grows it</span>
+</span><span id="__span-36-3"><a id="__codelineno-36-3" name="__codelineno-36-3" href="#__codelineno-36-3"></a>llm-annotate<span class="w"> </span>cfg.yaml<span class="w"> </span>--max-num-samples<span class="w"> </span><span class="s2">"</span><span class="nv">$N</span><span class="s2">"</span><span class="w">     </span><span class="c1"># from a job script</span>
+</span></code></pre></div>
+<p><code>--set KEY=VALUE</code> reaches every other key. A dotted key descends into a nested
+block, an integer segment indexes a list, and the value is read as YAML, so it
+gets the type it looks like:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-37-1"><a id="__codelineno-37-1" name="__codelineno-37-1" href="#__codelineno-37-1"></a>llm-annotate<span class="w"> </span>cfg.yaml<span class="w"> </span>--set<span class="w"> </span>client.options.temperature<span class="o">=</span><span class="m">0</span>.2
+</span><span id="__span-37-2"><a id="__codelineno-37-2" name="__codelineno-37-2" href="#__codelineno-37-2"></a>llm-annotate<span class="w"> </span>cfg.yaml<span class="w"> </span>--set<span class="w"> </span>steps.0.client.batch_size<span class="o">=</span><span class="m">8</span><span class="w"> </span>--set<span class="w"> </span><span class="nv">idx_column</span><span class="o">=</span>row_id
+</span><span id="__span-37-3"><a id="__codelineno-37-3" name="__codelineno-37-3" href="#__codelineno-37-3"></a>llm-annotate<span class="w"> </span>cfg.yaml<span class="w"> </span>--set<span class="w"> </span><span class="s1">'steps.1.drop_columns=[rate_response, rate_error]'</span>
+</span></code></pre></div>
+<p>A key that both a named flag and <code>--set</code> would set is an error, so there is no
+question of which one wins. The overrides are applied before validation, which
+means a typo is rejected the same way a typo in the file is, and the resolved
+values are written to <code>&lt;output_dir&gt;/pipeline.json</code>, so the run records what it
+actually used.</p>
+<p>The same mapping is available from Python, keyed the same way:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a><span class="n">config</span> <span class="o">=</span> <span class="n">load_pipeline_config</span><span class="p">(</span><span class="s2">"cfg.yaml"</span><span class="p">,</span> <span class="n">overrides</span><span class="o">=</span><span class="p">{</span><span class="s2">"dataset.max_num_samples"</span><span class="p">:</span> <span class="mi">50_000</span><span class="p">})</span>
+</span></code></pre></div>
+<h2 id="full-reference">Full reference<a class="headerlink" href="#full-reference" title="Permanent link">&para;</a></h2>
+<p>Every key, with its type and default, is documented on the
+<a href="../api/config/">configuration API page</a>; the executor is on the
+<a href="../api/pipeline/">pipeline API page</a>.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["content.code.copy", "content.code.annotate", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.indexes", "navigation.top", "search.highlight", "search.suggest", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,2484 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A Python library to use LLMs to annotate data.">
+      
+      
+      
+        <link rel="canonical" href="https://BramVanroy.github.io/llm-annotator/latest/troubleshooting/">
+      
+      
+        <link rel="prev" href="../growing-a-run/">
+      
+      
+        <link rel="next" href="../slurm/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Troubleshooting - LLM Annotator</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#troubleshooting" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+          <aside class="md-banner md-banner--warning">
+            <div class="md-banner__inner md-grid md-typeset">
+              
+  <span id="version-warning">
+    You are not viewing the documentation of the latest released version.
+    <a href="../.."><strong>Go to the latest release docs.</strong></a>
+  </span>
+
+            </div>
+            <script>var el=document.querySelector("[data-md-component=outdated]"),base=new URL(".."),outdated=__md_get("__outdated",sessionStorage,base);!0===outdated&&el&&(el.hidden=!1)</script>
+          </aside>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="LLM Annotator" class="md-header__button md-logo" aria-label="LLM Annotator" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            LLM Annotator
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Troubleshooting
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/BramVanroy/llm-annotator" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    BramVanroy/llm-annotator
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../choosing-a-provider/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Choosing a provider
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../pipeline/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Config pipeline
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../python-api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Python API guide
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../growing-a-run/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Growing a run
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="./" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Troubleshooting
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../slurm/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  SLURM
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../provider-info/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Provider setup
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../migration/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Migrating from 0.16
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../api/annotator/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  User API
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../api/clients/base/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Internals
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="LLM Annotator" class="md-nav__button md-logo" aria-label="LLM Annotator" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    LLM Annotator
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/BramVanroy/llm-annotator" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    BramVanroy/llm-annotator
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../choosing-a-provider/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Choosing a provider
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Config pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../python-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../growing-a-run/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Growing a run
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#how-an-error-is-reported" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How an error is reported
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#authentication-and-access" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Authentication and access
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Authentication and access">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#403-or-gated-repo-from-the-hub" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        403 or "gated repo" from the Hub
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#no-api-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        No API key
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#errors-when-the-config-loads" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors when the config loads
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Errors when the config loads">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The file
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#command-line-overrides" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Command-line overrides
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-dataset-block" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The dataset block
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#provider-and-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Provider and model
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#where-a-setting-goes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where a setting goes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pools-of-vllm-servers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pools of vLLM servers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Steps
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prompt-and-schema-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prompt and schema files
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-selection-and-the-pool-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step selection and the pool flags
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#errors-when-a-run-starts-or-resumes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors when a run starts or resumes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Errors when a run starts or resumes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#an-edited-prompt-with-finished-rows" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An edited prompt with finished rows
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-step-that-reads-an-out-of-date-step" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A step that reads an out-of-date step
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#schema-properties-that-shadow-a-column" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Schema properties that shadow a column
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-hub-backup-and-an-empty-progress-directory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A Hub backup and an empty progress directory
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-finished-step-or-record-from-an-older-release" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A finished step or record from an older release
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#errors-while-a-run-goes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors while a run goes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Errors while a run goes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#runtimeerror-cant-start-new-thread" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RuntimeError: can't start new thread
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-servers-never-come-up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The servers never come up
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-run-stops-on-failed-batches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The run stops on failed batches
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#n-is-n-but-one-response-per-sample-is-read" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        'n' is &lt;n&gt;, but one response per sample is read
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reading-the-error-columns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading the error columns
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#redoing-failed-rows" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Redoing failed rows
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../slurm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SLURM
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../provider-info/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Provider setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../migration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migrating from 0.16
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User API
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User API
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/annotator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Annotator
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Config
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/hub/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hub restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_10_5" id="__nav_10_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_10_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Clients
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/clients/claude/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Claude
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/clients/openai/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OpenAI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/clients/vllm_online_client/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vLLM (online)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/clients/vllm_offline_client/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vLLM (offline)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/clients/exceptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Exceptions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Internals
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Internals
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/clients/base/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client base
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/pool/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pool
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/utils/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Utils
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/logging_utils/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Logging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#how-an-error-is-reported" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How an error is reported
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#authentication-and-access" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Authentication and access
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Authentication and access">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#403-or-gated-repo-from-the-hub" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        403 or "gated repo" from the Hub
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#no-api-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        No API key
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#errors-when-the-config-loads" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors when the config loads
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Errors when the config loads">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The file
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#command-line-overrides" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Command-line overrides
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-dataset-block" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The dataset block
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#provider-and-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Provider and model
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#where-a-setting-goes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where a setting goes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pools-of-vllm-servers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pools of vLLM servers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Steps
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prompt-and-schema-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prompt and schema files
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-selection-and-the-pool-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step selection and the pool flags
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#errors-when-a-run-starts-or-resumes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors when a run starts or resumes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Errors when a run starts or resumes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#an-edited-prompt-with-finished-rows" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An edited prompt with finished rows
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-step-that-reads-an-out-of-date-step" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A step that reads an out-of-date step
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#schema-properties-that-shadow-a-column" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Schema properties that shadow a column
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-hub-backup-and-an-empty-progress-directory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A Hub backup and an empty progress directory
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-finished-step-or-record-from-an-older-release" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A finished step or record from an older release
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#errors-while-a-run-goes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors while a run goes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Errors while a run goes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#runtimeerror-cant-start-new-thread" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RuntimeError: can't start new thread
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-servers-never-come-up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The servers never come up
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-run-stops-on-failed-batches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The run stops on failed batches
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#n-is-n-but-one-response-per-sample-is-read" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        'n' is &lt;n&gt;, but one response per sample is read
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reading-the-error-columns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading the error columns
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#redoing-failed-rows" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Redoing failed rows
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h1>
+<p>Every message below is quoted from the source, with <code>&lt;...&gt;</code> where the library
+fills in a value.</p>
+<h2 id="how-an-error-is-reported">How an error is reported<a class="headerlink" href="#how-an-error-is-reported" title="Permanent link">&para;</a></h2>
+<p>A config that does not load is reported as one line per problem on stderr, and
+<code>llm-annotate</code> exits with status 2:</p>
+<div class="language-console highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="gp">$ </span>llm-annotate<span class="w"> </span>cfg.yaml
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="go">error: client: Unknown 'init' keys for provider 'openai': ['on_eror']. OpenAIClient takes ['api_key', 'base_url', 'batch_poll_interval', 'max_retries', 'max_workers', 'on_error', 'timeout', 'use_batch_api'].</span>
+</span></code></pre></div>
+<p>The part before the message is the key the problem belongs to, or the config
+file itself when the problem names no key. <code>--debug</code> prints the full traceback
+instead, which is what a bug report needs. Only config loading is reported this
+way; an error raised while the pipeline runs keeps its traceback.</p>
+<h2 id="authentication-and-access">Authentication and access<a class="headerlink" href="#authentication-and-access" title="Permanent link">&para;</a></h2>
+<h3 id="403-or-gated-repo-from-the-hub">403 or "gated repo" from the Hub<a class="headerlink" href="#403-or-gated-repo-from-the-hub" title="Permanent link">&para;</a></h3>
+<p>Symptom: the run stops while it loads the model or the dataset, with a 403 from
+<code>huggingface.co</code> or a message about a gated repository.</p>
+<p>Cause: the repository needs an accepted licence and a token. <code>Qwen/Qwen3-8B</code>
+and <code>HuggingFaceTB/SmolLM2-135M-Instruct</code> are ungated; <code>meta-llama/*</code> and many
+other repositories are not.</p>
+<p>Fix: accept the licence on the model page while logged in, then give the machine
+a token.</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>hf<span class="w"> </span>auth<span class="w"> </span>login<span class="w">          </span><span class="c1"># or: export HF_TOKEN="..."</span>
+</span></code></pre></div>
+<p>On a cluster the token has to reach the compute node. <code>slurm/submit_pipeline.sh</code>
+submits with <code>--export=ALL</code>, so <code>HF_TOKEN</code> in the submitting shell is carried
+along; <code>hf auth login</code> writes it to <code>HF_HOME</code>, which every node has to be able
+to read.</p>
+<h3 id="no-api-key">No API key<a class="headerlink" href="#no-api-key" title="Permanent link">&para;</a></h3>
+<p>Symptom: an <code>openai</code> or <code>claude</code> step fails on the first request with an
+authentication error from the provider's SDK.</p>
+<p>Cause: the client reads <code>OPENAI_API_KEY</code> or <code>ANTHROPIC_API_KEY</code> from the
+environment unless a config gives <code>init.api_key</code>.</p>
+<p>Fix:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OPENAI_API_KEY</span><span class="o">=</span><span class="s2">"..."</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">ANTHROPIC_API_KEY</span><span class="o">=</span><span class="s2">"..."</span>
+</span></code></pre></div>
+<p>See <a href="../provider-info/#environment-variables">Provider setup</a>.</p>
+<h2 id="errors-when-the-config-loads">Errors when the config loads<a class="headerlink" href="#errors-when-the-config-loads" title="Permanent link">&para;</a></h2>
+<h3 id="the-file">The file<a class="headerlink" href="#the-file" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>Config file '&lt;path&gt;' does not exist.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>Config file '&lt;path&gt;' must contain a mapping at the top level, got &lt;type&gt;.
+</span></code></pre></div>
+<p>A config is a mapping with <code>output_dir</code> and <code>steps</code> at the top level. A file
+that starts with a list is usually a <code>steps</code> block that lost its key.</p>
+<h3 id="command-line-overrides">Command-line overrides<a class="headerlink" href="#command-line-overrides" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>--set expects 'key=value', got '&lt;text&gt;'. Use a dotted key to reach a nested value, as in --set dataset.max_num_samples=2000.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>Override '&lt;key&gt;': '&lt;segment&gt;' is not a list index. A list in a config is addressed by position, as in 'steps.0.name'.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>Override '&lt;key&gt;': position &lt;n&gt; is out of range for a list of &lt;n&gt;.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>Override '&lt;key&gt;': '&lt;segment&gt;' cannot be set inside a &lt;type&gt;.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>'&lt;key&gt;' is set twice on the command line. Give it once, either through its own flag or through --set.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>Config '&lt;path&gt;' has no 'dataset' block, so --max-num-samples and --shuffle-seed have nothing to apply to. A pipeline whose first step generates its own data sizes it with 'num_samples' on that step: --set steps.0.num_samples=N.
+</span></code></pre></div>
+<p>See <a href="../pipeline/#overriding-config-keys">Overriding config keys</a>.</p>
+<h3 id="the-dataset-block">The dataset block<a class="headerlink" href="#the-dataset-block" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>Provide exactly one of 'name' or 'path' in the dataset block.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>'data_dir' and 'data_files' only apply to 'name', not 'path'.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>The pipeline needs a 'dataset' block because its first step ('&lt;name&gt;') annotates an existing dataset.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>The first step generates its own data, so the 'dataset' block would be ignored. Remove one of the two.
+</span></code></pre></div>
+<p><code>name</code> is a Hub id or a packaged builder (<code>json</code>, <code>csv</code>, <code>parquet</code>, ...);
+<code>path</code> is a directory written with <code>save_to_disk</code>. A <code>generate</code> step brings its
+own prompts and must be the first step, so a pipeline has either that or a
+<code>dataset</code> block.</p>
+<h3 id="provider-and-model">Provider and model<a class="headerlink" href="#provider-and-model" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>Unknown provider '&lt;name&gt;'. Choose one of &lt;providers&gt;.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>Provider '&lt;name&gt;' needs an explicit 'model'.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>Provider '&lt;name&gt;' needs its optional dependency. Install it with `uv sync --extra &lt;extra&gt;`.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>Step '&lt;name&gt;' has no client to run on. Add a top-level 'client' block to share one across steps, or a 'client' block to this step.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>Step '&lt;name&gt;': invalid 'client' block. &lt;problem&gt;
+</span></code></pre></div>
+<p>The four spellings are <code>vllm_offline</code>, <code>vllm_online</code>, <code>openai</code> and <code>claude</code>.
+Outside a checkout, install the extra with <code>uv add "llm-annotator[vllm]"</code> or
+<code>pip install "llm-annotator[vllm]"</code>. A <code>vllm_online</code> step may leave <code>model</code> out
+only when a running server can be asked what it serves.</p>
+<h3 id="where-a-setting-goes">Where a setting goes<a class="headerlink" href="#where-a-setting-goes" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>Move &lt;keys&gt; from 'init' to 'engine'. Engine settings live there so that both vLLM providers spell them the same way.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>'engine' configures a vLLM engine, so provider '&lt;name&gt;' has no use for it. Hosted providers are configured with 'init' and 'options'.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>Unknown 'init' keys for provider '&lt;name&gt;': &lt;keys&gt;. &lt;ClientClass&gt; takes &lt;names&gt;.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>Unknown 'options' for provider '&lt;name&gt;': &lt;keys&gt;. Valid options are &lt;names&gt;.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>'init' sets 'model', which the client block names itself. Write it as 'model' next to 'provider'.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>'init' sets 'base_url', but each server of a pool gets its own. The pool's servers are named by 'base_urls', 'hosts_file' or 'url_glob'.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>'init' sets 'batch_size'. A run has one batch size, the client block's own 'batch_size', which decides how many samples go to the provider per call.
+</span></code></pre></div>
+<p>Each message lists the names that are accepted where it fires.
+<a href="../pipeline/#where-a-setting-goes">Where a setting goes</a> is the table of which
+block a key belongs in.</p>
+<h3 id="pools-of-vllm-servers">Pools of vLLM servers<a class="headerlink" href="#pools-of-vllm-servers" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>Provide at most one of 'base_urls', 'hosts_file' or 'url_glob', got &lt;keys&gt;.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>'&lt;key&gt;' describes a pool of vLLM servers and needs provider 'vllm_online', not '&lt;name&gt;'.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a>&lt;keys&gt; size a pool of vLLM servers, so provider '&lt;name&gt;' has no use for them: it sends one request at a time. Use 'batch_size' to change how much work that request carries.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a>'pool.min_servers' cannot exceed 'pool.servers'.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>'queue_size' is &lt;n&gt;, below the minimum of &lt;n&gt; for this step: &lt;n&gt; server(s) times &lt;n&gt; concurrent batch(es) each ('max_concurrent_batches_per_client'). A queue smaller than that leaves servers idle. Set 'queue_size' to at least &lt;n&gt;, or remove it to keep &lt;n&gt; batches queued per batch slot (&lt;n&gt;).
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a>hosts_file '&lt;path&gt;' does not exist.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a>url_glob '&lt;pattern&gt;' matched no files under &lt;directory&gt;.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a>No vLLM server URLs found for the client pool.
+</span></code></pre></div>
+<p>An empty <code>url_glob</code> on a cluster means no server published its <code>.url</code> file. The
+<code>vllm-&lt;step&gt;_*.err</code> logs say why. See
+<a href="../pipeline/#many-vllm-servers">Many vLLM servers</a>.</p>
+<h3 id="steps">Steps<a class="headerlink" href="#steps" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a>Step name &lt;name&gt; may only hold letters, digits, '_', '-' and '.', and must start with a letter or a digit.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a>Step '&lt;name&gt;': provide either '&lt;inline key&gt;' or '&lt;file key&gt;', not both.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-37-1"><a id="__codelineno-37-1" name="__codelineno-37-1" href="#__codelineno-37-1"></a>Step '&lt;name&gt;': an 'annotate' step needs 'prompt' or 'prompt_file'.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a>Step '&lt;name&gt;': 'prompts' and 'num_samples' only apply to a 'generate' step.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a>Step '&lt;name&gt;': a 'generate' step needs 'prompts'.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1" href="#__codelineno-40-1"></a>Step '&lt;name&gt;': 'filter_invalid' relies on schema validation, so it needs 'output_schema' or 'output_schema_file'.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1" href="#__codelineno-41-1"></a>Step '&lt;name&gt;': the template of a 'generate' step must contain the '{prompt}' placeholder, which is filled in with each entry of 'prompts'.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-42-1"><a id="__codelineno-42-1" name="__codelineno-42-1" href="#__codelineno-42-1"></a>Step names must be unique, found duplicates: &lt;names&gt;.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-43-1"><a id="__codelineno-43-1" name="__codelineno-43-1" href="#__codelineno-43-1"></a>Step task prefixes must be unique, found duplicates: &lt;prefixes&gt;.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-44-1"><a id="__codelineno-44-1" name="__codelineno-44-1" href="#__codelineno-44-1"></a>Step '&lt;name&gt;' renames or drops '&lt;column&gt;', the 'idx_column'. It identifies a row in every step and is removed from the final dataset automatically.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-45-1"><a id="__codelineno-45-1" name="__codelineno-45-1" href="#__codelineno-45-1"></a>Step '&lt;name&gt;' is a 'generate' step, which replaces the dataset instead of annotating it, so it can only be the first step.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-46-1"><a id="__codelineno-46-1" name="__codelineno-46-1" href="#__codelineno-46-1"></a>Set the schema as the step's 'output_schema' (or 'output_schema_file'), not under the client 'options'.
+</span></code></pre></div>
+<h3 id="prompt-and-schema-files">Prompt and schema files<a class="headerlink" href="#prompt-and-schema-files" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-47-1"><a id="__codelineno-47-1" name="__codelineno-47-1" href="#__codelineno-47-1"></a>File '&lt;path&gt;' referenced from the config does not exist (resolved to '&lt;path&gt;').
+</span></code></pre></div>
+<p>Every path in a config resolves against the config file's directory, never the
+current working directory, which the resolved path in the message shows.</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-48-1"><a id="__codelineno-48-1" name="__codelineno-48-1" href="#__codelineno-48-1"></a>Schema file '&lt;path&gt;' must contain a JSON object, got &lt;type&gt;.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-49-1"><a id="__codelineno-49-1" name="__codelineno-49-1" href="#__codelineno-49-1"></a>Prompts file '&lt;path&gt;' is not valid JSON: &lt;problem&gt;. &lt;expected&gt;
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-50-1"><a id="__codelineno-50-1" name="__codelineno-50-1" href="#__codelineno-50-1"></a>Prompts file '&lt;path&gt;' holds a &lt;type&gt;. &lt;expected&gt;
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-51-1"><a id="__codelineno-51-1" name="__codelineno-51-1" href="#__codelineno-51-1"></a>Prompts file '&lt;path&gt;' holds an empty list.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-52-1"><a id="__codelineno-52-1" name="__codelineno-52-1" href="#__codelineno-52-1"></a>Prompts file '&lt;path&gt;' holds entries that are not strings, at position(s) &lt;positions&gt;. &lt;expected&gt;
+</span></code></pre></div>
+<p>Where <code>&lt;expected&gt;</code> is:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-53-1"><a id="__codelineno-53-1" name="__codelineno-53-1" href="#__codelineno-53-1"></a>A '.json' prompts file holds a list of strings, one per prompt.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-54-1"><a id="__codelineno-54-1" name="__codelineno-54-1" href="#__codelineno-54-1"></a>Step '&lt;name&gt;': 'prompts' resolved to an empty list.
+</span></code></pre></div>
+<p>A prompts file whose suffix is not <code>.json</code> is read as one prompt per line, and
+blank lines are skipped.</p>
+<h3 id="step-selection-and-the-pool-flags">Step selection and the pool flags<a class="headerlink" href="#step-selection-and-the-pool-flags" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-55-1"><a id="__codelineno-55-1" name="__codelineno-55-1" href="#__codelineno-55-1"></a>Unknown step(s) &lt;names&gt;. This pipeline defines &lt;names&gt;.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-56-1"><a id="__codelineno-56-1" name="__codelineno-56-1" href="#__codelineno-56-1"></a>Steps must be selected contiguously; &lt;names&gt; would be skipped in the middle, and later steps read the columns they produce.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-57-1"><a id="__codelineno-57-1" name="__codelineno-57-1" href="#__codelineno-57-1"></a>Cannot override the client of unknown step(s) &lt;names&gt;. This config defines &lt;names&gt;.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-58-1"><a id="__codelineno-58-1" name="__codelineno-58-1" href="#__codelineno-58-1"></a>--hosts-file and --url-glob both name the pool's servers; give one of them.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-59-1"><a id="__codelineno-59-1" name="__codelineno-59-1" href="#__codelineno-59-1"></a>&lt;flag&gt; points at vLLM servers, but none of the steps being run (&lt;steps&gt;) uses provider 'vllm_online'.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-60-1"><a id="__codelineno-60-1" name="__codelineno-60-1" href="#__codelineno-60-1"></a>Steps &lt;names&gt; want different models &lt;models&gt;, but one set of vLLM servers serves a single model. Run them as separate --steps invocations, each against its own servers.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-61-1"><a id="__codelineno-61-1" name="__codelineno-61-1" href="#__codelineno-61-1"></a>Config defines no step '&lt;name&gt;'. It has &lt;names&gt;.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-62-1"><a id="__codelineno-62-1" name="__codelineno-62-1" href="#__codelineno-62-1"></a>Step '&lt;name&gt;' &lt;reason&gt;, so there is no vLLM server to start for it.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-63-1"><a id="__codelineno-63-1" name="__codelineno-63-1" href="#__codelineno-63-1"></a>Step '&lt;name&gt;' names no 'model', so there is nothing to serve. A client can ask a running server what it serves, but nothing can ask a server that does not exist yet.
+</span></code></pre></div>
+<h2 id="errors-when-a-run-starts-or-resumes">Errors when a run starts or resumes<a class="headerlink" href="#errors-when-a-run-starts-or-resumes" title="Permanent link">&para;</a></h2>
+<h3 id="an-edited-prompt-with-finished-rows">An edited prompt with finished rows<a class="headerlink" href="#an-edited-prompt-with-finished-rows" title="Permanent link">&para;</a></h3>
+<p>Symptom: a re-run stops with a <code>ValueError</code> before anything is annotated or
+deleted.</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-64-1"><a id="__codelineno-64-1" name="__codelineno-64-1" href="#__codelineno-64-1"></a>The finished rows in '&lt;progress dir&gt;' cannot be reused: &lt;what changed&gt;. &lt;remedy&gt; A run can only grow through a higher 'max_num_samples' with the same settings, or through rows appended to a source that is not shuffled.
+</span></code></pre></div>
+<p>Cause: the prompt template, the system message, <code>sort_by_length</code>, <code>idx_column</code>,
+<code>reuse_idx_column</code>, <code>shuffle_seed</code>, <code>preprocess_fn</code>, the output schema or the
+source dataset differs from the record next to the prepared data, and rows are
+already finished. Keeping them would put answers to two questions in one
+output.</p>
+<p>Fix: one of the three the remedy names. From Python it reads:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-65-1"><a id="__codelineno-65-1" name="__codelineno-65-1" href="#__codelineno-65-1"></a>Restore the old value(s), use a new 'output_dir', or overwrite the run ('overwrite=True') to discard the finished rows and annotate every sample again.
+</span></code></pre></div>
+<p>A pipeline names the command instead, which covers the edited step and every
+step that reads it:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-66-1"><a id="__codelineno-66-1" name="__codelineno-66-1" href="#__codelineno-66-1"></a>Restore the old value(s), use a new 'output_dir', or re-run with '--steps &lt;names&gt; --overwrite' to annotate that step and the ones that read it again from scratch.
+</span></code></pre></div>
+<p>A higher <code>max_num_samples</code> with everything else unchanged is not a conflict: it
+resumes and annotates only the new rows. See
+<a href="../growing-a-run/">Growing a run</a>.</p>
+<h3 id="a-step-that-reads-an-out-of-date-step">A step that reads an out-of-date step<a class="headerlink" href="#a-step-that-reads-an-out-of-date-step" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-67-1"><a id="__codelineno-67-1" name="__codelineno-67-1" href="#__codelineno-67-1"></a>Step '&lt;name&gt;' has &lt;reason&gt;, so there is no input for '&lt;name&gt;'. Run it first, or select it too.
+</span></code></pre></div>
+<p>Cause: <code>--steps</code> selected a step whose input step has not run, or finished with
+other settings than the config now asks for.</p>
+<p>Fix: add that step to the selection, or restore its old settings.</p>
+<h3 id="schema-properties-that-shadow-a-column">Schema properties that shadow a column<a class="headerlink" href="#schema-properties-that-shadow-a-column" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-68-1"><a id="__codelineno-68-1" name="__codelineno-68-1" href="#__codelineno-68-1"></a>The output schema property names &lt;names&gt; are also the names of columns that the annotator writes for every sample. Pick other names in the schema, or give the run another 'task_prefix' or 'idx_column'.
+</span></code></pre></div>
+<p>Cause: a top-level property of <code>output_schema</code> is called <code>idx</code> or carries the
+name of a bookkeeping column of that step (<code>response</code>, <code>finish_reason</code>,
+<code>num_tokens</code>, <code>error</code>, <code>error_type</code>, <code>reasoning</code>, <code>valid_fields</code>, <code>valid</code>,
+<code>messages</code>, each behind the task prefix). The check runs before the first
+request.</p>
+<p>Fix: rename the property, or give the step another <code>task_prefix</code> or
+<code>idx_column</code>.</p>
+<h3 id="a-hub-backup-and-an-empty-progress-directory">A Hub backup and an empty progress directory<a class="headerlink" href="#a-hub-backup-and-an-empty-progress-directory" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-69-1"><a id="__codelineno-69-1" name="__codelineno-69-1" href="#__codelineno-69-1"></a>'&lt;hub id&gt;' has a progress backup on the branch '&lt;branch&gt;', while '&lt;output dir&gt;' holds no progress files. This run would annotate every row again and its first upload would replace the backup with fewer rows. Restore the backup first:
+</span></code></pre></div>
+<p>Cause: the run has a <code>hub_id</code> whose <code>&lt;task_prefix&gt;progress_backup</code> branch
+exists, and the local progress directory is empty. A purged scratch directory
+and a move to another cluster both look like this.</p>
+<p>Fix: run the restore command that the message prints, then start the run again.</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-70-1"><a id="__codelineno-70-1" name="__codelineno-70-1" href="#__codelineno-70-1"></a>llm-annotate-restore<span class="w"> </span>--hub-id<span class="w"> </span>user/my-dataset<span class="w"> </span>--output-dir<span class="w"> </span>outputs/qa/02-judge/annotate<span class="w"> </span>--task-prefix<span class="w"> </span>judge_
+</span></code></pre></div>
+<p>Without <code>--force</code> the restore refuses a progress directory that is not empty:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-71-1"><a id="__codelineno-71-1" name="__codelineno-71-1" href="#__codelineno-71-1"></a>'&lt;path&gt;' already holds &lt;n&gt; progress file(s). Pass force=True ('--force' on the command line) to merge the backup into them, or restore into an output directory that has none.
+</span></code></pre></div>
+<p><code>--force</code> merges the backup into a progress directory that already holds files;
+rows are merged per sample id and a local row wins. Pass <code>overwrite=True</code>
+(<code>--overwrite</code>) instead to delete the branch and annotate every row again. See
+<a href="../pipeline/#resuming-on-another-machine">Resuming on another machine</a>.</p>
+<p>The restore itself fails when the branch is gone, which is what a finished run
+leaves behind:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-72-1"><a id="__codelineno-72-1" name="__codelineno-72-1" href="#__codelineno-72-1"></a>The dataset '&lt;hub id&gt;' has no branch '&lt;branch&gt;', so there is no progress backup to restore. That branch is deleted once a run finished, and the final dataset is then on the 'main' branch of the same repository.
+</span></code></pre></div>
+<h3 id="a-finished-step-or-record-from-an-older-release">A finished step or record from an older release<a class="headerlink" href="#a-finished-step-or-record-from-an-older-release" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-73-1"><a id="__codelineno-73-1" name="__codelineno-73-1" href="#__codelineno-73-1"></a>Step '&lt;name&gt;' finished into '&lt;path&gt;', but there is no record of the settings it was annotated with, so this run cannot tell whether its result still matches the config. Remove '&lt;path&gt;' to run the step again: the rows in its progress files are not sent to the model a second time.
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-74-1"><a id="__codelineno-74-1" name="__codelineno-74-1" href="#__codelineno-74-1"></a>The record in '&lt;path&gt;' does not describe the settings that its run was annotated with, so a resume cannot tell whether the prompt still matches. Finish the run with the release that wrote it, annotate it into a new 'output_dir', or overwrite it.
+</span></code></pre></div>
+<p>Both come from an output directory that 0.16 wrote.
+<a href="../migration/#output-directories-and-records">Migrating from 0.16</a> lists the
+ways forward.</p>
+<h2 id="errors-while-a-run-goes">Errors while a run goes<a class="headerlink" href="#errors-while-a-run-goes" title="Permanent link">&para;</a></h2>
+<h3 id="runtimeerror-cant-start-new-thread"><code>RuntimeError: can't start new thread</code><a class="headerlink" href="#runtimeerror-cant-start-new-thread" title="Permanent link">&para;</a></h3>
+<p>Symptom: a pool client dies with that message, usually soon after the first
+batch goes out.</p>
+<p>Cause: a <code>vllm_online</code> batch sends one request per sample and each request in
+flight holds a thread. The count is <code>servers</code> times
+<code>max_concurrent_batches_per_client</code> times <code>batch_size</code>: four servers with the
+defaults (four batches of 256) is 4096 threads, which is over a common
+<code>ulimit -u</code> or a cgroup <code>pids.max</code> on a CPU job. The client logs the limit it
+found at the top of its log:</p>
+<div class="language-console highlight"><pre><span></span><code><span id="__span-75-1"><a id="__codelineno-75-1" name="__codelineno-75-1" href="#__codelineno-75-1"></a><span class="go">Thread limit (ulimit -u): 4096</span>
+</span></code></pre></div>
+<p>Fix: lower <code>batch_size</code>, or set <code>init.max_workers</code> to cap how many requests of
+one batch go out at once. Raising the limit works too where the site allows it.</p>
+<h3 id="the-servers-never-come-up">The servers never come up<a class="headerlink" href="#the-servers-never-come-up" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-76-1"><a id="__codelineno-76-1" name="__codelineno-76-1" href="#__codelineno-76-1"></a>Only &lt;n&gt; of &lt;n&gt; required vLLM server(s) became ready within &lt;n&gt;s.
+</span></code></pre></div>
+<p>Cause: <code>wait_for_servers</code> polled <code>/health</code> on the configured URLs and fewer than
+<code>pool.min_servers</code> of them answered in time.</p>
+<p>Fix: on SLURM, read the <code>vllm-&lt;step&gt;_*.err</code> logs of the server array; the usual
+reasons are a model that does not fit the GPUs the step asked for, a port that
+stayed taken, and an array element that never left the queue. Raise
+<code>client.wait_for_servers</code> (seconds) when the model takes longer to load than the
+current value allows.</p>
+<h3 id="the-run-stops-on-failed-batches">The run stops on failed batches<a class="headerlink" href="#the-run-stops-on-failed-batches" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-77-1"><a id="__codelineno-77-1" name="__codelineno-77-1" href="#__codelineno-77-1"></a>No vLLM server in the pool answers '/health' any more, so the run stops.
+</span></code></pre></div>
+<p>Cause: every server of the pool failed a whole batch and then failed its health
+probe, so there is nothing left to annotate on. On SLURM the usual reason is
+that the array hit <code>SERVER_TIME</code> or was preempted.</p>
+<p>Fix: the finished rows are on disk, so resubmitting the same command resumes.
+<code>--max-resubmits</code> queues that in advance, see <a href="../slurm/">SLURM</a>.</p>
+<p>A single-client run stops for a related reason:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-78-1"><a id="__codelineno-78-1" name="__codelineno-78-1" href="#__codelineno-78-1"></a>&lt;n&gt; consecutive batches failed entirely; aborting instead of continuing
+</span></code></pre></div>
+<p>Cause: <code>max_consecutive_failed_batches</code> (10 by default) batches in a row in
+which every sample errored. The rows of those batches are held back rather than
+written, so a resumed run annotates them again instead of keeping them as
+errors. Set the option to 0 to disable both the abort and the hold-back.</p>
+<h3 id="n-is-n-but-one-response-per-sample-is-read"><code>'n' is &lt;n&gt;, but one response per sample is read</code><a class="headerlink" href="#n-is-n-but-one-response-per-sample-is-read" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-79-1"><a id="__codelineno-79-1" name="__codelineno-79-1" href="#__codelineno-79-1"></a>'n' is &lt;n&gt;, but one response per sample is read and the others are dropped. Remove 'n' or set it to 1.
+</span></code></pre></div>
+<p>Cause: <code>options.n</code> or <code>options.extra_body.n</code> above 1. This is a <code>ValueError</code> for
+the caller whatever <code>on_error</code> says, because the payload is built before the
+error handling starts.</p>
+<h2 id="reading-the-error-columns">Reading the error columns<a class="headerlink" href="#reading-the-error-columns" title="Permanent link">&para;</a></h2>
+<p>Four columns say what happened to a sample. <code>{prefix}</code> is the task prefix,
+which in a pipeline is the step's name followed by an underscore.</p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Holds</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>{prefix}error</code></td>
+<td>the message of the failed request, or <code>None</code> when it succeeded</td>
+</tr>
+<tr>
+<td><code>{prefix}error_type</code></td>
+<td>the exception class name, such as <code>ConnectError</code> or <code>APITimeoutError</code>. These are the names <code>retry_errors</code> takes</td>
+</tr>
+<tr>
+<td><code>{prefix}valid_fields</code></td>
+<td>whether the response parsed into the schema. Only written when the step has an <code>output_schema</code></td>
+</tr>
+<tr>
+<td><code>{prefix}valid</code></td>
+<td>what your own <code>validate_fn</code> returned. Only written when you passed one</td>
+</tr>
+</tbody>
+</table>
+<p><code>{prefix}valid_fields</code> is <code>False</code> for an errored response, a response that does
+not parse as JSON, one that parses to something other than an object, and one
+that leaves out a property named in the schema's <code>required</code> list. A schema with
+no <code>required</code> list counts as valid as soon as the response parses to an object.</p>
+<p>Every run ends with a log line that counts the errored and the invalid samples,
+with a count per <code>error_type</code>, and writes the same counts to
+<code>&lt;output_dir&gt;/metadata/&lt;task_prefix&gt;annotation_metadata.json</code>.</p>
+<h2 id="redoing-failed-rows">Redoing failed rows<a class="headerlink" href="#redoing-failed-rows" title="Permanent link">&para;</a></h2>
+<p>An errored row is final once it is written: a resumed run does not send it to
+the model again, so an error the sample itself causes (a prompt longer than the
+context, for instance) is not repeated on every resume.</p>
+<p><code>retry_errors</code> selects rows to annotate again. They are removed from the JSONL
+progress files before the run starts, so they are annotated as if they had never
+run.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-80-1"><a id="__codelineno-80-1" name="__codelineno-80-1" href="#__codelineno-80-1"></a><span class="n">ds</span> <span class="o">=</span> <span class="n">anno</span><span class="o">.</span><span class="n">run_annotation</span><span class="p">(</span>
+</span><span id="__span-80-2"><a id="__codelineno-80-2" name="__codelineno-80-2" href="#__codelineno-80-2"></a>    <span class="n">output_dir</span><span class="o">=</span><span class="s2">"outputs/imdb-sentiment"</span><span class="p">,</span>
+</span><span id="__span-80-3"><a id="__codelineno-80-3" name="__codelineno-80-3" href="#__codelineno-80-3"></a>    <span class="n">prompt_template</span><span class="o">=</span><span class="s2">"Classify the sentiment: </span><span class="si">{text}</span><span class="s2">"</span><span class="p">,</span>
+</span><span id="__span-80-4"><a id="__codelineno-80-4" name="__codelineno-80-4" href="#__codelineno-80-4"></a>    <span class="n">prepared_dataset</span><span class="o">=</span><span class="n">prepared_dataset</span><span class="p">,</span>
+</span><span id="__span-80-5"><a id="__codelineno-80-5" name="__codelineno-80-5" href="#__codelineno-80-5"></a>    <span class="n">retry_errors</span><span class="o">=</span><span class="p">[</span><span class="s2">"ConnectError"</span><span class="p">,</span> <span class="s2">"APITimeoutError"</span><span class="p">],</span>
+</span><span id="__span-80-6"><a id="__codelineno-80-6" name="__codelineno-80-6" href="#__codelineno-80-6"></a><span class="p">)</span>
+</span></code></pre></div>
+<p><code>retry_errors=True</code> takes every errored row. From the command line:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-81-1"><a id="__codelineno-81-1" name="__codelineno-81-1" href="#__codelineno-81-1"></a>llm-annotate<span class="w"> </span>my-pipeline.yaml<span class="w"> </span>--retry-errors<span class="w">                              </span><span class="c1"># all of them</span>
+</span><span id="__span-81-2"><a id="__codelineno-81-2" name="__codelineno-81-2" href="#__codelineno-81-2"></a>llm-annotate<span class="w"> </span>my-pipeline.yaml<span class="w"> </span>--retry-errors<span class="w"> </span>ConnectError<span class="w"> </span>APITimeoutError<span class="w"> </span><span class="c1"># by type</span>
+</span></code></pre></div>
+<p>A row that is redone in one step is redone in every selected step after it,
+because those steps read what it produces. A finished step that is affected is
+resumed rather than loaded from its snapshot, and every row that is not selected
+keeps its result.</p>
+<p>An invalid row (<code>valid_fields</code> or <code>valid</code> is <code>false</code>) is not an errored row and
+<code>retry_errors</code> does not select it. Raise <code>num_retries_invalid</code> for the next run,
+or drop those rows between steps with <code>filter_invalid: true</code>. See
+<a href="../choosing-a-provider/#what-a-retry-costs">What a retry costs</a>.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["content.code.copy", "content.code.annotate", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.indexes", "navigation.top", "search.highlight", "search.suggest", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
