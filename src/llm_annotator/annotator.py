@@ -32,7 +32,6 @@ from typing import (
 )
 from typing import Counter as CounterType
 
-import pyarrow as pa  # type: ignore[import-untyped]
 from datasets import (
     Dataset,
     Features,
@@ -393,18 +392,12 @@ def _infer_progress_features(
 ) -> Features:
     """Build the complete ``Features`` of a directory of progress files.
 
-    ``load_dataset`` infers a JSON column's type from the first block it
-    reads, which types a column "null" when every row of that block holds no
-    value for it, and then fails to cast a later block's value into that
-    type. This builds a complete ``Features`` instead, from three sources: a
-    bookkeeping column (``BOOKKEEPING_FEATURE_TYPES``) keeps the fixed type
-    it is always written with; a column that ``input_features`` names (the id
-    column, or one kept through ``keep_columns``) keeps that dataset's type;
-    every other column (an output schema property, or one that
-    ``postprocess_fn`` added) is typed from the non-null values that occur
-    anywhere in the files, read with one pass of ``json.loads`` over every
-    line, which is also where the union of columns over every file comes
-    from. A column with no non-null value anywhere is typed ``Value("null")``.
+    A column is typed from one of three sources, in order: a bookkeeping
+    column (``BOOKKEEPING_FEATURE_TYPES``) keeps its fixed type; a column
+    that ``input_features`` names (the id column, or one kept through
+    ``keep_columns``) keeps that dataset's type; every other column (an
+    output schema property, or one that ``postprocess_fn`` added) is typed
+    from the non-null values collected for it while scanning the files.
 
     Args:
         process_pdout: Directory holding the ``*.jsonl`` progress files.
@@ -446,7 +439,10 @@ def _infer_progress_features(
                     if column not in seen_columns:
                         seen_columns.add(column)
                         columns.append(column)
-                    if value is not None:
+                    already_typed = column in fixed_types or (
+                        input_features is not None and column in input_features
+                    )
+                    if value is not None and not already_typed:
                         non_null_values.setdefault(column, []).append(value)
 
     features = Features()
@@ -456,9 +452,10 @@ def _infer_progress_features(
         elif input_features is not None and column in input_features:
             features[column] = input_features[column]
         else:
-            arrow_type = pa.array(non_null_values.get(column, [])).type
-            schema = pa.schema([pa.field(column, arrow_type)])
-            features[column] = Features.from_arrow_schema(schema)[column]
+            values = non_null_values.get(column, [])
+            features[column] = Dataset.from_dict({column: values}).features[
+                column
+            ]
 
     return features
 
@@ -2964,10 +2961,9 @@ class Annotator:
     ) -> Dataset:
         """Read every progress file in a directory back into one dataset.
 
-        Passes a complete ``Features`` to ``load_dataset``
-        (``_infer_progress_features``), so that neither a column that is null
-        in one read block and set in another, nor a column that one file
-        lacks entirely, is mistyped or fails to cast.
+        Passes a complete ``Features`` (``_infer_progress_features``) to
+        ``load_dataset``, so that loading never infers a column's type from
+        one read block or one file alone.
 
         Args:
             process_pdout: Directory holding the ``*.jsonl`` progress files.
