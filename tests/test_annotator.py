@@ -13,6 +13,8 @@ import pytest
 from datasets import Dataset, Features, Value, load_dataset
 
 from llm_annotator.annotator import (
+    BOOKKEEPING_FEATURE_TYPES,
+    BOOKKEEPING_SUFFIXES,
     PROGRESS_UPLOAD_FILE,
     Annotator,
     SelectionRecord,
@@ -402,14 +404,24 @@ def test_post_annotate_loads_a_schema_column_that_is_null_in_one_file(
     assert Dataset.load_from_disk(tmp_path / "out")["label"] == [None, "ok"]
 
 
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("error", "Response stopped due to max token limit"),
+        ("score", 42),
+        ("extra", {"tag": "final", "count": 1}),
+    ],
+    ids=["bookkeeping-string", "schema-property-int", "postprocess-object"],
+)
 def test_post_annotate_promotes_a_column_null_in_the_first_read_block(
-    tmp_path: Path, dummy_annotator: Annotator
+    tmp_path: Path,
+    dummy_annotator: Annotator,
+    column: str,
+    value: Any,
 ) -> None:
-    # Reproduces #50: load_dataset's own inference types a column "null"
-    # when every row of the first read block holds no value for it, and
-    # then fails to cast a later block's value into that type. A single
-    # progress file large enough to span more than one read block used to
-    # raise DatasetGenerationError here.
+    # A column that is null throughout the first read block of a large
+    # progress file, and holds a value only on the last row, loads with
+    # that value intact, whatever its type.
     progress_dir = tmp_path / "out" / "progress_backup"
     progress_dir.mkdir(parents=True)
     num_rows = 3000
@@ -417,13 +429,9 @@ def test_post_annotate_promotes_a_column_null_in_the_first_read_block(
         "w", encoding="utf-8"
     ) as fhout:
         for i in range(num_rows):
-            error = (
-                "Response stopped due to max token limit"
-                if i == num_rows - 1
-                else None
-            )
+            row_value = value if i == num_rows - 1 else None
             fhout.write(
-                json.dumps({"idx": i, "pad": "x" * 5000, "error": error})
+                json.dumps({"idx": i, "pad": "x" * 5000, column: row_value})
                 + "\n"
             )
 
@@ -431,72 +439,15 @@ def test_post_annotate_promotes_a_column_null_in_the_first_read_block(
         process_pdout=progress_dir, idx_column="idx", keep_idx_column=True
     )
 
-    assert ds[0]["error"] is None
-    assert (
-        ds[num_rows - 1]["error"] == "Response stopped due to max token limit"
-    )
-
-
-def test_post_annotate_promotes_a_schema_property_null_then_int(
-    tmp_path: Path, dummy_annotator: Annotator
-) -> None:
-    # A schema property is null on every invalid row. If the invalid rows
-    # come first and fill the whole first read block, the column used to
-    # be typed "null" and fail on the first valid row's integer.
-    progress_dir = tmp_path / "out" / "progress_backup"
-    progress_dir.mkdir(parents=True)
-    num_rows = 3000
-    with (progress_dir / "progress_0.jsonl").open(
-        "w", encoding="utf-8"
-    ) as fhout:
-        for i in range(num_rows):
-            score = 42 if i == num_rows - 1 else None
-            fhout.write(
-                json.dumps({"idx": i, "pad": "x" * 5000, "score": score})
-                + "\n"
-            )
-
-    ds = dummy_annotator._post_annotate(
-        process_pdout=progress_dir, idx_column="idx", keep_idx_column=True
-    )
-
-    assert ds[0]["score"] is None
-    assert ds[num_rows - 1]["score"] == 42
-
-
-def test_post_annotate_promotes_a_postprocess_column_null_then_object(
-    tmp_path: Path, dummy_annotator: Annotator
-) -> None:
-    # A column that postprocess_fn adds only for some rows has the same
-    # failure mode as a schema property, but with a struct value instead
-    # of a scalar.
-    progress_dir = tmp_path / "out" / "progress_backup"
-    progress_dir.mkdir(parents=True)
-    num_rows = 3000
-    with (progress_dir / "progress_0.jsonl").open(
-        "w", encoding="utf-8"
-    ) as fhout:
-        for i in range(num_rows):
-            extra = {"tag": "final", "count": 1} if i == num_rows - 1 else None
-            fhout.write(
-                json.dumps({"idx": i, "pad": "x" * 5000, "extra": extra})
-                + "\n"
-            )
-
-    ds = dummy_annotator._post_annotate(
-        process_pdout=progress_dir, idx_column="idx", keep_idx_column=True
-    )
-
-    assert ds[0]["extra"] is None
-    assert ds[num_rows - 1]["extra"] == {"tag": "final", "count": 1}
+    assert ds[0][column] is None
+    assert ds[num_rows - 1][column] == value
 
 
 def test_post_annotate_unifies_int_and_float_in_one_column(
     tmp_path: Path, dummy_annotator: Annotator
 ) -> None:
-    # A column with an integer value on one row and a float on another is
-    # unified to float64, the same way pyarrow unifies them within a
-    # single read block.
+    # A column with an integer value on one row and a float on another
+    # loads as float64 throughout.
     progress_dir = tmp_path / "out" / "progress_backup"
     progress_dir.mkdir(parents=True)
     (progress_dir / "progress_0.jsonl").write_text(
@@ -514,10 +465,8 @@ def test_post_annotate_unifies_int_and_float_in_one_column(
 def test_load_progress_files_loads_a_column_missing_from_one_file(
     tmp_path: Path, dummy_annotator: Annotator
 ) -> None:
-    # A column that one file does not hold at all (not merely null),
-    # e.g. one written before a later release added it, still has to
-    # load: the single features-driven read path fills it with nulls,
-    # so there is no need for a separate per-file fallback.
+    # A column that one file does not hold at all (not merely null) is
+    # filled with null for the rows of that file.
     progress_dir = tmp_path / "progress_backup"
     progress_dir.mkdir()
     (progress_dir / "progress_0.jsonl").write_text(
@@ -569,6 +518,14 @@ def test_infer_progress_features_keeps_an_all_null_column_as_null(
     )
 
     assert features["score"] == Value("null")
+
+
+def test_bookkeeping_feature_types_covers_every_bookkeeping_column() -> None:
+    # BOOKKEEPING_FEATURE_TYPES and BOOKKEEPING_SUFFIXES name the same
+    # columns, except "messages", which is typed from the input dataset.
+    assert set(BOOKKEEPING_FEATURE_TYPES) == set(BOOKKEEPING_SUFFIXES) - {
+        "messages"
+    }
 
 
 def test_process_batch_validate_and_postprocess(
