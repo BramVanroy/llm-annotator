@@ -113,6 +113,24 @@ the node and races between servers that share `~/.cache/flashinfer`. The wheels
 are about 2.5 GB, which is why they sit in a group rather than in the `vllm`
 extra that CI installs. `docs/provider-info.md` has the details.
 
+### vLLM updates
+
+Dependabot checks `uv.lock` weekly and opens one pull request for vLLM,
+transformers and the FlashInfer kernels together (the `vllm-stack` group in
+`.github/dependabot.yml`). CI does not run the vLLM tests, so a green pull
+request says nothing about the new engine. Before you merge one:
+
+- Run `make test-slow` on a GPU machine, after
+  `uv sync --extra vllm --group vllm-kernels`.
+- Check that the `flashinfer-cubin` and `flashinfer-jit-cache` pins equal the
+  `flashinfer-python` version that the new vLLM pulls in.
+- Check that the CUDA variant of the `flashinfer-jit-cache` index in
+  `pyproject.toml` (`cu130`) still matches the torch build that vLLM pulls in.
+  Dependabot does not change that URL.
+- Check that the `transformers` range in the `vllm` extra allows the release
+  that the new vLLM needs, and that the excluded releases still need to be
+  excluded.
+
 ## Code style
 
 - Ruff's `line-length` is 79. The formatter wraps code at that width, so
