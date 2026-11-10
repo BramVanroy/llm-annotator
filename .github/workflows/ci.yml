@@ -114,8 +114,9 @@ jobs:
           files: coverage.xml
           disable_search: true
           disable_telem: true
-          # Forks have no access to the token, so their pull requests do not fail on it.
-          fail_ci_if_error: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          # Pull requests from forks and from Dependabot run without the
+          # repository secrets, so a failed upload does not fail them.
+          fail_ci_if_error: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]') }}
 
   test-slow:
     name: Slow tests (Python 3.12)

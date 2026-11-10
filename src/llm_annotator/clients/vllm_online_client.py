@@ -38,8 +38,8 @@ The OpenAI SDK caps its HTTP client at 1000 connections
 (``DEFAULT_CONNECTION_LIMITS`` in ``openai/_constants.py``), and a pooled run
 can ask for more: a ``batch_size`` of 1024 times the default
 ``max_concurrent_batches_per_client`` of 4 is 4096 requests in flight through
-one client. Above the cap httpx queues the rest, which would keep part of a
-batch from reaching the server that is supposed to schedule it."""
+one client. Above the cap the HTTP client queues the rest, which would keep
+part of a batch from reaching the server that is supposed to schedule it."""
 
 
 def server_is_healthy(base_url: str, timeout: float) -> bool:
@@ -331,16 +331,24 @@ class VLLMOnlineClient(OpenAIClient[VLLMOnlineRuntimeOptions]):
         Returns:
             The SDK client.
         """
-        import httpx
-        from openai import DefaultHttpxClient, OpenAI
+        from openai import (
+            DEFAULT_CONNECTION_LIMITS,
+            DefaultHttpxClient,
+            OpenAI,
+            Timeout,
+        )
 
+        # openai 2 runs on httpx and openai 3 on httpx2. The SDK exports
+        # ``Timeout`` but not ``Limits``, so the class of its default limits
+        # is the ``Limits`` of whichever package the SDK uses.
+        limits_class = type(DEFAULT_CONNECTION_LIMITS)
         return OpenAI(
             api_key=self._api_key,
             base_url=self._base_url,
-            timeout=httpx.Timeout(self.timeout, connect=CONNECT_TIMEOUT),
+            timeout=Timeout(self.timeout, connect=CONNECT_TIMEOUT),
             max_retries=self.max_retries,
             http_client=DefaultHttpxClient(
-                limits=httpx.Limits(
+                limits=limits_class(
                     max_connections=MAX_CONNECTIONS,
                     max_keepalive_connections=MAX_CONNECTIONS,
                 )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 import urllib.error
 from typing import Any, cast
@@ -67,7 +68,12 @@ def test_vllm_online_client_configures_the_sdk_client(
     # so a black-holed server would stall the batch instead of erroring.
     assert sdk_kwargs["timeout"].read == 120.0
     assert sdk_kwargs["timeout"].connect == CONNECT_TIMEOUT
+    # The SDK's own classes, so that openai 2 (httpx) and openai 3 (httpx2)
+    # both accept them.
+    sdk = sys.modules["openai"]
+    assert isinstance(sdk_kwargs["timeout"], sdk.Timeout)
     limits = sdk_kwargs["http_client"].kwargs["limits"]
+    assert isinstance(limits, type(sdk.DEFAULT_CONNECTION_LIMITS))
     assert limits.max_connections == MAX_CONNECTIONS
     assert limits.max_keepalive_connections == MAX_CONNECTIONS
 
