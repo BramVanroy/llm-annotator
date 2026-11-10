@@ -17,6 +17,28 @@ from llm_annotator.clients.vllm_offline_client import VLLMOfflineClient
 from llm_annotator.utils import get_hf_username
 
 
+class FakeTimeout:
+    """Stand-in for the ``Timeout`` class that an SDK exports.
+
+    A client that builds its timeout from ``httpx`` directly gets an object
+    of another class, which the tests can tell apart from this one.
+    """
+
+    def __init__(self, timeout: float, *, connect: float) -> None:
+        self.read = timeout
+        self.connect = connect
+
+
+class FakeLimits:
+    """Stand-in for the class of ``openai.DEFAULT_CONNECTION_LIMITS``."""
+
+    def __init__(
+        self, *, max_connections: int, max_keepalive_connections: int
+    ) -> None:
+        self.max_connections = max_connections
+        self.max_keepalive_connections = max_keepalive_connections
+
+
 @pytest.fixture(scope="session")
 def hf_username():
     """Get the Hugging Face username from the token (session scoped).
@@ -325,6 +347,10 @@ def fake_openai_module(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     fake_openai = types.ModuleType("openai")
     fake_openai.OpenAI = FakeOpenAI  # type: ignore[attr-defined]
     fake_openai.DefaultHttpxClient = FakeDefaultHttpxClient  # type: ignore[attr-defined]
+    fake_openai.Timeout = FakeTimeout  # type: ignore[attr-defined]
+    fake_openai.DEFAULT_CONNECTION_LIMITS = FakeLimits(  # type: ignore[attr-defined]
+        max_connections=1000, max_keepalive_connections=100
+    )
 
     types_mod = types.ModuleType("openai.types")
     chat_mod = types.ModuleType("openai.types.chat")
@@ -412,6 +438,7 @@ def fake_anthropic_module(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
     fake_anthropic = types.ModuleType("anthropic")
     fake_anthropic.Anthropic = FakeAnthropic  # type: ignore[attr-defined]
+    fake_anthropic.Timeout = FakeTimeout  # type: ignore[attr-defined]
     monkeypatch.setitem(__import__("sys").modules, "anthropic", fake_anthropic)
 
     return state

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import types
 from typing import Any, cast
 
@@ -347,8 +348,10 @@ def test_claude_client_passes_the_sdk_defaults(
 ) -> None:
     """The SDK client gets the Anthropic SDK's own timeout and retry count.
 
-    The timeout is an ``httpx.Timeout`` rather than a plain float, so the
+    The timeout is the SDK's own ``Timeout`` rather than a plain float, so the
     connect limit stays short while the read limit is the full timeout.
+    anthropic 2 raises a ``TypeError`` for an ``httpx.Timeout`` because it runs
+    on ``httpx2``.
     """
     client = ClaudeClient(model="claude-test")
 
@@ -357,6 +360,7 @@ def test_claude_client_passes_the_sdk_defaults(
     inits = cast(list[Any], fake_anthropic_module["anthropic_init_kwargs"])
     assert len(inits) == 1
     assert inits[0]["max_retries"] == DEFAULT_MAX_RETRIES
+    assert isinstance(inits[0]["timeout"], sys.modules["anthropic"].Timeout)
     assert inits[0]["timeout"].read == DEFAULT_TIMEOUT
     assert inits[0]["timeout"].connect == CONNECT_TIMEOUT
 

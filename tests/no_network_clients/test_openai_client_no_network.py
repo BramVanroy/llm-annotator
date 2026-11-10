@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import types
 from typing import Any, cast
 
@@ -779,8 +780,9 @@ def test_openai_client_passes_the_sdk_defaults(
 ) -> None:
     """The SDK client gets the OpenAI SDK's own timeout and retry count.
 
-    The timeout is an ``httpx.Timeout`` rather than a plain float, so the
-    connect limit stays short while the read limit is the full timeout.
+    The timeout is the SDK's own ``Timeout`` rather than a plain float, so the
+    connect limit stays short while the read limit is the full timeout. openai
+    3 rejects an ``httpx.Timeout`` because it runs on ``httpx2``.
     """
     client: OpenAIClient[OpenAIRuntimeOptions] = OpenAIClient(model="gpt-test")
 
@@ -791,6 +793,7 @@ def test_openai_client_passes_the_sdk_defaults(
     inits = cast(list[Any], fake_openai_module["openai_init_kwargs"])
     assert len(inits) == 1
     assert inits[0]["max_retries"] == DEFAULT_MAX_RETRIES
+    assert isinstance(inits[0]["timeout"], sys.modules["openai"].Timeout)
     assert inits[0]["timeout"].read == DEFAULT_TIMEOUT
     assert inits[0]["timeout"].connect == CONNECT_TIMEOUT
 

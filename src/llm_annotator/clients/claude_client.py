@@ -21,7 +21,7 @@ DEFAULT_TIMEOUT = 600.0
 """Seconds one request may take, the Anthropic SDK's own default.
 
 ``DEFAULT_TIMEOUT`` in ``anthropic/_constants.py`` is
-``httpx.Timeout(timeout=10 * 60, connect=5.0)``."""
+``Timeout(timeout=10 * 60, connect=5.0)``."""
 
 DEFAULT_MAX_RETRIES = 2
 """How often the Anthropic SDK retries a failed request, its own default
@@ -30,8 +30,8 @@ DEFAULT_MAX_RETRIES = 2
 CONNECT_TIMEOUT = 5.0
 """Seconds to wait for the TCP connection of one request.
 
-httpx reads a plain float timeout as all four of its limits, so the connect
-limit is named separately to keep the SDK's own value
+The SDK reads a plain float timeout as all four of its limits, so the
+connect limit is named separately to keep the SDK's own value
 (``DEFAULT_TIMEOUT.connect`` in ``anthropic/_constants.py``)."""
 
 
@@ -116,8 +116,7 @@ class ClaudeClient(Client[ClaudeRuntimeOptions]):
                 (``DEFAULT_MAX_RETRIES`` in ``anthropic/_constants.py``).
             on_error: Error behavior when generation fails.
         """
-        import httpx
-        from anthropic import Anthropic
+        from anthropic import Anthropic, Timeout
 
         super().__init__(
             model=model, max_workers=max_workers, on_error=on_error
@@ -128,7 +127,7 @@ class ClaudeClient(Client[ClaudeRuntimeOptions]):
         self.max_retries = max_retries
         self._client = Anthropic(
             api_key=self._api_key,
-            timeout=httpx.Timeout(timeout, connect=CONNECT_TIMEOUT),
+            timeout=Timeout(timeout, connect=CONNECT_TIMEOUT),
             max_retries=max_retries,
         )
 

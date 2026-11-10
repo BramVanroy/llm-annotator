@@ -28,7 +28,7 @@ DEFAULT_TIMEOUT = 600.0
 """Seconds one request may take, the OpenAI SDK's own default.
 
 ``DEFAULT_TIMEOUT`` in ``openai/_constants.py`` is
-``httpx.Timeout(timeout=600, connect=5.0)``."""
+``Timeout(timeout=600, connect=5.0)``."""
 
 DEFAULT_MAX_RETRIES = 2
 """How often the OpenAI SDK retries a failed request, its own default
@@ -38,7 +38,7 @@ CONNECT_TIMEOUT = 5.0
 """Seconds to wait for the TCP connection of one request, apart from the
 generation itself.
 
-httpx reads a plain float timeout as all four of its limits, so a long
+The SDK reads a plain float timeout as all four of its limits, so a long
 ``timeout`` would also let a host that drops packets rather than refusing the
 connection hold a request for the full duration. This is the OpenAI SDK's own
 connect timeout (``DEFAULT_TIMEOUT.connect`` in ``openai/_constants.py``)."""
@@ -217,13 +217,12 @@ class OpenAIClient(Client[T_OpenAIOptions]):
         Returns:
             The SDK client.
         """
-        import httpx
-        from openai import OpenAI
+        from openai import OpenAI, Timeout
 
         return OpenAI(
             api_key=self._api_key,
             base_url=self._base_url,
-            timeout=httpx.Timeout(self.timeout, connect=CONNECT_TIMEOUT),
+            timeout=Timeout(self.timeout, connect=CONNECT_TIMEOUT),
             max_retries=self.max_retries,
         )
 
