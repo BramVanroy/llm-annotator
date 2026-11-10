@@ -1,0 +1,77 @@
+name: Dependabot merge
+
+# Merges a Dependabot pull request after CI passed on its head commit. Two
+# kinds stay open for review: a major version update, because the provider
+# SDKs are faked in the fast suite and a major release can break a client at
+# runtime without a failed test, and a vLLM or transformers update, because
+# CI does not run the vLLM tests.
+#
+# The workflow_run trigger runs this file from main with a write token, and
+# it never checks out the code of the pull request.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  merge:
+    name: Merge Dependabot update
+    if: >-
+      github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'pull_request'
+      && github.event.workflow_run.actor.login == 'dependabot[bot]'
+      && github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Find the pull request and its update types
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          # The pull request has to point at the commit that CI tested, so a
+          # newer push waits for its own CI run.
+          pr=$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" \
+            --jq '.[] | select(.state == "open" and .head.sha == env.HEAD_SHA and .user.login == "dependabot[bot]") | .number')
+          if [ -z "$pr" ]; then
+            echo "No open Dependabot pull request has head $HEAD_SHA."
+            exit 0
+          fi
+
+          # Dependabot lists every updated dependency with its name and update
+          # type in the commit message, also for a grouped update.
+          message=$(gh api "repos/$REPO/commits/$HEAD_SHA" --jq .commit.message)
+          names=$(echo "$message" | sed -n 's/^- *dependency-name: *//p')
+          types=$(echo "$message" | sed -n 's/^ *update-type: *//p')
+          echo "Updates in #$pr:"
+          paste <(echo "$names") <(echo "$types")
+          # CI does not run the vLLM tests, so CONTRIBUTING.md asks for
+          # `make test-slow` on a GPU before a vLLM or transformers update.
+          if echo "$names" | grep -qx -e vllm -e transformers; then
+            echo "#$pr updates vLLM or transformers, so it stays open."
+            exit 0
+          fi
+          if [ -z "$types" ]; then
+            echo "The commit message has no update types, so #$pr stays open."
+            exit 0
+          fi
+          if echo "$types" | grep -qv -e 'semver-minor' -e 'semver-patch'; then
+            echo "#$pr contains a major or unknown update, so it stays open."
+            exit 0
+          fi
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+
+      - name: Merge
+        if: steps.check.outputs.pr != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          PR: ${{ steps.check.outputs.pr }}
+        run: gh pr merge "$PR" --repo "$REPO" --merge --match-head-commit "$HEAD_SHA"
