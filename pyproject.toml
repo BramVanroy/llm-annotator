@@ -14,10 +14,10 @@ classifiers = [
   "Intended Audience :: Developers",
   "Topic :: Software Development :: Build Tools",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
-  "Framework :: MkDocs",
-  "Framework :: Pytest",
+  "Programming Language :: Python :: 3.14",
   "Typing :: Typed",
 ]
 
@@ -94,7 +94,7 @@ Repository = "https://github.com/BramVanroy/llm-annotator"
 Issues = "https://github.com/BramVanroy/llm-annotator/issues"
 
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
+requires = ["hatchling>=1.27", "hatch-vcs>=0.5"]
 build-backend = "hatchling.build"
 
 # FlashInfer's prebuilt kernels are not on PyPI: the cubins live on its own
@@ -160,7 +160,7 @@ exclude = [
     "case-studies",
     "docs",
     # interrogate walks the whole working tree when it is given no path, and
-    # both callers (`make quality` and the badge workflow) give it none, so
+    # `make quality` gives it none, so
     # every directory that holds Python but is not source is named here.
     # Parsing a virtualenv raises RecursionError and kills the run before it
     # reports anything; ".claude" holds one virtualenv per git worktree.
@@ -194,13 +194,13 @@ disallow_untyped_defs = false
 module = ["torch.*", "vllm.*", "datasets.*", "tqdm.*"]
 ignore_missing_imports = true
 
-[tool.pytest.ini_options]
+[tool.pytest]
+minversion = "9.0"
+strict = true
 testpaths = ["tests", "src"]
 addopts = [
     "-ra",
     "-v",
-    "--strict-markers",
-    "--strict-config",
     "--doctest-modules",
     "--import-mode=importlib",
     "--cov=llm_annotator",
