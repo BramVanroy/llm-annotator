@@ -337,16 +337,36 @@ reachable from a config under `init`. See
 
 ## SLURM
 
-Nothing in `slurm/cluster.env` has to change: no variable was removed or
-renamed. Six optional ones were added, and `cluster.env.example` documents each
-of them:
+No variable of `slurm/cluster.env` from 0.16 was removed or renamed. Four
+optional ones were added, and `cluster.env.example` documents each of them:
 
 - `MAX_CONCURRENT_SERVERS` throttles a server array at a site with a per-user
   GPU limit.
 - `SERVER_HOST_CMD` picks the command a server uses to publish its address.
-- `MODEL_DOWNLOAD`, `DOWNLOAD_PARTITION` and `DOWNLOAD_TIME` fetch the weights
-  in one CPU job per model before any GPU is allocated.
+- `MODEL_DOWNLOAD` fetches the weights before any GPU is allocated.
 - `CANCEL_SERVERS_ON_EXIT=0` keeps a step's servers alive after its client ends.
 
 `submit_pipeline.sh` also takes `--max-resubmits N`, which queues follow-up
 attempts per step in advance. [The SLURM guide](slurm.md) has all of them.
+
+### Model downloads on the submitting node
+
+With `MODEL_DOWNLOAD=1`, `submit_pipeline.sh` downloads the models on the node
+that runs it, before it queues anything. It no longer queues a `download-<model>`
+job, so `DOWNLOAD_PARTITION` and `DOWNLOAD_TIME` are gone. The submitter stops
+with an error while either one is set. Remove both lines from
+`slurm/cluster.env`:
+
+```sh
+# before
+MODEL_DOWNLOAD=1
+DOWNLOAD_PARTITION=transfer
+DOWNLOAD_TIME=02:00:00
+
+# after
+MODEL_DOWNLOAD=1
+```
+
+The submitting node now needs a route to huggingface.co. Where it has none, set
+`MODEL_DOWNLOAD=0` and `vllm serve` fetches the model when a server starts. See
+[Model downloads](slurm.md#model-downloads).

@@ -64,6 +64,16 @@ def _fake_bin(tmp_path: Path) -> Path:
     )
     squeue.chmod(0o755)
 
+    # Records what the submitter asked to download; FAKE_HF_EXIT makes the
+    # download fail.
+    hf = bin_dir / "hf"
+    hf.write_text(
+        '#!/bin/bash\nprintf "%s\\n" "$@" >> "${HF_ARGS_FILE:-/dev/null}"\n'
+        'exit "${FAKE_HF_EXIT:-0}"\n',
+        encoding="utf-8",
+    )
+    hf.chmod(0o755)
+
     # The suite runs on login nodes too, where a real sbatch is on PATH and a
     # submitter that stopped honouring --dry-run would queue jobs for real.
     # These stubs make that a failed test instead.
@@ -627,30 +637,101 @@ def test_submit_pipeline_rejects_a_throttle_below_min_servers(
     assert "never reached" in process.stderr
 
 
+def _download_env(tmp_path: Path, **extra: str) -> dict[str, str]:
+    """Build the environment of a submit run that downloads its models.
+
+    The cluster file defines ``cluster_setup_env``, so that the download runs
+    with the fake ``hf`` of the test bin and never with the one of the venv.
+
+    Args:
+        tmp_path: Directory for the cluster file and the recorded arguments.
+        **extra: Further environment variables.
+
+    Returns:
+        The environment for `_run_submit`.
+    """
+    cluster_env = tmp_path / "cluster.env"
+    cluster_env.write_text("cluster_setup_env() { :; }\n", encoding="utf-8")
+    return {
+        "MODEL_DOWNLOAD": "1",
+        "CLUSTER_ENV": str(cluster_env),
+        "HF_ARGS_FILE": str(tmp_path / "hf_args.txt"),
+        **extra,
+    }
+
+
 @REQUIRES_CLI
-def test_submit_pipeline_downloads_the_model_first(tmp_path: Path) -> None:
-    """MODEL_DOWNLOAD=1 puts one fetch job in front of the whole chain."""
+def test_submit_pipeline_dry_run_downloads_nothing(tmp_path: Path) -> None:
+    """A dry run names the model it would fetch and queues no download job."""
     config_path = _write_pool_config(
         tmp_path, {"servers": 4, "min_servers": 2}
     )
 
-    process = _run_submit(tmp_path, config_path, env={"MODEL_DOWNLOAD": "1"})
+    process = _run_submit(tmp_path, config_path, env=_download_env(tmp_path))
 
     assert process.returncode == 0, process.stderr
-    download = [
-        line
-        for line in process.stderr.splitlines()
-        if "--job-name=download-Qwen3-8B" in line
-    ]
-    assert len(download) == 1
-    assert "vllm_download_model" in download[0]
-    assert "Qwen/Qwen3-8B" in download[0]
+    assert "would download Qwen/Qwen3-8B" in process.stdout
+    assert not (tmp_path / "hf_args.txt").exists()
     array = next(
         line
         for line in process.stderr.splitlines()
         if "--job-name=vllm-write" in line
     )
-    assert "--dependency=afterok:<job-1>" in array
+    assert "--dependency" not in array
+
+
+@REQUIRES_CLI
+def test_submit_pipeline_downloads_before_it_queues(tmp_path: Path) -> None:
+    """The model is fetched on the submitting node before the first sbatch."""
+    config_path = _write_pool_config(
+        tmp_path, {"servers": 4, "min_servers": 2}
+    )
+
+    process = _run_submit(
+        tmp_path, config_path, dry_run=False, env=_download_env(tmp_path)
+    )
+
+    # The sbatch stub refuses every job, so the run ends at the first one.
+    assert process.returncode == 1
+    assert "could not queue the servers of step 'write'" in process.stderr
+    hf_args = (tmp_path / "hf_args.txt").read_text(encoding="utf-8")
+    assert hf_args.splitlines() == ["download", "Qwen/Qwen3-8B"]
+
+
+@REQUIRES_CLI
+def test_submit_pipeline_stops_on_a_failed_download(tmp_path: Path) -> None:
+    """A failed download ends the submission before anything is queued."""
+    config_path = _write_pool_config(
+        tmp_path, {"servers": 4, "min_servers": 2}
+    )
+
+    process = _run_submit(
+        tmp_path,
+        config_path,
+        dry_run=False,
+        env=_download_env(tmp_path, FAKE_HF_EXIT="1"),
+    )
+
+    assert process.returncode == 1
+    assert "Could not download 'Qwen/Qwen3-8B'" in process.stderr
+    assert "sbatch was called" not in process.stderr
+
+
+@REQUIRES_CLI
+def test_submit_pipeline_rejects_the_download_job_settings(
+    tmp_path: Path,
+) -> None:
+    """A cluster file that still sizes a download job fails at submit."""
+    config_path = _write_pool_config(
+        tmp_path, {"servers": 2, "min_servers": 1}
+    )
+
+    process = _run_submit(
+        tmp_path, config_path, env={"DOWNLOAD_PARTITION": ""}
+    )
+
+    assert process.returncode == 1
+    assert "Model downloads on the submitting node" in process.stderr
 
 
 @REQUIRES_CLI

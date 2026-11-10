@@ -36,7 +36,7 @@ CLUSTER_ENV_KEYS=(
   CPUS_PER_GPU CLIENT_CPUS MAX_GPUS_PER_NODE
   GPU_REQUEST GPU_TYPE
   MAX_CONCURRENT_SERVERS SERVER_HOST_CMD
-  MODEL_DOWNLOAD DOWNLOAD_PARTITION DOWNLOAD_TIME
+  MODEL_DOWNLOAD
   CLUSTER_MODULES CUDA_MODULE
   VENV_PATH UV_SYNC
   LOG_DIR
@@ -84,8 +84,6 @@ cluster_env_load() {
   : "${MAX_CONCURRENT_SERVERS:=}"
   : "${SERVER_HOST_CMD:=hostname}"
   : "${MODEL_DOWNLOAD:=0}"
-  : "${DOWNLOAD_PARTITION:=${CPU_PARTITION}}"
-  : "${DOWNLOAD_TIME:=02:00:00}"
   : "${CLUSTER_MODULES:=}"
   : "${CUDA_MODULE:=}"
   : "${VENV_PATH:=${REPO_ROOT}/.venv}"
@@ -245,12 +243,14 @@ vllm_server_host() {
 }
 
 # Fetch a model into the Hugging Face cache before the servers that need it
-# start, so a cold cache is paid for once instead of once per server.
+# start, so a cold cache is paid for once instead of once per server. A model
+# that is already in the cache is only checked against the Hub.
 vllm_download_model() {
   local model="${1:?vllm_download_model needs a model id}"
   if ! command -v hf > /dev/null 2>&1; then
     echo "hf is not on PATH; it comes with huggingface_hub, which this" \
-      "package depends on. Check the environment this job prepares." >&2
+      "package depends on. Check VENV_PATH or cluster_setup_env in" \
+      "'${CLUSTER_ENV}'." >&2
     return 1
   fi
   echo "Downloading ${model} into ${HF_HOME:-${HOME}/.cache/huggingface}"
