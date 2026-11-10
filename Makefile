@@ -17,7 +17,7 @@ style-fix:
 
 style: style-fix
 
-# Coverage flags live in [tool.pytest.ini_options] addopts, so the recipes below
+# Coverage flags live in [tool.pytest] addopts, so the recipes below
 # only need to select which marker subset to run.
 test:
 	uv run pytest -m "not slow"

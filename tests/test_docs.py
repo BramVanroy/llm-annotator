@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import importlib.util
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -229,3 +230,34 @@ def test_every_doc_file_is_searched() -> None:
     assert len(DOC_FILES) >= 9
     assert len(PYTHON_BLOCKS) >= 10
     assert len(QUOTED_MESSAGES) >= 40
+
+
+def test_rendered_doctest_comments_every_output_line() -> None:
+    spec = importlib.util.spec_from_file_location(
+        "docs_hooks", REPO_ROOT / "docs" / "hooks.py"
+    )
+    assert spec is not None and spec.loader is not None
+    hooks = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hooks)
+
+    example = "\n".join(
+        [
+            ">>> for x in (1, 2):",
+            "...     print(x)",
+            "1",
+            "2",
+            "",
+            "Text after the example.",
+        ]
+    )
+
+    assert hooks._strip_doctest_prompts(example) == "\n".join(
+        [
+            "for x in (1, 2):",
+            "    print(x)",
+            "# 1",
+            "# 2",
+            "",
+            "Text after the example.",
+        ]
+    )

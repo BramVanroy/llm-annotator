@@ -1,57 +1,65 @@
-name: Docs links (HTML Scheduled)
+name: Docs links (HTML, scheduled)
 
 on:
   schedule:
     - cron: "20 4 * * 1"
-  workflow_dispatch: # Allows you to run it manually from the Actions tab
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
 
 jobs:
   links:
-    name: Check Live HTML links
+    name: Check published HTML links
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Check out gh-pages into a directory named like the Pages base path
+      # (/llm-annotator/), so that --root-dir resolves root-relative links such
+      # as /llm-annotator/latest/...
+      - uses: actions/checkout@v7.0.1
         with:
           ref: gh-pages
+          path: llm-annotator
+          persist-credentials: false
 
       - name: Restore lychee cache
         id: restore-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6.1.0
         with:
           path: .lycheecache
           key: cache-lychee-html-${{ github.sha }}
           restore-keys: cache-lychee-html-
 
       - name: Check links with lychee
-        uses: lycheeverse/lychee-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        id: lychee
+        uses: lycheeverse/lychee-action@v2.9.0
         with:
-          fail: true
-          # We don't use .lychee.toml here unless you also keep a copy of it on the gh-pages branch.
-          # --root-dir resolves root-relative links (e.g. /llm-annotator/latest/...) against the checkout.
-          # 404.html uses absolute links prefixed with the site base URL (/llm-annotator/) which
-          # cannot be resolved locally, so we exclude it.
-          # overrides/ contains Jinja2 template files (.html) with raw template expressions,
-          # not rendered HTML, so we exclude those too.
+          # A failed check opens an issue in the last step instead.
+          fail: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # .lychee.toml is not on the gh-pages branch, so it is not used here.
+          # 404.html links to the unversioned site root, which does not exist
+          # on gh-pages. overrides/ holds raw Jinja templates in sites that
+          # were built before mkdocs.yml excluded them.
           args: >-
             --cache
             --no-progress
             --root-dir ${{ github.workspace }}
             --exclude-path '404\.html'
             --exclude-path 'overrides/'
-            'latest/**/*.html'
+            'llm-annotator/latest/**/*.html'
 
       - name: Save lychee cache
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6.1.0
         with:
           path: .lycheecache
           key: ${{ steps.restore-cache.outputs.cache-primary-key || format('cache-lychee-html-{0}', github.sha) }}
 
-      - name: Create issue from file if failed
-        if: env.lychee_exit_code != 0
-        uses: peter-evans/create-issue-from-file@v5
+      - name: Open issue with the report
+        if: steps.lychee.outputs.exit_code != 0
+        uses: peter-evans/create-issue-from-file@v6.0.0
         with:
           title: Link checker report
           content-filepath: ./lychee/out.md

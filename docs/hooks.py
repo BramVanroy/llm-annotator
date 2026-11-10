@@ -8,7 +8,7 @@ readers a clean, copyable, syntax-coloured block.
 
 It also rewrites API source links so versioned docs point at the Git tag used
 to build that release instead of always pointing at ``main``. The templates in
-``docs/overrides/python/material/`` emit a repo-relative path; the ref to
+``docs/templates/python/material/`` emit a repo-relative path; the ref to
 prepend comes from the ``DOCS_SOURCE_REF`` environment variable, which
 ``.github/workflows/docs.yml`` sets to the release tag.
 
@@ -50,34 +50,25 @@ _DOCTEST_BLOCK_PATTERN = re.compile(
 
 
 def _strip_doctest_prompts(code: str) -> str:
-    """
-    - Strip ``>>> `` and ``... `` prompts portions of examples in docstrings;
-    - convert output lines to ``# comments``.
+    """Turn a doctest example into plain, copyable Python.
 
-    Does smart handling of output in the examples so that it gets written to a comment in the documentation.
+    Strips the ``>>> `` and ``... `` prompts and turns every expected output
+    line (up to the next prompt or blank line) into a ``# comment``.
     """
-    lines = code.split("\n")
     result: list[str] = []
-    expect_output = False
+    in_example = False
 
-    for line in lines:
-        if line.startswith(">>> "):
+    for line in code.split("\n"):
+        if line.startswith(">>> ") or line == ">>>":
             result.append(line[4:])
-            expect_output = True
-        elif line == ">>>":
-            result.append("")
-            expect_output = False
-        elif line.startswith("... "):
+            in_example = True
+        elif in_example and (line.startswith("... ") or line == "..."):
             result.append(line[4:])
-        elif line == "...":
-            result.append("")
-        elif expect_output and line != "":
+        elif in_example and line.strip():
             result.append("# " + line)
-            expect_output = False
         else:
             result.append(line)
-            if line.strip():
-                expect_output = False
+            in_example = False
 
     return "\n".join(result).strip()
 

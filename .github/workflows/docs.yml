@@ -10,10 +10,10 @@ on:
         required: true
         type: string
 
-# Cancel any in-progress docs deploy for the same branch when a new push arrives.
+# Deploys push to gh-pages: queue them instead of cancelling one mid-push.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -22,7 +22,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -67,9 +67,9 @@ jobs:
       - name: Use current docs build tooling from main
         run: |
           git checkout origin/main -- \
-            pyproject.toml uv.lock mkdocs.yml docs/hooks.py docs/overrides
+            pyproject.toml uv.lock mkdocs.yml docs/hooks.py docs/overrides docs/templates
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10.3.1
         with:
           enable-cache: true
 
