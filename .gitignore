@@ -7,6 +7,7 @@ CLAUDE.md
 logs/
 .github/*
 !.github/workflows/
+!.github/dependabot.yml
 output/
 outputs/
 examples/**/outputs?/
@@ -20,6 +21,7 @@ prompts/
 data/
 .idea/
 .ruff_cache
+.lycheecache
 .venv
 # Per-interpreter venvs created by `make test-matrix`.
 .venvs/
