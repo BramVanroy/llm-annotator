@@ -42,7 +42,7 @@ anthropic = [
     "anthropic>=0.102.0,<1",
 ]
 openai = [
-    "openai>=2.36.0,<3",
+    "openai>=2.36.0,<4",
 ]
 # Used by case-studies/wiki-nl-persona-qa/prepare_seed.py to sentence-split an
 # oversized section. A blank pipeline + sentencizer only, no model download.
