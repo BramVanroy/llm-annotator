@@ -233,13 +233,20 @@ ACCOUNT_FLAGS=()
 CPU_PARTITION_FLAGS=()
 [[ -n "$CPU_PARTITION" ]] && CPU_PARTITION_FLAGS=(--partition="$CPU_PARTITION")
 
-# Every model this submission has to serve itself, fetched once before anything
-# is allocated so that a pool on a cold cache does not download the same weights
-# once per server. The download jobs gate the first step and therefore, through
-# the chain, every step after it. Off unless the cluster file turns it on: a
-# site whose compute nodes have no route to the Hub would otherwise fail the
-# submission at the first job.
-DOWNLOAD_DEP=""
+if [[ -n "${DOWNLOAD_PARTITION+set}" || -n "${DOWNLOAD_TIME+set}" ]]; then
+  echo "DOWNLOAD_PARTITION and DOWNLOAD_TIME are set (in '${CLUSTER_ENV}' or" \
+    "in the environment), but MODEL_DOWNLOAD fetches models on this node," \
+    "without a job. Remove both; see 'Model downloads on the submitting node' in" \
+    "docs/migration.md." >&2
+  exit 1
+fi
+
+# Every model this submission has to serve itself, fetched on this node before
+# anything is queued, so that a pool on a cold cache does not download the same
+# weights once per server and a failed download stops the submission at once.
+# A model that is already in the cache is only checked. Off unless the cluster
+# file turns it on: a site whose submitting node has no route to the Hub leaves
+# the download to `vllm serve`.
 if [[ "$MODEL_DOWNLOAD" == "1" ]]; then
   declare -A DOWNLOAD_SEEN=()
   for step_line in "${STEP_LINES[@]}"; do
@@ -258,24 +265,15 @@ if [[ "$MODEL_DOWNLOAD" == "1" ]]; then
     [[ -z "${DOWNLOAD_SEEN[$STEP_MODEL]:-}" ]] || continue
     DOWNLOAD_SEEN["$STEP_MODEL"]=1
 
-    DOWNLOAD_PARTITION_FLAGS=()
-    if [[ -n "$DOWNLOAD_PARTITION" ]]; then
-      DOWNLOAD_PARTITION_FLAGS=(--partition="$DOWNLOAD_PARTITION")
+    if (( DRY_RUN )); then
+      echo "Model:   would download ${STEP_MODEL}"
+      continue
     fi
-    printf -v MODEL_QUOTED '%q' "$STEP_MODEL"
-    DOWNLOAD_JOB=$(submit \
-      "${ACCOUNT_FLAGS[@]}" \
-      --time="$DOWNLOAD_TIME" \
-      --job-name="download-${STEP_MODEL##*/}" \
-      --output="${LOG_DIR}/%x_%j.out" \
-      --error="${LOG_DIR}/%x_%j.err" \
-      --cpus-per-task=2 \
-      "${DOWNLOAD_PARTITION_FLAGS[@]}" \
-      --export="ALL,REPO_ROOT=${REPO_ROOT},CLUSTER_ENV=${CLUSTER_ENV}" \
-      --wrap="cd ${REPO_ROOT} && source slurm/vllm_common.sh && cluster_env_load && vllm_setup_env && vllm_download_model ${MODEL_QUOTED}") \
-      || die "Could not queue the download of '${STEP_MODEL}'."
-    echo "Model:   ${STEP_MODEL} downloaded first by job ${DOWNLOAD_JOB}"
-    DOWNLOAD_DEP="${DOWNLOAD_DEP:+${DOWNLOAD_DEP},}afterok:${DOWNLOAD_JOB}"
+    # A subshell, so that the modules and the venv that the download needs do
+    # not reach the jobs through --export=ALL.
+    if ! (vllm_setup_env && vllm_download_model "$STEP_MODEL"); then
+      die "Could not download '${STEP_MODEL}'; nothing was submitted."
+    fi
   done
 fi
 
@@ -383,15 +381,11 @@ for step_line in "${STEP_LINES[@]}"; do
 
   # Steps run in sequence: each one consumes the dataset the previous one
   # saved, so nothing may start until its predecessor has succeeded. A
-  # caller-supplied dependency and the model downloads gate the chain, so only
-  # the first submitted step carries them; the rest inherit them transitively.
-  # Comma-joined, which Slurm reads as "all of these must be satisfied".
+  # caller-supplied dependency gates the chain, so only the first submitted
+  # step carries it; the rest inherit it transitively.
   FIRST_DEP="$PREV_DEP"
   if (( SUBMITTED == 1 )); then
-    FIRST_DEP="$DOWNLOAD_DEP"
-    if [[ -n "$EXTRA_DEPENDENCY" ]]; then
-      FIRST_DEP="${FIRST_DEP:+${FIRST_DEP},}${EXTRA_DEPENDENCY}"
-    fi
+    FIRST_DEP="$EXTRA_DEPENDENCY"
   fi
 
   STEP_CLIENT_JOBS=()

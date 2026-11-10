@@ -84,8 +84,7 @@ the pipeline as a whole rather than one step at a time, which is what
 | `GPU_REQUEST`, `GPU_TYPE` | `gres`, none | How GPUs are requested: `--gres=gpu:N` or `--gpus-per-node=N`, optionally typed (`gpu:a100:N`). |
 | `MAX_CONCURRENT_SERVERS` | none | Most elements of a server array that may run at once (`--array=1-N%M`), for a per-user GPU limit. Empty means no throttle. |
 | `SERVER_HOST_CMD` | `hostname` | Command a server runs to get the address other nodes reach it at. Use `hostname -f`, or a command that prints one interface's address, where the short name does not resolve. |
-| `MODEL_DOWNLOAD` | `0` | `1` fetches every model this submission serves in a CPU job before any GPU is allocated. |
-| `DOWNLOAD_PARTITION`, `DOWNLOAD_TIME` | `$CPU_PARTITION`, `02:00:00` | Partition and wall time of those download jobs. |
+| `MODEL_DOWNLOAD` | `0` | `1` fetches every model this submission serves on the submitting node, before any job is queued. |
 | `SERVER_SBATCH_ARGS`, `CLIENT_SBATCH_ARGS` | `()` | Extra `sbatch` flags per job kind: QoS, memory, constraints, reservations. |
 | `CLUSTER_MODULES` | none | Environment modules to load inside a job. |
 | `VENV_PATH`, `UV_SYNC` | `<repo>/.venv`, `0` | Python environment to activate, and whether to `uv sync` first. |
@@ -370,28 +369,33 @@ it before you use it:
 ## Model downloads
 
 The servers of a pool all start at once, and on a cold cache they all download
-the same weights. `MODEL_DOWNLOAD=1` in the cluster file turns that into one
-small CPU job per distinct model, submitted before anything else, which the
-first step then waits for with `afterok`. Every later step inherits that wait
-through the chain, so a pipeline whose steps use different models downloads all
-of them up front:
+the same weights. `MODEL_DOWNLOAD=1` in the cluster file makes
+`submit_pipeline.sh` fetch every distinct model on the node that runs it, one
+after the other, before it queues anything. The servers then find the weights in
+the cache, and a pipeline whose steps use different models has all of them
+before its first job starts:
 
 ```text
-sbatch --time=02:00:00 --job-name=download-Qwen3-8B --cpus-per-task=2 \
-  --wrap="... && vllm_download_model Qwen/Qwen3-8B"
+Model:   would download Qwen/Qwen3-8B
 ```
 
-The job runs `hf download <model>`, the CLI that comes with `huggingface_hub`.
+That line is what `--dry-run` prints; a dry run fetches nothing. A real run
+calls `vllm_download_model`, which runs `hf download <model>`, the CLI that
+comes with `huggingface_hub`, in the environment that `vllm_setup_env` prepares.
+A model that is already in the cache is only checked against the Hub. A failed
+download (a wrong model id, a gated model without a token) stops the submission
+before any job is queued.
+
 Only the models this submission has to serve itself are fetched (the
 `vllm_pool` and `vllm_offline` steps); a hosted provider has nothing to
 download, and a `model` that is an existing directory is a local checkout and is
-left alone. `DOWNLOAD_PARTITION` and `DOWNLOAD_TIME` size the job.
+left alone.
 
-It is off by default. The job needs a route to huggingface.co from whichever
-node runs it, which not every site has, and against a warm cache it costs a
-queue wait for nothing. A gated model needs a token, which the job reads the
-same way any other `hf` command does: `hf auth login` once, or `HF_TOKEN` in the
-environment, which `--export=ALL` carries.
+It is off by default. The download needs a route to huggingface.co from the
+submitting node, which not every site has. Without it, leave `MODEL_DOWNLOAD=0`
+and `vllm serve` fetches the model when a server starts. A gated model needs a
+token, which `hf` reads the same way as anywhere else: `hf auth login` once, or
+`HF_TOKEN` in the environment.
 
 Wherever you run it, `HF_HOME` decides where the weights land; it defaults to
 `.cache/huggingface` in your home directory. On a cluster, point it at a project
