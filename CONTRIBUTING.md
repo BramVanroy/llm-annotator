@@ -40,7 +40,7 @@ stages, see [Pre-commit hooks](#pre-commit-hooks).
 
 ## Tests
 
-Markers are strict (`--strict-markers` in `pyproject.toml`), and there are two:
+Markers are strict (`strict = true` under `[tool.pytest]` in `pyproject.toml`), and there are two:
 
 - `slow`: loads a real model. Seven tests carry it.
 - `integration`: talks to the network or the Hugging Face Hub, and needs an
@@ -170,7 +170,8 @@ theme. `mkdocs.yml` holds the theme, the extensions and the `nav` tree.
 | `docs/slurm.md` | one line that includes `slurm/README.md` verbatim |
 | `docs/api/*.md` | one stub per module, each holding only `::: llm_annotator.<module>` |
 | `docs/hooks.py` | build hook: renders doctest examples as plain Python and points API source links at the release tag |
-| `docs/overrides/` | mkdocstrings template overrides |
+| `docs/overrides/` | Material theme overrides (the outdated-version banner) |
+| `docs/templates/` | mkdocstrings template overrides (links to the source on GitHub) |
 
 Two rules when a page is added or a public symbol appears:
 

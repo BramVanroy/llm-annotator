@@ -6,6 +6,13 @@ repo_url: https://github.com/BramVanroy/llm-annotator
 repo_name: BramVanroy/llm-annotator
 edit_uri: edit/main/docs/
 
+# Build tooling that lives in docs/ but is not published as pages.
+exclude_docs: |
+  hooks.py
+  __pycache__/
+  overrides/
+  templates/
+
 # Material for MkDocs theme configuration. See https://squidfunk.github.io/mkdocs-material/
 theme:
   name: material
@@ -81,9 +88,10 @@ plugins:
   - autorefs
   # Generates API reference pages from Python objects and docstrings
   - mkdocstrings:
-      # Custom Jinja templates for mkdocstrings rendering
-      # Custom override to direct users to the source code on Github directly from the API reference pages
-      custom_templates: docs/overrides
+      # Custom mkdocstrings templates that link API objects to their source on
+      # GitHub. They stay outside the theme's custom_dir, so they are not
+      # published as static files.
+      custom_templates: docs/templates
       handlers:
         python:
           # Source roots used to import project modules
