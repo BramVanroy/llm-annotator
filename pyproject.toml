@@ -34,7 +34,7 @@ dependencies = [
 [project.optional-dependencies]
 # Install with ---extras "vllm" to use vLLM for inference. Requires CUDA.
 vllm = [
-    "vllm==0.29.0",
+    "vllm==0.33.0",
     # vLLM only requires transformers>=5.5.3, but 5.8.x and 5.15 have issues with gemma4
     "transformers>=5.11.0,<5.18,!=5.15"
 ]
