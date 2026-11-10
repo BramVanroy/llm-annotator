@@ -147,7 +147,9 @@ vllm_setup_env() {
   fi
 
   if [[ "$UV_SYNC" == "1" ]]; then
-    uv sync --frozen --no-install-project
+    # --inexact keeps packages that are not in uv.lock, such as the prebuilt
+    # FlashInfer kernels from docs/provider-info.md.
+    uv sync --frozen --no-install-project --inexact
   fi
 
   if [[ -f "${VENV_PATH}/bin/activate" ]]; then

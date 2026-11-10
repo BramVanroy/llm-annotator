@@ -150,6 +150,25 @@ def test_annotate_starts_on_a_partial_pool(tmp_path: Path) -> None:
     ]
 
 
+def test_uv_sync_keeps_packages_outside_the_lock(tmp_path: Path) -> None:
+    """UV_SYNC=1 keeps the manually installed FlashInfer kernels."""
+    pool_dir = tmp_path / "pool"
+    _publish(pool_dir, 4)
+    uv_args = tmp_path / "uv-args.txt"
+    fake_uv = _fake_bin(tmp_path) / "uv"
+    fake_uv.write_text(
+        f'#!/bin/bash\nprintf "%s\\n" "$@" > "{uv_args}"\n', encoding="utf-8"
+    )
+    fake_uv.chmod(0o755)
+
+    process, _ = _run_annotate(tmp_path, pool_dir, UV_SYNC="1")
+
+    assert process.returncode == 0, process.stderr
+    recorded = uv_args.read_text(encoding="utf-8").splitlines()
+    assert recorded[0] == "sync"
+    assert "--inexact" in recorded
+
+
 def test_annotate_passes_the_pool_glob_not_a_snapshot(
     tmp_path: Path,
 ) -> None:

@@ -101,17 +101,19 @@ A machine without a GPU skips them. A machine with a GPU on which the engine
 fails to start reports a failure rather than a skip, so a broken engine is not
 mistaken for a missing one.
 
-Serving needs the prebuilt FlashInfer kernels from the `vllm-kernels`
-dependency group:
+Serving works best with the prebuilt FlashInfer kernels. Without them vLLM
+JIT-compiles its kernels at start-up, which needs `nvcc` on the node and races
+between servers that share `~/.cache/flashinfer`. The kernels are not in
+`uv.lock`: install them by hand after `uv sync --extra vllm` with the commands
+in `docs/provider-info.md`, which match the installed vLLM.
 
-```bash
-uv sync --extra vllm --group vllm-kernels
-```
+### vLLM updates
 
-Without them vLLM JIT-compiles its kernels at start-up, which needs `nvcc` on
-the node and races between servers that share `~/.cache/flashinfer`. The wheels
-are about 2.5 GB, which is why they sit in a group rather than in the `vllm`
-extra that CI installs. `docs/provider-info.md` has the details.
+Dependabot checks `uv.lock` weekly and opens one pull request for vLLM and
+transformers together (the `vllm-stack` group in `.github/dependabot.yml`). CI
+does not run the vLLM tests, so a green pull request says nothing about the new
+engine. Before you merge one, install the kernels as described in
+`docs/provider-info.md` on a GPU machine and run `make test-slow`.
 
 ## Code style
 

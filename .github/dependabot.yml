@@ -11,7 +11,14 @@ updates:
   - package-ecosystem: uv
     directory: /
     schedule:
-      interval: monthly
+      interval: weekly
     groups:
+      # vLLM and the transformers range in the vllm extra move in one pull
+      # request. A dependency goes to the first group that matches it, so
+      # this group comes first.
+      vllm-stack:
+        patterns:
+          - "vllm"
+          - "transformers"
       dev-dependencies:
         dependency-type: development

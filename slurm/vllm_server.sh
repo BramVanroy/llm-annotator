@@ -46,7 +46,7 @@ vllm_ensure_nvcc
 
 if ! command -v vllm > /dev/null 2>&1; then
   echo "vllm is not on PATH; install the 'vllm' extra in the environment this" \
-    "job uses (uv sync --extra vllm --group vllm-kernels)." >&2
+    "job uses (uv sync --extra vllm)." >&2
   exit 1
 fi
 

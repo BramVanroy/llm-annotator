@@ -33,13 +33,13 @@ JIT-compiles them on the first request, which needs `nvcc` on the node and
 races between servers that share `~/.cache/flashinfer`. Pre-installing them is
 worth it wherever you serve models, and close to mandatory on a cluster.
 
-There is no `vllm-kernels` extra to install them for you.
-`flashinfer-jit-cache` is not on PyPI (it is published per CUDA version on
-FlashInfer's own index) and the `flashinfer-cubin` on PyPI trails the releases
-vLLM pins against, so an extra would only resolve for people who had already
-added those indexes to their own project. Install the two wheels by hand
-instead, pinned to the `flashinfer-python` version vLLM pulled in and to the
-CUDA version your torch wheel was built against:
+The kernels are not a dependency of llm-annotator. `flashinfer-jit-cache` is
+not on PyPI (FlashInfer publishes it per CUDA version on its own index), and
+the `flashinfer-cubin` on PyPI trails the releases that vLLM pins. Install the
+two wheels by hand in the environment that runs vLLM, after `uv sync` or
+`pip install`. The commands read the `flashinfer-python` version that vLLM
+pulled in and the CUDA version that torch was built for, so they keep working
+when a vLLM update moves either one:
 
 ```bash
 version=$(python -c "import importlib.metadata as m; print(m.version('flashinfer-python'))")
@@ -49,35 +49,15 @@ uv pip install "flashinfer-cubin==$version" --index-url https://flashinfer.ai/wh
 uv pip install "flashinfer-jit-cache==$version" --index-url "https://flashinfer.ai/whl/$cuda/"
 ```
 
-To keep the pins in your own project rather than installing imperatively,
-route the two packages to those indexes explicitly:
+For example, vLLM 0.33.0 pulls in `flashinfer-python==0.7.2.post1`. With a
+torch build for CUDA 13.0, the commands install `flashinfer-cubin==0.7.2.post1`
+and `flashinfer-jit-cache==0.7.2.post1` from `https://flashinfer.ai/whl/cu130/`.
 
-```toml
-# uv: copy these into your project's pyproject.toml
-[[tool.uv.index]]
-name = "flashinfer-cubin"
-url = "https://flashinfer.ai/whl/"
-explicit = true
-
-[[tool.uv.index]]
-name = "flashinfer-jit-cache"
-url = "https://flashinfer.ai/whl/cu130/"
-explicit = true
-
-[tool.uv.sources]
-flashinfer-cubin = { index = "flashinfer-cubin" }
-flashinfer-jit-cache = { index = "flashinfer-jit-cache" }
-```
-
-This repo does exactly that for its own checkout, where the kernels live in
-the `vllm-kernels` dependency group:
-
-```bash
-uv sync --extra vllm --group vllm-kernels
-```
-
-A dependency group is not published in the wheel metadata, so that routing
-only ever has to hold here.
+Run `python` from the environment that runs vLLM (activate it first, or use
+`uv run --no-sync python` in a uv project). A plain `uv sync` removes packages
+that `uv.lock` does not list, so run the commands again after a sync, or sync
+with `uv sync --inexact`. The SLURM scripts sync with `--inexact` when
+`UV_SYNC=1`.
 
 ## Environment variables
 
