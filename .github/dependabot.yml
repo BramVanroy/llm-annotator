@@ -13,13 +13,12 @@ updates:
     schedule:
       interval: weekly
     groups:
-      # vLLM, the transformers range and the FlashInfer kernel pins only work
-      # together, so they move in one pull request. A dependency goes to the
-      # first group that matches it, so this group comes first.
+      # vLLM and the transformers range in the vllm extra move in one pull
+      # request. A dependency goes to the first group that matches it, so
+      # this group comes first.
       vllm-stack:
         patterns:
           - "vllm"
           - "transformers"
-          - "flashinfer-*"
       dev-dependencies:
         dependency-type: development
