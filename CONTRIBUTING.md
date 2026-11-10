@@ -107,6 +107,15 @@ between servers that share `~/.cache/flashinfer`. The kernels are not in
 `uv.lock`: install them by hand after `uv sync --extra vllm` with the commands
 in `docs/provider-info.md`, which match the installed vLLM.
 
+### Dependabot updates
+
+`.github/workflows/dependabot-merge.yml` merges a Dependabot pull request once
+CI passes on its head commit, if every update in it is a minor or patch
+version. A pull request that contains a major update, or an update of vLLM or
+transformers, stays open for review. The provider SDKs are faked in the fast
+suite, so for a major SDK update, build the client once against the real SDK
+before you merge.
+
 ### vLLM updates
 
 Dependabot checks `uv.lock` weekly and opens one pull request for vLLM and
