@@ -1326,6 +1326,49 @@ def test_a_vllm_step_still_inherits_the_engine_from_the_other_vllm_provider() ->
     assert config.step_client(config.steps[0]).engine.tensor_parallel_size == 2
 
 
+def test_describe_steps_reports_the_draft_model() -> None:
+    config = PipelineConfig.model_validate(
+        minimal_config(
+            client={"provider": "vllm_online", "model": "Qwen/Qwen3-8B"},
+            steps=[
+                {
+                    "name": "write",
+                    "prompt": "x",
+                    "client": {
+                        "engine": {
+                            "speculative_config": {
+                                "model": "Qwen/Qwen3-0.6B",
+                                "num_speculative_tokens": 4,
+                            }
+                        },
+                    },
+                },
+                {
+                    "name": "rewrite",
+                    "prompt": "y",
+                    "client": {
+                        "engine": {
+                            "speculative_config": {
+                                "method": "ngram",
+                                "num_speculative_tokens": 4,
+                            }
+                        },
+                    },
+                },
+                {"name": "plain", "prompt": "z"},
+            ],
+        )
+    )
+
+    described = config.describe_steps()
+
+    assert [d["draft_model"] for d in described] == [
+        "Qwen/Qwen3-0.6B",
+        None,
+        None,
+    ]
+
+
 def test_concurrency_reports_the_effective_numbers() -> None:
     client = ClientConfig.model_validate(
         pool_client(batch_size=64, pool={"servers": 4})

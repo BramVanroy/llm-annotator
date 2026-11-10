@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -285,6 +286,7 @@ def _write_pool_config(
     tmp_path: Path,
     pool: dict[str, int],
     model: str = "Qwen/Qwen3-8B",
+    engine: dict[str, Any] | None = None,
 ) -> Path:
     """Write a one-step pooled-vLLM config and return its path.
 
@@ -292,6 +294,7 @@ def _write_pool_config(
         tmp_path: Directory to write the config into.
         pool: The step's ``client.pool`` block.
         model: The step's ``client.model``.
+        engine: The step's ``client.engine`` block, if any.
 
     Returns:
         Path of the config file.
@@ -310,6 +313,7 @@ def _write_pool_config(
                             "provider": "vllm_online",
                             "model": model,
                             "pool": pool,
+                            "engine": engine or {},
                         },
                     }
                 ],
@@ -394,6 +398,11 @@ def _run_submit(
         "VENV_PATH": str(VENV_PATH),
         "HOME": os.environ.get("HOME", str(tmp_path)),
     }
+    # A second worktree of the repository imports its own source through
+    # PYTHONPATH, and the `llm-annotate` that the submitter runs has to import
+    # the same source.
+    if "PYTHONPATH" in os.environ:
+        environment["PYTHONPATH"] = os.environ["PYTHONPATH"]
     environment.update(env or {})
 
     return subprocess.run(
@@ -696,6 +705,27 @@ def test_submit_pipeline_downloads_before_it_queues(tmp_path: Path) -> None:
     assert "could not queue the servers of step 'write'" in process.stderr
     hf_args = (tmp_path / "hf_args.txt").read_text(encoding="utf-8")
     assert hf_args.splitlines() == ["download", "Qwen/Qwen3-8B"]
+
+
+@REQUIRES_CLI
+def test_submit_pipeline_downloads_the_draft_model(tmp_path: Path) -> None:
+    """The draft model of speculative decoding is fetched with the main one."""
+    config_path = _write_pool_config(
+        tmp_path,
+        {"servers": 2, "min_servers": 1},
+        engine={
+            "speculative_config": {
+                "model": "Qwen/Qwen3-0.6B",
+                "num_speculative_tokens": 4,
+            }
+        },
+    )
+
+    process = _run_submit(tmp_path, config_path, env=_download_env(tmp_path))
+
+    assert process.returncode == 0, process.stderr
+    assert "would download Qwen/Qwen3-8B" in process.stdout
+    assert "would download Qwen/Qwen3-0.6B" in process.stdout
 
 
 @REQUIRES_CLI

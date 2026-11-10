@@ -256,24 +256,27 @@ if [[ "$MODEL_DOWNLOAD" == "1" ]]; then
     if [[ "$STEP_KIND" != "vllm_pool" && "$STEP_KIND" != "vllm_offline" ]]; then
       continue
     fi
-    [[ -n "$STEP_MODEL" ]] || continue
-    # A model that is a directory on this machine is already here.
-    if [[ -d "$STEP_MODEL" ]]; then
-      echo "Model:   ${STEP_MODEL} is a local directory, nothing to download"
-      continue
-    fi
-    [[ -z "${DOWNLOAD_SEEN[$STEP_MODEL]:-}" ]] || continue
-    DOWNLOAD_SEEN["$STEP_MODEL"]=1
+    # A step with speculative decoding also serves its draft model.
+    for model in "$STEP_MODEL" "$STEP_DRAFT_MODEL"; do
+      [[ -n "$model" ]] || continue
+      # A model that is a directory on this machine is already here.
+      if [[ -d "$model" ]]; then
+        echo "Model:   ${model} is a local directory, nothing to download"
+        continue
+      fi
+      [[ -z "${DOWNLOAD_SEEN[$model]:-}" ]] || continue
+      DOWNLOAD_SEEN["$model"]=1
 
-    if (( DRY_RUN )); then
-      echo "Model:   would download ${STEP_MODEL}"
-      continue
-    fi
-    # A subshell, so that the modules and the venv that the download needs do
-    # not reach the jobs through --export=ALL.
-    if ! (vllm_setup_env && vllm_download_model "$STEP_MODEL"); then
-      die "Could not download '${STEP_MODEL}'; nothing was submitted."
-    fi
+      if (( DRY_RUN )); then
+        echo "Model:   would download ${model}"
+        continue
+      fi
+      # A subshell, so that the modules and the venv that the download needs
+      # do not reach the jobs through --export=ALL.
+      if ! (vllm_setup_env && vllm_download_model "$model"); then
+        die "Could not download '${model}'; nothing was submitted."
+      fi
+    done
   done
 fi
 

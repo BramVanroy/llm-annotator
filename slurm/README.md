@@ -141,8 +141,8 @@ llm-annotate my-pipeline.yaml --describe-steps
 ```
 
 ```json
-{"index": 1, "name": "write-qa", "kind": "vllm_pool", "provider": "vllm_online", "model": "Qwen/Qwen3-8B", "servers": 4, "min_servers": 2, "gpus_per_vllm_server": 2, "step_dir": "...", "batch_size": 64, "max_concurrent_batches_per_client": 4, "queue_size": 32, "max_requests_per_server": 256, "max_requests_in_flight": 1024}
-{"index": 2, "name": "rate-qa", "kind": "api", "provider": "claude", "model": "claude-haiku-4-5", "servers": 1, "min_servers": 1, "gpus_per_vllm_server": 1, "step_dir": "...", "batch_size": 256, "max_concurrent_batches_per_client": null, "queue_size": null, "max_requests_per_server": null, "max_requests_in_flight": null}
+{"index": 1, "name": "write-qa", "kind": "vllm_pool", "provider": "vllm_online", "model": "Qwen/Qwen3-8B", "draft_model": null, "servers": 4, "min_servers": 2, "gpus_per_vllm_server": 2, "step_dir": "...", "batch_size": 64, "max_concurrent_batches_per_client": 4, "queue_size": 32, "max_requests_per_server": 256, "max_requests_in_flight": 1024}
+{"index": 2, "name": "rate-qa", "kind": "api", "provider": "claude", "model": "claude-haiku-4-5", "draft_model": null, "servers": 1, "min_servers": 1, "gpus_per_vllm_server": 1, "step_dir": "...", "batch_size": 256, "max_concurrent_batches_per_client": null, "queue_size": null, "max_requests_per_server": null, "max_requests_in_flight": null}
 ```
 
 `submit_pipeline.sh` reads the same fields as shell assignments
@@ -387,9 +387,10 @@ download (a wrong model id, a gated model without a token) stops the submission
 before any job is queued.
 
 Only the models this submission has to serve itself are fetched (the
-`vllm_pool` and `vllm_offline` steps); a hosted provider has nothing to
-download, and a `model` that is an existing directory is a local checkout and is
-left alone.
+`vllm_pool` and `vllm_offline` steps), together with the draft model of a step
+that sets `engine.speculative_config` (the `draft_model` that
+`--describe-steps` reports). A hosted provider has nothing to download, and a
+model that is an existing directory is a local checkout and is left alone.
 
 It is off by default. The download needs a route to huggingface.co from the
 submitting node, which not every site has. Without it, leave `MODEL_DOWNLOAD=0`
