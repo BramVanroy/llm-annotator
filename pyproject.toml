@@ -39,7 +39,7 @@ vllm = [
     "transformers>=5.11.0,<5.18,!=5.15"
 ]
 anthropic = [
-    "anthropic>=0.102.0,<1",
+    "anthropic>=0.102.0,<3",
 ]
 openai = [
     "openai>=2.36.0,<4",
