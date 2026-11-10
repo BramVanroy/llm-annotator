@@ -1560,14 +1560,17 @@ class PipelineConfig(_StrictBase):
         Returns:
             One mapping per step, in pipeline order, each with the step's
             ``index`` (from 1), ``name``, ``kind``, ``provider``, ``model``,
-            the ``servers`` / ``gpus_per_vllm_server`` it wants, the
-            ``min_servers`` it needs before it can start, and the effective
-            concurrency from
+            the ``draft_model`` of ``engine.speculative_config`` (``None``
+            when it names none), the ``servers`` / ``gpus_per_vllm_server``
+            it wants, the ``min_servers`` it needs before it can start, and
+            the effective concurrency from
             [`ClientConfig.concurrency`][llm_annotator.config.ClientConfig.concurrency].
         """
         described = []
         for index, step in enumerate(self.steps):
             client = self.step_client(step)
+            speculative = client.engine.speculative_config or {}
+            draft_model = speculative.get("model")
             described.append(
                 {
                     "index": index + 1,
@@ -1575,6 +1578,7 @@ class PipelineConfig(_StrictBase):
                     "kind": client.kind(),
                     "provider": client.provider,
                     "model": client.model,
+                    "draft_model": draft_model,
                     "servers": client.pool.servers,
                     "min_servers": client.pool.min_servers,
                     "gpus_per_vllm_server": client.engine.tensor_parallel_size,
